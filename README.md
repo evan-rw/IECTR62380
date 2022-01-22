@@ -1,2 +1,2 @@
 # IECTR62380
-Online Calculation for IEC 62380
+Online Calculation for IEC TR 62380
