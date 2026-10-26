@@ -1,0 +1,14 @@
+{
+  "name": "iectr62380",
+  "private": true,
+  "description": "Browser calculator for IEC TR 62380 reliability predictions",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/",
+    "serve": "python3 -m http.server 8000"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3"
+  }
+}

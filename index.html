@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IEC TR 62380 Calculator</title>
+  <meta name="description" content="Predict the failure rate and MTBF of an electronic board from its parts list and mission profile, using the IEC TR 62380:2004 reliability models.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23245c73'/%3E%3Cpath d='M6 22 L12 14 L17 18 L26 8' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+  <script type="module" src="assets/app.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <h1>IEC TR 62380 calculator</h1>
+      <p class="lede">Predict the failure rate of an electronic board from its parts list and mission profile, using the reliability models of IEC TR 62380:2004.</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <aside class="notice" role="note">
+      <strong>The coefficient tables are inferred from public sources, not taken from the standard.</strong>
+      Treat results as estimates and check the values your result depends on. Every table value can be overridden per part. <a href="#sources">See where each table came from.</a>
+    </aside>
+
+    <section class="panel" aria-labelledby="board-heading">
+      <h2 id="board-heading" class="visually-hidden">Board</h2>
+      <div class="board-bar">
+        <div class="field">
+          <label for="title">Board name</label>
+          <input id="title" type="text" data-bind="title" autocomplete="off">
+        </div>
+        <div class="field narrow">
+          <label for="years">Mission length <span class="unit">(years)</span></label>
+          <input id="years" type="number" min="0" step="any" inputmode="decimal" data-bind="years">
+        </div>
+        <div class="toolbar" role="group" aria-label="File">
+          <button type="button" data-act="new">New board</button>
+          <button type="button" data-act="example">Load example</button>
+          <button type="button" data-act="import-netlist">Import netlist</button>
+          <button type="button" data-act="import">Import JSON</button>
+          <button type="button" data-act="export-json">Export JSON</button>
+          <button type="button" data-act="export-csv">Export CSV</button>
+          <input id="import-file" type="file" accept="application/json,.json" hidden>
+          <input id="netlist-file" type="file" hidden>
+        </div>
+      </div>
+      <div id="summary" class="summary" aria-live="polite"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="profile-heading">
+      <div class="panel-head">
+        <h2 id="profile-heading">Mission profile</h2>
+        <div class="field inline">
+          <label for="preset">Load a profile from the standard</label>
+          <select id="preset" data-bind="preset"></select>
+        </div>
+      </div>
+      <p class="hint">One row per phase of a typical year. t<sub>ac</sub> is the air temperature around the board. τ is the fraction of the year the equipment works in that phase (0 for a dormant phase). n and ΔT describe the thermal cycles the board goes through. Tick “+ΔT/3” where each cycle also heats the part by a third of its own temperature rise (the “ΔT<sub>j</sub>/3 +” entries in the standard).</p>
+      <div class="table-scroll">
+        <table class="phases">
+          <thead>
+            <tr>
+              <th scope="col">Phase</th>
+              <th scope="col">t<sub>ac</sub> <span class="unit">°C</span></th>
+              <th scope="col">τ</th>
+              <th scope="col">n <span class="unit">cycles/yr</span></th>
+              <th scope="col">ΔT <span class="unit">°C</span></th>
+              <th scope="col">+ΔT/3</th>
+              <th scope="col"><span class="visually-hidden">Remove</span></th>
+            </tr>
+          </thead>
+          <tbody id="phases"></tbody>
+        </table>
+      </div>
+      <div class="profile-foot">
+        <button type="button" data-act="add-phase">Add phase</button>
+        <div id="tau-summary" class="tau-summary"></div>
+        <div class="field inline narrow">
+          <label for="tau-off">τ<sub>off</sub> override</label>
+          <input id="tau-off" type="number" min="0" step="any" inputmode="decimal" placeholder="auto" data-bind="tauOff">
+        </div>
+      </div>
+      <ul id="profile-problems" class="problems"></ul>
+    </section>
+
+    <section class="panel" aria-labelledby="parts-heading">
+      <div class="panel-head">
+        <h2 id="parts-heading">Parts</h2>
+        <div class="add-bar">
+          <label for="add-model" class="visually-hidden">Part type</label>
+          <select id="add-model"></select>
+          <button type="button" class="primary" data-act="add-part">Add part</button>
+        </div>
+      </div>
+      <p class="hint">Import a Protel or Protel 2 netlist to start from a schematic. Values the netlist cannot supply are marked <span class="tag-missing">Missing</span> and the part is left out of the total until they are filled in. Values the importer worked out from footprints and part names are marked <span class="tag-guessed">Guessed</span> until you change or confirm them.</p>
+      <div id="import-report" class="import-report" role="status" hidden></div>
+      <label class="check-label"><input type="checkbox" id="attention-only"> Only parts that need attention</label>
+      <div id="parts" class="parts"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="results-heading">
+      <h2 id="results-heading">Results by part</h2>
+      <p class="hint">Sorted by contribution to the board total. Rates are per calendar hour, dormant time included.</p>
+      <div class="table-scroll">
+        <table class="results">
+          <thead>
+            <tr>
+              <th scope="col">Ref</th>
+              <th scope="col" class="opt">Part</th>
+              <th scope="col" class="num">Qty</th>
+              <th scope="col" class="num opt">λ each <span class="unit">FIT</span></th>
+              <th scope="col" class="num">λ total <span class="unit">FIT</span></th>
+              <th scope="col" class="num">Share</th>
+            </tr>
+          </thead>
+          <tbody id="results"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="sources" aria-labelledby="sources-heading">
+      <h2 id="sources-heading">Data sources</h2>
+      <div id="source-list"></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>Not affiliated with the IEC. IEC TR 62380:2004 was withdrawn in favour of IEC 61709:2017 but is still referenced by ISO 26262-11:2018. Your work is saved in this browser only; use Export JSON to keep a copy. <a href="https://github.com/evan-rw/IECTR62380">Source code</a> (AGPL-3.0).</p>
+    </div>
+  </footer>
+</body>
+</html>

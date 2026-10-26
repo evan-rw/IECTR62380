@@ -1,0 +1,4 @@
+node_modules/
+
+# Never commit a copy of the standard (purchase licences forbid redistribution).
+*.pdf
