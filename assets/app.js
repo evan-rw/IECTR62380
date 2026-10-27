@@ -1,10 +1,11 @@
 import {
   MODELS, MODEL_GROUPS, computeBoard, profileProblems, mtbfHours, reliability, byId, fieldLabel, clauseOf,
 } from './models.js';
-import { ENVIRONMENTS } from './tables217f.js';
+import { ENVIRONMENTS, SMT_217F } from './tables217f.js';
 import { MISSION_PROFILES } from './tables.js';
 import { netlistToParts, expandRefs, compressRefs } from './netlist.js';
-import { ROOT, sanitizeStructure, migrateGroups, members as structureMembers, label as structureLabel } from './structure.js';
+import { ROOT, sanitizeStructure, migrateGroups, meanTimeToFailure, members as structureMembers, label as structureLabel } from './structure.js';
+import { evaluateSmt, chipCandidates } from './smt.js';
 import { mountStructure, refreshStructure, currentStructure } from './structure-ui.js';
 import { parseBom, bomToParts, mergeBom } from './bom.js';
 import { failureModesFor } from './failuremodes.js';
@@ -53,8 +54,32 @@ function presetProfile(id, env217f = 'GB') {
   return { preset: row.id, phases: clone(row.phases), tauOff: null, env217f };
 }
 
+// Surface-mount check (MIL-HDBK-217F 16.2): board settings and candidate devices.
+const emptySmt = () => ({ include: true, substrate: null, cycling: 'profile', equipment: null, devices: [] });
+
 function emptyBoard() {
-  return { format: FORMAT, version: 2, title: 'Untitled board', years: 10, profile: presetProfile('geo-permanent'), parts: [], structure: { kind: 'block', id: ROOT, children: [] } };
+  return {
+    format: FORMAT, version: 2, title: 'Untitled board', years: 10, profile: presetProfile('geo-permanent'), parts: [],
+    structure: { kind: 'block', id: ROOT, children: [] }, smt: emptySmt(),
+  };
+}
+
+function sanitizeSmt(raw) {
+  const s = raw && typeof raw === 'object' ? raw : {};
+  const pick = (rows, id) => (rows.some((r) => r.id === id) ? id : null);
+  const num = (v) => (isNum(v) ? v : null);
+  return {
+    include: s.include !== false,
+    substrate: pick(SMT_217F.substrates, s.substrate),
+    cycling: s.cycling === 'handbook' ? 'handbook' : 'profile',
+    equipment: pick(SMT_217F.equipment, s.equipment),
+    devices: (Array.isArray(s.devices) ? s.devices : []).map((d) => ({
+      label: str(d?.label), lead: pick(SMT_217F.leads, d?.lead), body: pick(SMT_217F.bodies, d?.body),
+      d: num(d?.d), h: num(d?.h), rise: num(d?.rise),
+      ...(typeof d?.auto === 'string' ? { auto: d.auto } : {}),
+      inferred: Object.fromEntries(Object.entries(d?.inferred ?? {}).filter(([k, v]) => ['lead', 'body', 'd', 'h', 'rise'].includes(k) && typeof v === 'string')),
+    })),
+  };
 }
 
 function exampleBoard() {
@@ -122,6 +147,7 @@ function sanitize(raw) {
       },
       parts,
       structure,
+      smt: sanitizeSmt(raw.smt),
     },
     skipped,
   };
@@ -138,6 +164,7 @@ function exportable(board) {
       ...(source ? { source } : {}),
     })),
     structure: board.structure,
+    smt: board.smt,
   };
 }
 
@@ -328,12 +355,76 @@ function rerenderPart(part, focusKey) {
   if (focusKey) $(`[data-id="${part.id}"][data-key="${focusKey}"]`)?.focus();
 }
 
+// ---------------------------------------------------------------------------
+// Surface-mount solder joints
+
+const SMT_FIELDS = ['lead', 'body', 'd', 'h', 'rise'];
+
+function smtRowHTML(d, i) {
+  const data = (key) => `data-bind="smt-dev" data-i="${i}" data-key="${key}"`;
+  const tip = (key) => (d.inferred?.[key] ? ` title="Guessed: ${esc(d.inferred[key])}"` : '');
+  const num = (key, label) => `<input type="number" min="0" step="any" inputmode="decimal" aria-label="${label}" ${data(key)} value="${d[key] ?? ''}"${tip(key)}>`;
+  const leaded = d.lead && d.lead !== 'leadless';
+  return `<tr data-smt="${i}">
+    <td><input type="text" aria-label="Devices" ${data('label')} value="${esc(d.label)}" placeholder="e.g. U3 (QFN-48)"></td>
+    <td data-cell="lead"><select aria-label="Leads" ${data('lead')}${tip('lead')}>${optionsHTML(SMT_217F.leads.map((r) => ({ value: r.id, label: r.label })), d.lead)}</select></td>
+    <td data-cell="body"><select aria-label="Body" ${data('body')}${tip('body')}>${optionsHTML(SMT_217F.bodies.map((r) => ({ value: r.id, label: `${r.label} (α ${r.alphaCC})` })), d.body)}</select></td>
+    <td data-cell="d">${num('d', 'Centre to furthest joint, mm')}</td>
+    <td data-cell="h">${leaded ? '<span class="muted">8 mils</span>' : num('h', 'Solder joint height, mm')}</td>
+    <td data-cell="rise">${num('rise', 'Temperature rise from its own power, °C')}</td>
+    <td class="num" data-out="life"></td>
+    <td class="num" data-out="fit"></td>
+    <td><button type="button" class="icon" data-act="smt-del" data-i="${i}" aria-label="Remove ${esc(d.label || 'device')}">✕</button></td>
+  </tr>`;
+}
+
+function renderSmt() {
+  const s = state.smt;
+  $('#smt-substrate').innerHTML = optionsHTML(SMT_217F.substrates.map((r) => ({ value: r.id, label: `${r.label} (α ${r.alphaS})` })), s.substrate);
+  $('#smt-cycling').value = s.cycling;
+  $('#smt-equipment').innerHTML = optionsHTML(SMT_217F.equipment.map((r) => ({ value: r.id, label: `${r.label} (${r.cr} cycles/h)` })), s.equipment);
+  $('#smt-include').checked = s.include;
+  $('#smt-devices').innerHTML = s.devices.length
+    ? s.devices.map(smtRowHTML).join('')
+    : '<tr><td colspan="9" class="empty">No devices yet. Fill from chip parts, or add the largest leadless and ceramic packages (QFN, BGA, large chip capacitors).</td></tr>';
+}
+
+// Outputs only, so typing is not interrupted.
+function updateSmt(smt) {
+  const s = state.smt;
+  $('#smt-equipment-field').hidden = s.cycling !== 'handbook';
+  $('#smt-substrate').closest('.field').classList.toggle('missing', !s.substrate && s.devices.length > 0);
+  smt.devices.forEach((r, i) => {
+    const row = $(`#smt-devices [data-smt="${i}"]`);
+    if (!row) return;
+    for (const key of SMT_FIELDS) {
+      const cell = $(`[data-cell="${key}"]`, row);
+      cell?.classList.toggle('missing', (r.missing ?? []).includes(key));
+      cell?.classList.toggle('inferred', Boolean(s.devices[i].inferred?.[key]));
+    }
+    const worst = smt.worst === r;
+    row.classList.toggle('worst', worst);
+    $('[data-out="life"]', row).textContent = r.complete ? (Number.isFinite(r.alphaHours) ? `${fmt2(r.alphaHours / 8760)} y` : '∞') : '—';
+    $('[data-out="fit"]', row).innerHTML = r.complete ? fmt(r.fit) : '<span class="bad">Missing</span>';
+    if (r.complete) row.title = r.perLoad.map((l) => `${l.label}: ${fmt2(l.nf)} cycles to failure`).join('; ');
+  });
+  const lines = [];
+  if (smt.worst) {
+    const w = smt.worst;
+    lines.push(`Weakest link: <b>${esc(w.device.label || 'unnamed device')}</b>, characteristic life ${Number.isFinite(w.alphaHours) ? `${fmt2(w.alphaHours / 8760)} years` : 'unlimited'}, <b>${fmt(w.fit)} FIT</b> averaged over the ${fmt(state.years)}-year design life (ECF ${w.ecf}). ${s.include ? 'Added to the board total.' : 'Not added to the board total.'}`);
+  }
+  if (smt.incomplete) lines.push(`${plural(smt.incomplete, 'device needs', 'devices need')} input (red) before ${smt.incomplete > 1 ? 'they count' : 'it counts'}.`);
+  $('#smt-result').innerHTML = (lines.length ? `<p>${lines.join(' ')}</p>` : '')
+    + (s.devices.length && smt.problems.length ? `<ul class="problems">${smt.problems.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : '');
+}
+
 function renderAll() {
   renderBoardBar();
   renderPresets();
   renderPhases();
   renderAddModel();
   renderParts();
+  renderSmt();
   update();
 }
 
@@ -390,23 +481,37 @@ function update() {
   const structure = refreshStructure(board.items, years);
   // With redundant blocks the board figures are averages over the mission.
   const redundancy = structure.redundancy;
-  const total = redundancy ? structure.board.fit : board.total;
-  const R = redundancy ? structure.survival(years * 8760) : reliability(total, years);
-  const mtbf = redundancy ? structure.mttfHours : mtbfHours(total);
+  // Surface-mount solder joints: the weakest device's rate over the design life, in series with the rest.
+  const smt = evaluateSmt(state.smt, state.profile, years);
+  updateSmt(smt);
+  const smtFit = state.smt.include && smt.worst ? smt.fit : 0;
+  const smtPending = state.smt.include && state.smt.devices.length > 0 && (smt.incomplete > 0 || smt.problems.length > 0);
+  const total = (redundancy ? structure.board.fit : board.total) + smtFit;
+  const smtR = (t) => Math.exp(-smtFit * 1e-9 * t);
+  const R = redundancy ? structure.survival(years * 8760) * smtR(years * 8760) : reliability(total, years);
+  const mtbf = redundancy ? (smtFit ? meanTimeToFailure((t) => structure.survival(t) * smtR(t)) : structure.mttfHours) : mtbfHours(total);
   const pieces = board.items.reduce((s, it) => s + it.result.qty, 0);
   const warn = [];
   if (problems.length) warn.push('The mission profile has problems (see above).');
   if (board.incomplete) warn.push(`${plural(board.incomplete, 'part line needs', 'part lines need')} more input; the total leaves ${board.incomplete > 1 ? 'them' : 'it'} out.`);
+  // With some devices complete, the weakest link so far is counted; the rest may be worse.
+  const smtWaiting = smtPending && smt.worst && !smt.problems.length;
+  if (smtPending) {
+    warn.push(smtWaiting
+      ? `${plural(smt.incomplete, 'surface-mount device needs', 'surface-mount devices need')} input; until then the weakest link is taken from the others.`
+      : 'The surface-mount check needs input; the total leaves it out.');
+  }
   const guessedGroups = [...structure.red].filter((id) => currentBlock(id)?.inferred?.shortPct).length;
   if (guessedLines) warn.push(`${plural(guessedLines, 'line uses', 'lines use')} guessed values; check and confirm them.`);
   if (guessedGroups) warn.push(`${plural(guessedGroups, 'redundant block uses', 'redundant blocks use')} a guessed share of failures; check and confirm ${guessedGroups > 1 ? 'them' : 'it'}.`);
   // While lines are left out, the total is only a lower bound, so MTBF and
   // survival are upper bounds; say so and show fewer digits.
-  const partial = board.incomplete > 0;
+  const partial = board.incomplete > 0 || smtPending;
   const ge = partial ? '≥ ' : '';
   const le = partial ? '≤ ' : '';
   const pct = (r) => `${(r * 100).toFixed(r > 0.999 ? 3 : 1)}%`;
-  const boundNote = partial ? `<div class="sub">Lower bound: ${plural(board.incomplete, 'line')} left out</div>` : '';
+  const leftOut = [board.incomplete ? plural(board.incomplete, 'line') : '', smtPending ? (smtWaiting ? plural(smt.incomplete, 'surface-mount device') : 'the surface-mount check') : ''].filter(Boolean).join(' and ');
+  const boundNote = partial ? `<div class="sub">Lower bound: ${leftOut} left out</div>` : '';
   $('#summary').innerHTML = `<div class="tiles${partial ? ' partial' : ''}">
     <div class="tile"><div class="label">${redundancy ? `Board failure rate, average over ${fmt(years)} years` : 'Board failure rate'}</div><div class="value">${ge}${fmt2(total)} FIT</div><div class="sub">${fmt(pieces)} pieces in ${state.parts.length} lines${redundancy ? ', with redundancy' : ''}</div>${boundNote}</div>
     <div class="tile bounded"><div class="label">${redundancy ? 'Mean time to failure' : 'MTBF'}</div><div class="value">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf)} h` : '—'}</div><div class="sub">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf / 8760)} years` : 'no failure rate yet'}</div></div>
@@ -414,9 +519,11 @@ function update() {
     </div>${warn.length ? `<p class="warn">${warn.map(esc).join(' ')}</p>` : ''}
     <p class="scope">${redundancy
     ? 'Parts in redundant blocks count as set under Reliability structure; every other part counts in series.'
-    : 'The total counts a failure of any listed part as a board failure, so parts wired in parallel still add up unless you group them under Reliability structure.'} Solder joints are part of each component's package term; the bare printed circuit board and anything not in the list are not included.</p>`;
+    : 'The total counts a failure of any listed part as a board failure, so parts wired in parallel still add up unless you group them under Reliability structure.'} ${smtFit
+    ? 'Surface-mount solder joints count once more through their weakest device (MIL-HDBK-217F 16.2), on top of the IEC TR 62380 package terms, which already include joint fatigue for the parts they model.'
+    : 'Solder joints are part of each IEC TR 62380 component\'s package term; MIL-HDBK-217F parts need the surface-mount check for theirs.'} The bare printed circuit board and anything not in the list are not included.</p>`;
 
-  const sum = board.total;
+  const sum = board.total + smtFit;
   const sorted = [...board.items].sort((a, b) => b.result.total - a.result.total || Number(a.result.complete) - Number(b.result.complete));
   $('#results').innerHTML = sorted.length
     ? sorted.map(({ comp, result }, i) => {
@@ -427,6 +534,7 @@ function update() {
       const each = result.complete ? fmt(result.fit) : '<span class="bad">Missing</span>';
       return `<tr${top ? ' class="top"' : ''}><td>${esc(comp.ref)}</td><td class="opt">${esc(model.describe({ ...model.defaults, ...comp.params }))}</td><td class="num">${fmt(result.qty)}</td><td class="num opt">${each}</td><td class="num">${result.complete ? fmt(result.total) : '—'}</td><td class="num">${result.complete ? `${share.toFixed(1)}%` : '—'}</td></tr>`;
     }).join('')
+      + (smtFit ? `<tr class="smt-row"><td>Solder joints</td><td class="opt">Surface mount, weakest link: ${esc(smt.worst.device.label || 'unnamed device')}</td><td></td><td class="opt"></td><td class="num">${fmt(smtFit)}</td><td class="num">${sum > 0 ? `${((100 * smtFit) / sum).toFixed(1)}%` : '—'}</td></tr>` : '')
       + (redundancy ? `<tr><td colspan="4">Sum of part rates (all in series)</td><td class="num">${fmt(sum)}</td><td class="num">100%</td></tr>` : '')
       + `<tr><td><strong>${redundancy ? `Board, with redundancy (average over ${fmt(years)} years)` : 'Board'}</strong></td><td class="opt"></td><td></td><td class="opt"></td><td class="num"><strong>${fmt(total)}</strong></td><td class="num">${redundancy ? '' : '100%'}</td></tr>`
     : '<tr><td colspan="6">No parts yet.</td></tr>';
@@ -469,7 +577,17 @@ function boardCSV() {
       result.errors.join(' '), labels(comp.inferred), labels(comp.confirmed), comp.source?.manufacturer ?? '', comp.source?.mpn ?? '',
     ]);
   }
-  rows.push(['Board', '', '', '', '', board.total, '100', '', board.incomplete ? `Lower bound: ${board.incomplete} lines left out` : '', '', '']);
+  const smt = evaluateSmt(state.smt, state.profile, isNum(state.years) ? state.years : 0);
+  if (state.smt.devices.length) {
+    rows.push(['Solder joints', 'Surface mount (MIL-HDBK-217F 16.2), weakest link', smt.worst ? smt.worst.device.label : '', '', '',
+      smt.worst ? smt.fit : '', '', '', [...smt.problems, smt.incomplete ? `${smt.incomplete} devices need input.` : ''].filter(Boolean).join(' '),
+      '', '', '', '']);
+    for (const r of smt.devices) {
+      rows.push([`  ${r.device.label}`, 'Surface-mount device', `${r.device.lead ?? ''} ${r.device.body ?? ''}, d ${r.device.d ?? ''} mm`, '', '', r.complete ? r.fit : '', '', '', r.complete ? '' : `Missing: ${r.missing.join(', ')}`, '', '', '', '']);
+    }
+  }
+  const smtFit = state.smt.include && smt.worst ? smt.fit : 0;
+  rows.push(['Board', '', '', '', '', board.total + smtFit, '100', '', board.incomplete ? `Lower bound: ${board.incomplete} lines left out` : '', '', '']);
   // Blocks of the reliability structure, depth first, with their mission-average rates.
   const { rt, ev } = currentStructure();
   const blockRows = (id, depth) => {
@@ -539,6 +657,11 @@ document.addEventListener('input', (e) => {
     const ph = state.profile.phases[Number(el.dataset.i)];
     ph[el.dataset.key] = el.dataset.key === 'name' ? el.value : numOrNull(el.value);
     if (el.dataset.key !== 'name') markCustomProfile();
+  } else if (bind === 'smt-dev') {
+    const dev = state.smt.devices[Number(el.dataset.i)];
+    const key = el.dataset.key;
+    dev[key] = key === 'label' ? el.value : numOrNull(el.value);
+    if (dev.inferred?.[key]) { delete dev.inferred[key]; el.removeAttribute('title'); }
   } else if (bind === 'part') {
     const part = findPart(el.dataset.id);
     const key = el.dataset.key;
@@ -561,7 +684,19 @@ document.addEventListener('change', (e) => {
     return;
   }
   if (!bind) return;
-  if (bind === 'env217f') {
+  if (bind === 'smt') {
+    const key = el.dataset.key;
+    state.smt[key] = el.type === 'checkbox' ? el.checked : el.value || null;
+    if (key === 'cycling' && !state.smt.cycling) state.smt.cycling = 'profile';
+  } else if (bind === 'smt-dev' && el.tagName === 'SELECT') {
+    const i = Number(el.dataset.i);
+    const dev = state.smt.devices[i];
+    dev[el.dataset.key] = el.value || null;
+    if (dev.inferred?.[el.dataset.key]) delete dev.inferred[el.dataset.key];
+    // Leaded parts use the handbook's 8-mil joint height, so the row's cells change.
+    $(`#smt-devices [data-smt="${i}"]`).outerHTML = smtRowHTML(dev, i);
+    $(`#smt-devices [data-smt="${i}"] [data-key="${el.dataset.key}"]`)?.focus();
+  } else if (bind === 'env217f') {
     state.profile.env217f = el.value;
   } else if (bind === 'preset') {
     if (!el.value) return;
@@ -618,6 +753,31 @@ document.addEventListener('click', (e) => {
     case 'import': $('#import-file').click(); return;
     case 'import-netlist': $('#netlist-file').click(); return;
     case 'import-bom': $('#bom-file').click(); return;
+    case 'smt-add':
+      state.smt.devices.push({ label: '', lead: null, body: null, d: null, h: null, rise: null, inferred: {} });
+      renderSmt();
+      $(`#smt-devices [data-smt="${state.smt.devices.length - 1}"] input`)?.focus();
+      break;
+    case 'smt-del':
+      state.smt.devices.splice(Number(btn.dataset.i), 1);
+      renderSmt();
+      break;
+    case 'smt-chips': {
+      // One row per chip size and kind; rows already there keep what the user entered.
+      const found = chipCandidates(state.parts);
+      let added = 0;
+      for (const c of found) {
+        const row = state.smt.devices.find((d) => d.auto === c.auto);
+        if (!row) { state.smt.devices.push(c); added++; continue; }
+        row.label = c.label;
+        for (const k of Object.keys(c.inferred)) if (row.inferred?.[k]) { row[k] = c[k]; row.inferred[k] = c.inferred[k]; }
+      }
+      renderSmt();
+      $('#smt-status').textContent = found.length
+        ? `${plural(found.length, 'chip size')} found on the board${added ? `, ${added} added` : ', all already listed'}. Enter each solder joint height.`
+        : 'No chip capacitors or resistors with a size code (such as 0603) in their footprint or description.';
+      break;
+    }
     case 'dismiss-report': $('#import-report').hidden = true; return;
     case 'export-json': download(`${fileBase()}.iec62380.json`, 'application/json', JSON.stringify(exportable(state), null, 2)); return;
     case 'export-csv': download(`${fileBase()}.csv`, 'text/csv', boardCSV()); return;

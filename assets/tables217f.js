@@ -448,7 +448,74 @@ export const INDUCTIVE_217F = {
   piE: [1.0, 6.0, 12, 5.0, 16, 6.0, 8.0, 7.0, 9.0, 24, 0.50, 13, 34, 610],
 };
 
+// Surface-mount solder joints (section 16.2): not a part model, a board-level
+// wear-out check. Each device's thermal-cycling life is worked out and the
+// worst device (the "weakest link") sets the board's rate.
+export const SMT_217F = {
+  id: 'mil-smt',
+  title: 'Surface-mount solder joints',
+  ref: 'MIL-HDBK-217F Notice 2, section 16.2',
+  status: 'handbook',
+  sources: ['mil217fN2'],
+  note: 'Engelmaier-type solder-joint fatigue: N_f = 3.5·(d/(0.65·h)·|α_S·ΔT − α_CC·(ΔT + T_RISE)|·10⁻⁶)^−2.26·π_LC cycles; characteristic life α_SMT = N_f/CR; rate over the design life LC = ECF/α_SMT, ECF from LC/α_SMT. Derived for tin-lead solder and excluding manufacturing defects. The weakest device sets the board rate, which 217F adds to the sum of the part rates.',
+  // Cycling rate CR by equipment type (cycles per calendar hour), page 16-3.
+  equipment: [
+    { id: 'automotive', label: 'Automotive', cr: 1.0 },
+    { id: 'consumer', label: 'Consumer (television, radio, recorder)', cr: 0.08 },
+    { id: 'computer', label: 'Computer', cr: 0.17 },
+    { id: 'telecom', label: 'Telecommunications', cr: 0.0042 },
+    { id: 'commercial-aircraft', label: 'Commercial aircraft', cr: 0.25 },
+    { id: 'industrial', label: 'Industrial', cr: 0.021 },
+    { id: 'military-ground', label: 'Military ground applications', cr: 0.03 },
+    { id: 'military-cargo', label: 'Military aircraft (cargo)', cr: 0.12 },
+    { id: 'military-fighter', label: 'Military aircraft (fighter)', cr: 0.5 },
+  ],
+  // Lead configuration factor π_LC.
+  leads: [
+    { id: 'leadless', label: 'Leadless (chips, QFN, LCC, BGA)', piLC: 1 },
+    { id: 'j', label: 'J or S lead', piLC: 150 },
+    { id: 'gull', label: 'Gull wing', piLC: 5000 },
+  ],
+  // Package material TCE α_CC (ppm/°C).
+  bodies: [
+    { id: 'plastic', label: 'Plastic', alphaCC: 7 },
+    { id: 'ceramic', label: 'Ceramic', alphaCC: 6 },
+  ],
+  // Use-environment temperature difference ΔT (°C) by 217F environment; null where the handbook gives none.
+  deltaT: [7, 21, 26, 26, 61, 31, 31, 57, 57, 31, 7, null, null, null],
+  // Substrate TCE α_S (ppm/°C).
+  substrates: [
+    { id: 'fr4', label: 'FR-4 laminate', alphaS: 18 },
+    { id: 'fr4-ml', label: 'FR-4 multilayer board', alphaS: 20 },
+    { id: 'fr4-ml-cic', label: 'FR-4 multilayer board with copper-clad Invar', alphaS: 11 },
+    { id: 'ceramic-ml', label: 'Ceramic multilayer board', alphaS: 7 },
+    { id: 'cic', label: 'Copper-clad Invar', alphaS: 5 },
+    { id: 'cmo', label: 'Copper-clad molybdenum', alphaS: 5 },
+    { id: 'carbon-epoxy', label: 'Carbon-fibre/epoxy composite', alphaS: 1 },
+    { id: 'kevlar', label: 'Kevlar fibre', alphaS: 3 },
+    { id: 'quartz', label: 'Quartz fibre', alphaS: 1 },
+    { id: 'glass', label: 'Glass fibre', alphaS: 5 },
+    { id: 'epoxy-glass', label: 'Epoxy/glass laminate', alphaS: 15 },
+    { id: 'polyamide-glass', label: 'Polyamide/glass laminate', alphaS: 13 },
+    { id: 'polyamide-kevlar', label: 'Polyamide/Kevlar laminate', alphaS: 6 },
+    { id: 'polyamide-quartz', label: 'Polyamide/quartz laminate', alphaS: 8 },
+    { id: 'epoxy-kevlar', label: 'Epoxy/Kevlar laminate', alphaS: 7 },
+    { id: 'alumina', label: 'Alumina (ceramic)', alphaS: 7 },
+    { id: 'epoxy-aramid', label: 'Epoxy aramid fibre', alphaS: 7 },
+    { id: 'polyamide-aramid', label: 'Polyamide aramid fibre', alphaS: 6 },
+    { id: 'epoxy-quartz', label: 'Epoxy-quartz', alphaS: 9 },
+    { id: 'teflon', label: 'Fibreglass Teflon laminates', alphaS: 20 },
+    { id: 'porcelain-cic', label: 'Porcelainised copper-clad Invar', alphaS: 7 },
+    { id: 'glass-ceramic', label: 'Fibreglass ceramic fibre', alphaS: 7 },
+  ],
+  // Effective cumulative failures ECF by LC/α_SMT: upper bound of each band (inclusive) and ECF.
+  ecf: [[0.1, 0.13], [0.2, 0.15], [0.3, 0.23], [0.4, 0.31], [0.5, 0.41], [0.6, 0.51], [0.7, 0.61], [0.8, 0.68], [0.9, 0.76], [Infinity, 1.0]],
+  // Solder joint height for all leaded configurations, mils.
+  leadedHeight: 8,
+  piE: null,
+};
+
 export const TABLES_217F = [
   RELAY_MECHANICAL, RELAY_SOLID_STATE, SWITCHES, CONNECTORS, SOCKETS, PTH_BOARDS,
-  CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS, CAPACITORS_217F, RESISTORS_217F, INDUCTIVE_217F,
+  CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS, CAPACITORS_217F, RESISTORS_217F, INDUCTIVE_217F, SMT_217F,
 ];

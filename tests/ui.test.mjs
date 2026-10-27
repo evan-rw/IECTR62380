@@ -412,6 +412,39 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   await pick('#bom-file', { name: 'prices.csv', arrayBuffer: async () => new TextEncoder().encode('Item,Price\nfoo,1').buffer });
   assert.match(alerted, /Could not read “prices.csv”: No designator column/);
 
+  // Surface-mount check: chip parts become candidate devices; the joint height is asked for.
+  const beforeSmt = boardTotal();
+  click($('[data-act="smt-chips"]'));
+  assert.match($('#smt-status').textContent, /2 chip sizes found on the board, 2 added/);
+  const smtRows = () => $$('#smt-devices tr[data-smt]');
+  assert.deepEqual(smtRows().map((tr) => $('[data-key="label"]', tr).value), ['C1, C2, C3 (0603 ceramic chip capacitor)', 'R1 (0603 chip resistor)']);
+  assert.ok($('[data-cell="d"]', smtRows()[0]).classList.contains('inferred'));
+  assert.ok($('[data-cell="h"]', smtRows()[0]).classList.contains('missing'));
+  assert.match(warn(), /surface-mount check needs input/);
+  assert.match(total(), /^≥ /);
+  choose($('#smt-substrate'), 'fr4-ml');
+  typeInto($('[data-key="h"]', smtRows()[0]), 0.05);
+  assert.match(warn(), /1 surface-mount device needs input; until then the weakest link is taken from the others/);
+  typeInto($('[data-key="h"]', smtRows()[1]), 0.05);
+  assert.doesNotMatch(warn(), /surface-mount/);
+  assert.match($('#smt-result').textContent, /Weakest link: .*Added to the board total/);
+  assert.match($('#results').textContent, /Solder joints/);
+  assert.ok(boardTotal() > beforeSmt, `${boardTotal()} > ${beforeSmt}`);
+  // Leaving it out of the total.
+  const withSmt = boardTotal();
+  const include = $('#smt-include');
+  include.checked = false;
+  fire(include, 'change');
+  assert.equal(boardTotal(), beforeSmt);
+  assert.match($('#smt-result').textContent, /Not added to the board total/);
+  include.checked = true;
+  fire(include, 'change');
+  assert.equal(boardTotal(), withSmt);
+  // Saved with the board.
+  click($('[data-act="export-json"]'));
+  const savedSmt = JSON.parse(await downloads.at(-1).text()).smt;
+  assert.deepEqual([savedSmt.substrate, savedSmt.devices.length, savedSmt.devices[0].h], ['fr4-ml', 2, 0.05]);
+
   // Last: changing a part's type keeps its reference, quantity and netlist data.
   choose($('[data-bind="part-model"]', cardFor('R1')), 'vendor');
   const asVendor = cardFor('R1');

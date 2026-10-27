@@ -109,6 +109,45 @@
       <div id="parts" class="parts"></div>
     </section>
 
+    <section class="panel" id="smt" aria-labelledby="smt-heading">
+      <h2 id="smt-heading">Surface-mount solder joints</h2>
+      <p class="hint">For surface-mount boards: thermal cycling slowly cracks solder joints, worst on large leadless and ceramic parts. Following MIL-HDBK-217F section 16.2, each device listed here gets a cycles-to-failure life from its size, joint height, leads and body against the board's expansion, and the worst one (the weakest link) adds its rate, averaged over the mission length, to the board total. The model was derived for tin-lead solder and leaves out manufacturing defects. IEC TR 62380 parts already include joint fatigue in their package terms, so this counts it again for them; untick the box to leave it out.</p>
+      <div class="smt-settings">
+        <div class="field"><label for="smt-substrate">Board substrate <span class="state-tag"></span></label><select id="smt-substrate" data-bind="smt" data-key="substrate"></select></div>
+        <div class="field"><label for="smt-cycling">Thermal cycles from</label>
+          <select id="smt-cycling" data-bind="smt" data-key="cycling">
+            <option value="profile">The mission profile (n and ΔT of each phase)</option>
+            <option value="handbook">The handbook's equipment table and the 217F environment</option>
+          </select></div>
+        <div class="field" id="smt-equipment-field" hidden><label for="smt-equipment">Equipment type</label><select id="smt-equipment" data-bind="smt" data-key="equipment"></select></div>
+        <label class="check-label"><input type="checkbox" id="smt-include" data-bind="smt" data-key="include"> Add the weakest link to the board total</label>
+      </div>
+      <div class="table-scroll">
+        <table class="smt-devices">
+          <thead>
+            <tr>
+              <th scope="col">Devices</th>
+              <th scope="col">Leads</th>
+              <th scope="col">Body</th>
+              <th scope="col">d <span class="unit">mm, centre to furthest joint</span></th>
+              <th scope="col">h <span class="unit">mm, joint height</span></th>
+              <th scope="col">Rise <span class="unit">°C, own power</span></th>
+              <th scope="col" class="num">Life</th>
+              <th scope="col" class="num">λ <span class="unit">FIT</span></th>
+              <th scope="col"><span class="visually-hidden">Remove</span></th>
+            </tr>
+          </thead>
+          <tbody id="smt-devices"></tbody>
+        </table>
+      </div>
+      <div class="toolbar smt-actions">
+        <button type="button" data-act="smt-add">Add device</button>
+        <button type="button" data-act="smt-chips">Fill from chip parts</button>
+        <span id="smt-status" class="muted" role="status"></span>
+      </div>
+      <div id="smt-result" class="smt-result" aria-live="polite"></div>
+    </section>
+
     <section class="panel" id="structure" aria-labelledby="structure-heading">
       <h2 id="structure-heading">Reliability structure</h2>
       <p class="hint">Every part starts in “Everything else, in series”: any failure fails the board. Put parts that back each other up into a parallel block, such as capacitors on a rail, then say how many must keep working and what share of their failures breaks the block anyway (a shorted capacitor takes the whole rail down). Blocks nest, so two series power paths can sit inside a 1-of-2 block. The tree and the diagram edit the same structure. Netlist import proposes blocks of parts wired to the same nets; they count in series until you accept them. A redundant block has no constant failure rate, so the board figures become averages over the mission length.</p>

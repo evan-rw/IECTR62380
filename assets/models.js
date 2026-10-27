@@ -571,7 +571,7 @@ export const clauseOf = (m) => (m.group === 'MIL-HDBK-217F' ? m.clause : `Clause
 
 // Families with no model here yet, under either method.
 export const PENDING_FAMILIES = [
-  'Hybrid circuits, and surface-mount boards (62380 clause 6; 217F section 16.2)',
+  'Hybrid circuits, and the bare printed circuit board itself (62380 clause 6; surface-mount solder joints are checked with MIL-HDBK-217F section 16.2)',
   'Laser diodes, passive optics (62380 clause 9)',
   'Aluminium solid and polymer capacitors (62380 clauses 10.6, 10.7; film, paper, mica, glass and variable capacitors, composition, power, wirewound and variable resistors, and thermistors use the MIL-HDBK-217F capacitor and resistor models)',
   'Microwave passives, SAW filters (62380 clause 13)',

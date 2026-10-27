@@ -342,6 +342,24 @@ table.trace-table caption { text-align: left; font-weight: bold; padding-bottom:
 .import-report[hidden] { display: none; }
 .check-label { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 8px; }
 
+/* Surface-mount solder joints */
+
+.smt-settings { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-end; margin-bottom: 8px; }
+.smt-settings .field { flex: 0 1 300px; }
+.smt-settings .field[hidden] { display: none; }
+.smt-settings .check-label { margin: 0 0 4px; }
+.smt-settings .field.missing select { background-color: var(--error-bg); box-shadow: 0 0 0 1px var(--error), var(--sunken); }
+table.smt-devices { min-width: 860px; }
+table.smt-devices td { padding: 2px; }
+table.smt-devices td:first-child { min-width: 250px; }
+table.smt-devices input[type="number"] { min-width: 70px; }
+table.smt-devices td.missing input, table.smt-devices td.missing select { background-color: var(--error-bg); box-shadow: 0 0 0 1px var(--error), var(--sunken); }
+table.smt-devices td.inferred input, table.smt-devices td.inferred select { background-color: var(--guess-bg); box-shadow: 0 0 0 1px var(--guess-border), var(--sunken); }
+table.smt-devices tr.worst td { background: #ffe8d8; }
+table.smt-devices .empty { color: var(--text-2); padding: 6px; }
+.smt-actions { margin-top: 6px; align-items: center; }
+.smt-result p { margin: 6px 0 0; }
+
 /* Results */
 
 table.results td:nth-child(2) { color: var(--text-2); }

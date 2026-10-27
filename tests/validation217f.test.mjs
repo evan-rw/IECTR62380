@@ -1,7 +1,7 @@
 // Validation of the MIL-HDBK-217F models against the handbook's printed tables.
 //
 // Every expected value here was read a second time from the scanned pages
-// (Notice 2 pages 9-1 to 9-3, 10-1 to 10-6, 11-1 to 11-4, 13-1, 13-2, 13-3, 14-1, 14-2, 15-1, 15-2, 15-3,
+// (Notice 2 pages 9-1 to 9-3, 10-1 to 10-6, 11-1 to 11-4, 16-2 to 16-4, 13-1, 13-2, 13-3, 14-1, 14-2, 15-1, 15-2, 15-3,
 // 16-1; 1991 pages 6-19, 19-1, 20-1, 22-1), independently of assets/tables217f.js. Each
 // check runs the full model (computeComponent), so it covers the table, the
 // formula and the FIT conversion together.
@@ -13,6 +13,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { computeComponent, normaliseProfile } from '../assets/models.js';
+import { SMT_217F } from '../assets/tables217f.js';
+import { cyclesToFailure, lifeRate, evaluateSmt } from '../assets/smt.js';
 
 const ENV = ['GB', 'GF', 'GM', 'NS', 'NU', 'AIC', 'AIF', 'AUC', 'AUF', 'ARW', 'SF', 'MF', 'ML', 'CL'];
 const profile = (tac = 40, env217f = 'GB') => normaliseProfile({ phases: [{ tac, tau: 1, n: 0, dT: 0 }], env217f });
@@ -407,4 +409,37 @@ test('11.1–11.3 transformers and coils (Notice 2, pages 11-1 to 11-4)', () => 
   const quality = { S: 0.03, R: 0.10, P: 0.30, M: 1.0, milspec: 1.0, lower: 3.0 };
   for (const [q, v] of Object.entries(quality)) exactly(ind('coil-fixed', { quality: q }) / ind('coil-fixed'), v, `inductive π_Q(${q})`);
   checkEnvironments('mil-inductive', { ...p, kind: 'audio' }, [1.0, 6.0, 12, 5.0, 16, 6.0, 8.0, 7.0, 9.0, 24, 0.50, 13, 34, 610]);
+});
+
+test('16.2 surface-mount solder joints (Notice 2, pages 16-2 to 16-4)', () => {
+  const ids = (rows, key) => Object.fromEntries(rows.map((r) => [r.label, r[key]]));
+  // Cycling rate defaults, cycles per hour (page 16-3).
+  assert.deepEqual(Object.values(ids(SMT_217F.equipment, 'cr')), [1.0, 0.08, 0.17, 0.0042, 0.25, 0.021, 0.03, 0.12, 0.5]);
+  // Lead configuration π_LC and package TCE α_CC.
+  assert.deepEqual(SMT_217F.leads.map((r) => r.piLC), [1, 150, 5000]);
+  assert.deepEqual(SMT_217F.bodies.map((r) => [r.id, r.alphaCC]), [['plastic', 7], ['ceramic', 6]]);
+  // Use-environment ΔT, G_B … C_L (N/A for M_F, M_L, C_L).
+  assert.deepEqual(SMT_217F.deltaT, [7, 21, 26, 26, 61, 31, 31, 57, 57, 31, 7, null, null, null]);
+  // Substrate TCE α_S, in the page's order.
+  assert.deepEqual(SMT_217F.substrates.map((r) => r.alphaS), [18, 20, 11, 7, 5, 5, 1, 3, 1, 5, 15, 13, 6, 8, 7, 7, 7, 6, 9, 20, 7, 7]);
+  // Effective cumulative failures by LC/α_SMT band (page 16-2).
+  const ecf = [[0.05, 0.13], [0.15, 0.15], [0.25, 0.23], [0.35, 0.31], [0.45, 0.41], [0.55, 0.51], [0.65, 0.61], [0.75, 0.68], [0.85, 0.76], [0.95, 1.0], [3, 1.0]];
+  for (const [ratio, v] of ecf) assert.equal(lifeRate(1, ratio).ecf, v, `ECF at LC/α = ${ratio}`);
+
+  // Worked example (page 16-4): a 1480-mil plastic leadless chip carrier on epoxy glass, h = 5 mils,
+  // ΔT 21 (G_F), T_RISE = 20 °C/W × 0.5 W, military ground (0.03 cycles/h), 20-year design life.
+  const nf = cyclesToFailure({ dMils: 1480 / 2, hMils: 5, alphaS: 15, alphaCC: 7, dT: 21, tRise: 20 * 0.5, piLC: 1 });
+  assert.equal(Math.round(nf), 18893, 'N_f = 18,893 thermal cycles to failure');
+  const alpha = nf / 0.03;
+  assert.ok(Math.abs(alpha - 629767) < 30, `α_SMT ${alpha} (the page divides the rounded 18,893: 629,767 h)`);
+  const r = lifeRate(alpha, 20 * 8760);
+  matchesPrinted(r.ratio, '.28', 'LC/α_SMT');
+  assert.equal(r.ecf, 0.23);
+  matchesPrinted(r.perHour * 1e6, '.4', 'λ_SMT, failures per 10⁶ hours');
+  // The same through the board-level check, with the board in G_F and inputs in millimetres.
+  const board = evaluateSmt({
+    substrate: 'epoxy-glass', cycling: 'handbook', equipment: 'military-ground',
+    devices: [{ label: 'LCC', lead: 'leadless', body: 'plastic', d: 740 * 0.0254, h: 5 * 0.0254, rise: 10 }],
+  }, { env217f: 'GF', phases: [] }, 20);
+  matchesPrinted(board.fit / 1000, '.4', 'board λ_SMT through the check');
 });
