@@ -342,6 +342,18 @@ table.trace-table caption { text-align: left; font-weight: bold; padding-bottom:
 .import-report[hidden] { display: none; }
 .check-label { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 8px; }
 
+/* Circuit board */
+
+.pcb-settings { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 12px; margin-bottom: 6px; }
+.pcb-settings .field.wide { grid-column: span 2; }
+.pcb-custom { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 12px; padding: 6px; box-shadow: var(--etched); }
+.pcb-custom[hidden] { display: none; }
+.pcb-settings .field.missing input, .pcb-settings .field.missing select { background-color: var(--error-bg); box-shadow: 0 0 0 1px var(--error), var(--sunken); }
+table.pcb-holes { min-width: 640px; }
+table.smt-devices tr.cracked td { background: var(--error-bg); }
+#pcb-laminate-note { margin: 0 0 6px; }
+@media (max-width: 760px) { .pcb-settings .field.wide { grid-column: auto; } }
+
 /* Surface-mount solder joints */
 
 .smt-settings { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-end; margin-bottom: 8px; }

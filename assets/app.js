@@ -6,6 +6,8 @@ import { MISSION_PROFILES } from './tables.js';
 import { netlistToParts, expandRefs, compressRefs } from './netlist.js';
 import { ROOT, sanitizeStructure, migrateGroups, meanTimeToFailure, members as structureMembers, label as structureLabel } from './structure.js';
 import { evaluateSmt, chipCandidates } from './smt.js';
+import { evaluateBoard, laminateOf, qualityBand } from './pth.js';
+import { LAMINATES, PTH_MODEL, SOURCES_BOARD } from './tablesboard.js';
 import { mountStructure, refreshStructure, currentStructure } from './structure-ui.js';
 import { parseBom, bomToParts, mergeBom } from './bom.js';
 import { failureModesFor } from './failuremodes.js';
@@ -56,11 +58,29 @@ function presetProfile(id, env217f = 'GB') {
 
 // Surface-mount check (MIL-HDBK-217F 16.2): board settings and candidate devices.
 const emptySmt = () => ({ include: true, substrate: null, cycling: 'profile', equipment: null, devices: [] });
+// Circuit board (plated-hole fatigue): laminate, plating, assembly and hole sizes.
+const PCB_NUMBERS = ['thickness', 'ductility', 'strength', 'kq', 'kd', 'reflows', 'reflowPeak'];
+const emptyPcb = () => ({
+  include: true, laminate: null, custom: { tg: null, alpha1: null, alpha2: null, modulus: null },
+  ...Object.fromEntries(PCB_NUMBERS.map((k) => [k, null])), holes: [],
+});
 
 function emptyBoard() {
   return {
     format: FORMAT, version: 2, title: 'Untitled board', years: 10, profile: presetProfile('geo-permanent'), parts: [],
-    structure: { kind: 'block', id: ROOT, children: [] }, smt: emptySmt(),
+    structure: { kind: 'block', id: ROOT, children: [] }, smt: emptySmt(), pcb: emptyPcb(),
+  };
+}
+
+function sanitizePcb(raw) {
+  const s = raw && typeof raw === 'object' ? raw : {};
+  const num = (v) => (isNum(v) ? v : null);
+  return {
+    include: s.include !== false,
+    laminate: s.laminate === 'custom' || LAMINATES.rows.some((r) => r.id === s.laminate) ? s.laminate : null,
+    custom: Object.fromEntries(['tg', 'alpha1', 'alpha2', 'modulus'].map((k) => [k, num(s.custom?.[k])])),
+    ...Object.fromEntries(PCB_NUMBERS.map((k) => [k, num(s[k])])),
+    holes: (Array.isArray(s.holes) ? s.holes : []).map((h) => ({ label: str(h?.label), drill: num(h?.drill), plating: num(h?.plating) })),
   };
 }
 
@@ -148,6 +168,7 @@ function sanitize(raw) {
       parts,
       structure,
       smt: sanitizeSmt(raw.smt),
+      pcb: sanitizePcb(raw.pcb),
     },
     skipped,
   };
@@ -165,6 +186,7 @@ function exportable(board) {
     })),
     structure: board.structure,
     smt: board.smt,
+    pcb: board.pcb,
   };
 }
 
@@ -356,6 +378,77 @@ function rerenderPart(part, focusKey) {
 }
 
 // ---------------------------------------------------------------------------
+// Circuit board: plated-hole fatigue
+
+function pcbHoleHTML(h, i) {
+  const data = (key) => `data-bind="pcb-hole" data-i="${i}" data-key="${key}"`;
+  const num = (key, label) => `<input type="number" min="0" step="any" inputmode="decimal" aria-label="${label}" ${data(key)} value="${h[key] ?? ''}">`;
+  return `<tr data-hole="${i}">
+    <td><input type="text" aria-label="Hole size" ${data('label')} value="${esc(h.label)}" placeholder="e.g. 0.3 mm vias"></td>
+    <td data-cell="drill">${num('drill', 'Drill diameter, mm')}</td>
+    <td data-cell="plating">${num('plating', 'Plating thickness, µm')}</td>
+    <td class="num" data-out="used"></td>
+    <td class="num" data-out="life"></td>
+    <td class="num" data-out="fit"></td>
+    <td><button type="button" class="icon" data-act="pcb-del" data-i="${i}" aria-label="Remove ${esc(h.label || 'hole size')}">✕</button></td>
+  </tr>`;
+}
+
+function renderPcb() {
+  const s = state.pcb;
+  $('#pcb-laminate').innerHTML = optionsHTML([
+    ...LAMINATES.rows.map((r) => ({ value: r.id, label: r.label })),
+    { value: 'custom', label: 'Custom laminate (enter its values)' },
+  ], s.laminate);
+  for (const k of PCB_NUMBERS) $(`#pcb-${k}`).value = s[k] ?? '';
+  for (const k of ['tg', 'alpha1', 'alpha2', 'modulus']) $(`#pcb-custom-${k}`).value = s.custom[k] ?? '';
+  $('#pcb-include').checked = s.include;
+  $('#pcb-holes').innerHTML = s.holes.length
+    ? s.holes.map(pcbHoleHTML).join('')
+    : '<tr><td colspan="7" class="empty">No hole sizes yet. Add the smallest vias and the through holes for leaded parts; the smallest usually wear out first.</td></tr>';
+}
+
+function updatePcb(ev) {
+  const s = state.pcb;
+  const active = s.holes.length > 0;
+  $('#pcb-custom').hidden = s.laminate !== 'custom';
+  const lam = laminateOf(s);
+  $('#pcb-laminate-note').innerHTML = lam && lam.id !== 'custom'
+    ? `Tg ${lam.tg} °C; z-axis expansion ${lam.alpha1} ppm/°C below Tg, ${lam.alpha2} above; z-axis modulus ${lam.modulus / 1000} GPa${lam.modulusAssumed ? ' (the FR-4 value, as a stand-in)' : ''}. From ${esc(SOURCES_BOARD[lam.source].label)}.`
+    : '';
+  const missingKeys = new Set(active ? [
+    ...(!s.laminate ? ['laminate'] : []),
+    ...PCB_NUMBERS.filter((k) => !isNum(s[k]) || (k !== 'reflows' && k !== 'reflowPeak' && !(s[k] > 0)) || (k === 'kq' && s[k] > 10)),
+    ...(s.laminate === 'custom' ? ['tg', 'alpha1', 'alpha2', 'modulus'].filter((k) => !isNum(s.custom[k])).map((k) => `custom-${k}`) : []),
+  ] : []);
+  for (const el of document.querySelectorAll('#pcb .pcb-settings .field')) el.classList.toggle('missing', missingKeys.has(el.dataset.field));
+  $('#pcb-kq-band').textContent = s.kq > 0 && s.kq <= 10 ? `Yours is ${qualityBand(s.kq)}.` : '';
+  ev.holes.forEach((r, i) => {
+    const row = $(`#pcb-holes [data-hole="${i}"]`);
+    if (!row) return;
+    for (const key of ['drill', 'plating']) $(`[data-cell="${key}"]`, row).classList.toggle('missing', (r.missing ?? []).includes(key));
+    row.classList.toggle('worst', ev.worst === r);
+    row.classList.toggle('cracked', Boolean(r.cracked));
+    $('[data-out="used"]', row).textContent = r.complete && r.assembly ? `${Math.min(100, Math.round(r.used * 100))} %` : r.complete ? '0 %' : '—';
+    $('[data-out="life"]', row).textContent = r.complete && !r.cracked ? (Number.isFinite(r.alphaHours) ? `${fmt2(r.alphaHours / 8760)} y` : '∞') : r.cracked ? 'cracks' : '—';
+    $('[data-out="fit"]', row).innerHTML = r.complete && !r.cracked ? fmt(r.fit) : r.cracked ? '<span class="bad">Cracks</span>' : '<span class="bad">Missing</span>';
+    if (r.complete) {
+      row.title = [...(r.assembly ? [r.assembly] : []), ...r.field]
+        .map((l) => `${l.label} (${fmt(l.tLow)} to ${fmt(l.tHigh)} °C): ${fmt2(l.nf)} cycles to failure, effective strain ${(l.strainEff * 100).toFixed(2)} %`).join('; ');
+    }
+  });
+  const lines = [];
+  if (ev.worst) {
+    const w = ev.worst;
+    lines.push(`Weakest: <b>${esc(w.hole.label || 'unnamed hole size')}</b>, ${w.assembly ? `assembly uses ${Math.round(w.used * 100)} % of its life, ` : ''}characteristic life ${Number.isFinite(w.alphaHours) ? `${fmt2(w.alphaHours / 8760)} years` : 'unlimited'}, <b>${fmt(w.fit)} FIT</b> averaged over the ${fmt(state.years)}-year design life. ${s.include ? 'Added to the board total.' : 'Not added to the board total.'}`);
+  }
+  if (active && !ev.conditions.field.length) lines.push('The mission profile has no thermal cycles (n and ΔT), so only the assembly reflows wear the holes.');
+  if (ev.incomplete) lines.push(`${plural(ev.incomplete, 'hole size needs', 'hole sizes need')} input (red).`);
+  $('#pcb-result').innerHTML = (lines.length ? `<p>${lines.join(' ')}</p>` : '')
+    + (active && ev.problems.length ? `<ul class="problems">${ev.problems.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : '');
+}
+
+// ---------------------------------------------------------------------------
 // Surface-mount solder joints
 
 const SMT_FIELDS = ['lead', 'body', 'd', 'h', 'rise'];
@@ -424,6 +517,7 @@ function renderAll() {
   renderPhases();
   renderAddModel();
   renderParts();
+  renderPcb();
   renderSmt();
   update();
 }
@@ -486,16 +580,24 @@ function update() {
   updateSmt(smt);
   const smtFit = state.smt.include && smt.worst ? smt.fit : 0;
   const smtPending = state.smt.include && state.smt.devices.length > 0 && (smt.incomplete > 0 || smt.problems.length > 0);
-  const total = (redundancy ? structure.board.fit : board.total) + smtFit;
-  const smtR = (t) => Math.exp(-smtFit * 1e-9 * t);
+  // Circuit board: the weakest plated-hole size, likewise.
+  const pcb = evaluateBoard(state.pcb, state.profile, years);
+  updatePcb(pcb);
+  const pcbFit = state.pcb.include && pcb.worst ? pcb.fit : 0;
+  const pcbPending = state.pcb.include && state.pcb.holes.length > 0 && (pcb.incomplete > 0 || pcb.problems.length > 0);
+  const wearFit = smtFit + pcbFit;
+  const total = (redundancy ? structure.board.fit : board.total) + wearFit;
+  const smtR = (t) => Math.exp(-wearFit * 1e-9 * t);
   const R = redundancy ? structure.survival(years * 8760) * smtR(years * 8760) : reliability(total, years);
-  const mtbf = redundancy ? (smtFit ? meanTimeToFailure((t) => structure.survival(t) * smtR(t)) : structure.mttfHours) : mtbfHours(total);
+  const mtbf = redundancy ? (wearFit ? meanTimeToFailure((t) => structure.survival(t) * smtR(t)) : structure.mttfHours) : mtbfHours(total);
   const pieces = board.items.reduce((s, it) => s + it.result.qty, 0);
   const warn = [];
   if (problems.length) warn.push('The mission profile has problems (see above).');
   if (board.incomplete) warn.push(`${plural(board.incomplete, 'part line needs', 'part lines need')} more input; the total leaves ${board.incomplete > 1 ? 'them' : 'it'} out.`);
   // With some devices complete, the weakest link so far is counted; the rest may be worse.
   const smtWaiting = smtPending && smt.worst && !smt.problems.length;
+  if (pcb.cracked) warn.push(`${plural(pcb.cracked, 'plated hole size is', 'plated hole sizes are')} predicted to crack during assembly; see Circuit board.`);
+  else if (pcbPending) warn.push('The circuit-board check needs input; the total leaves it out.');
   if (smtPending) {
     warn.push(smtWaiting
       ? `${plural(smt.incomplete, 'surface-mount device needs', 'surface-mount devices need')} input; until then the weakest link is taken from the others.`
@@ -506,11 +608,11 @@ function update() {
   if (guessedGroups) warn.push(`${plural(guessedGroups, 'redundant block uses', 'redundant blocks use')} a guessed share of failures; check and confirm ${guessedGroups > 1 ? 'them' : 'it'}.`);
   // While lines are left out, the total is only a lower bound, so MTBF and
   // survival are upper bounds; say so and show fewer digits.
-  const partial = board.incomplete > 0 || smtPending;
+  const partial = board.incomplete > 0 || smtPending || pcbPending;
   const ge = partial ? '≥ ' : '';
   const le = partial ? '≤ ' : '';
   const pct = (r) => `${(r * 100).toFixed(r > 0.999 ? 3 : 1)}%`;
-  const leftOut = [board.incomplete ? plural(board.incomplete, 'line') : '', smtPending ? (smtWaiting ? plural(smt.incomplete, 'surface-mount device') : 'the surface-mount check') : ''].filter(Boolean).join(' and ');
+  const leftOut = [board.incomplete ? plural(board.incomplete, 'line') : '', pcbPending ? 'the circuit board' : '', smtPending ? (smtWaiting ? plural(smt.incomplete, 'surface-mount device') : 'the surface-mount check') : ''].filter(Boolean).join(', ');
   const boundNote = partial ? `<div class="sub">Lower bound: ${leftOut} left out</div>` : '';
   $('#summary').innerHTML = `<div class="tiles${partial ? ' partial' : ''}">
     <div class="tile"><div class="label">${redundancy ? `Board failure rate, average over ${fmt(years)} years` : 'Board failure rate'}</div><div class="value">${ge}${fmt2(total)} FIT</div><div class="sub">${fmt(pieces)} pieces in ${state.parts.length} lines${redundancy ? ', with redundancy' : ''}</div>${boundNote}</div>
@@ -521,9 +623,11 @@ function update() {
     ? 'Parts in redundant blocks count as set under Reliability structure; every other part counts in series.'
     : 'The total counts a failure of any listed part as a board failure, so parts wired in parallel still add up unless you group them under Reliability structure.'} ${smtFit
     ? 'Surface-mount solder joints count once more through their weakest device (MIL-HDBK-217F 16.2), on top of the IEC TR 62380 package terms, which already include joint fatigue for the parts they model.'
-    : 'Solder joints are part of each IEC TR 62380 component\'s package term; MIL-HDBK-217F parts need the surface-mount check for theirs.'} The bare printed circuit board and anything not in the list are not included.</p>`;
+    : 'Solder joints are part of each IEC TR 62380 component\'s package term; MIL-HDBK-217F parts need the surface-mount check for theirs.'} ${pcbFit
+    ? 'The circuit board counts through its weakest plated hole size.'
+    : 'The bare circuit board is not included unless its plated holes are checked under Circuit board.'} Anything not in the list is not included.</p>`;
 
-  const sum = board.total + smtFit;
+  const sum = board.total + wearFit;
   const sorted = [...board.items].sort((a, b) => b.result.total - a.result.total || Number(a.result.complete) - Number(b.result.complete));
   $('#results').innerHTML = sorted.length
     ? sorted.map(({ comp, result }, i) => {
@@ -534,6 +638,7 @@ function update() {
       const each = result.complete ? fmt(result.fit) : '<span class="bad">Missing</span>';
       return `<tr${top ? ' class="top"' : ''}><td>${esc(comp.ref)}</td><td class="opt">${esc(model.describe({ ...model.defaults, ...comp.params }))}</td><td class="num">${fmt(result.qty)}</td><td class="num opt">${each}</td><td class="num">${result.complete ? fmt(result.total) : '—'}</td><td class="num">${result.complete ? `${share.toFixed(1)}%` : '—'}</td></tr>`;
     }).join('')
+      + (pcbFit ? `<tr class="smt-row"><td>Circuit board</td><td class="opt">Plated holes, weakest: ${esc(pcb.worst.hole.label || 'unnamed hole size')}</td><td></td><td class="opt"></td><td class="num">${fmt(pcbFit)}</td><td class="num">${sum > 0 ? `${((100 * pcbFit) / sum).toFixed(1)}%` : '—'}</td></tr>` : '')
       + (smtFit ? `<tr class="smt-row"><td>Solder joints</td><td class="opt">Surface mount, weakest link: ${esc(smt.worst.device.label || 'unnamed device')}</td><td></td><td class="opt"></td><td class="num">${fmt(smtFit)}</td><td class="num">${sum > 0 ? `${((100 * smtFit) / sum).toFixed(1)}%` : '—'}</td></tr>` : '')
       + (redundancy ? `<tr><td colspan="4">Sum of part rates (all in series)</td><td class="num">${fmt(sum)}</td><td class="num">100%</td></tr>` : '')
       + `<tr><td><strong>${redundancy ? `Board, with redundancy (average over ${fmt(years)} years)` : 'Board'}</strong></td><td class="opt"></td><td></td><td class="opt"></td><td class="num"><strong>${fmt(total)}</strong></td><td class="num">${redundancy ? '' : '100%'}</td></tr>`
@@ -586,7 +691,16 @@ function boardCSV() {
       rows.push([`  ${r.device.label}`, 'Surface-mount device', `${r.device.lead ?? ''} ${r.device.body ?? ''}, d ${r.device.d ?? ''} mm`, '', '', r.complete ? r.fit : '', '', '', r.complete ? '' : `Missing: ${r.missing.join(', ')}`, '', '', '', '']);
     }
   }
-  const smtFit = state.smt.include && smt.worst ? smt.fit : 0;
+  const pcb = evaluateBoard(state.pcb, state.profile, isNum(state.years) ? state.years : 0);
+  if (state.pcb.holes.length) {
+    rows.push(['Circuit board', 'Plated-hole fatigue (IPC-TR-579), weakest hole size', pcb.worst ? pcb.worst.hole.label : '', '', '',
+      pcb.worst ? pcb.fit : '', '', '', [...pcb.problems, pcb.incomplete ? `${pcb.incomplete} hole sizes need input.` : ''].filter(Boolean).join(' '), '', '', '', '']);
+    for (const r of pcb.holes) {
+      rows.push([`  ${r.hole.label}`, 'Plated hole', `drill ${r.hole.drill ?? ''} mm, plating ${r.hole.plating ?? ''} µm`, '', '', r.complete && !r.cracked ? r.fit : '', '', '',
+        r.cracked ? 'Cracks during assembly' : r.complete ? '' : `Missing: ${r.missing.join(', ')}`, '', '', '', '']);
+    }
+  }
+  const smtFit = (state.smt.include && smt.worst ? smt.fit : 0) + (state.pcb.include && pcb.worst ? pcb.fit : 0);
   rows.push(['Board', '', '', '', '', board.total + smtFit, '100', '', board.incomplete ? `Lower bound: ${board.incomplete} lines left out` : '', '', '']);
   // Blocks of the reliability structure, depth first, with their mission-average rates.
   const { rt, ev } = currentStructure();
@@ -657,6 +771,13 @@ document.addEventListener('input', (e) => {
     const ph = state.profile.phases[Number(el.dataset.i)];
     ph[el.dataset.key] = el.dataset.key === 'name' ? el.value : numOrNull(el.value);
     if (el.dataset.key !== 'name') markCustomProfile();
+  } else if (bind === 'pcb') {
+    const key = el.dataset.key;
+    if (key.startsWith('custom.')) state.pcb.custom[key.slice(7)] = numOrNull(el.value);
+    else state.pcb[key] = numOrNull(el.value);
+  } else if (bind === 'pcb-hole') {
+    const hole = state.pcb.holes[Number(el.dataset.i)];
+    hole[el.dataset.key] = el.dataset.key === 'label' ? el.value : numOrNull(el.value);
   } else if (bind === 'smt-dev') {
     const dev = state.smt.devices[Number(el.dataset.i)];
     const key = el.dataset.key;
@@ -684,7 +805,10 @@ document.addEventListener('change', (e) => {
     return;
   }
   if (!bind) return;
-  if (bind === 'smt') {
+  if (bind === 'pcb' && (el.tagName === 'SELECT' || el.type === 'checkbox')) {
+    if (el.type === 'checkbox') state.pcb.include = el.checked;
+    else state.pcb.laminate = el.value || null;
+  } else if (bind === 'smt') {
     const key = el.dataset.key;
     state.smt[key] = el.type === 'checkbox' ? el.checked : el.value || null;
     if (key === 'cycling' && !state.smt.cycling) state.smt.cycling = 'profile';
@@ -753,6 +877,15 @@ document.addEventListener('click', (e) => {
     case 'import': $('#import-file').click(); return;
     case 'import-netlist': $('#netlist-file').click(); return;
     case 'import-bom': $('#bom-file').click(); return;
+    case 'pcb-add':
+      state.pcb.holes.push({ label: '', drill: null, plating: null });
+      renderPcb();
+      $(`#pcb-holes [data-hole="${state.pcb.holes.length - 1}"] input`)?.focus();
+      break;
+    case 'pcb-del':
+      state.pcb.holes.splice(Number(btn.dataset.i), 1);
+      renderPcb();
+      break;
     case 'smt-add':
       state.smt.devices.push({ label: '', lead: null, body: null, d: null, h: null, rise: null, inferred: {} });
       renderSmt();

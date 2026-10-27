@@ -445,6 +445,40 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   const savedSmt = JSON.parse(await downloads.at(-1).text()).smt;
   assert.deepEqual([savedSmt.substrate, savedSmt.devices.length, savedSmt.devices[0].h], ['fr4-ml', 2, 0.05]);
 
+  // Circuit board: plated-hole fatigue for the chosen laminate.
+  const beforePcb = boardTotal();
+  click($('[data-act="pcb-add"]'));
+  const hole = () => $('#pcb-holes tr[data-hole="0"]');
+  typeInto($('[data-key="label"]', hole()), '0.3 mm vias');
+  typeInto($('[data-key="drill"]', hole()), 0.3);
+  typeInto($('[data-key="plating"]', hole()), 25);
+  assert.ok($('#pcb .field[data-field="laminate"]').classList.contains('missing'));
+  assert.match(warn(), /circuit-board check needs input/);
+  choose($('#pcb-laminate'), 'isola-370hr');
+  assert.match($('#pcb-laminate-note').textContent, /Tg 180 °C; z-axis expansion 45 ppm\/°C below Tg, 230 above.*stand-in.*Isola 370HR/);
+  for (const [key, v] of [['thickness', 1.6], ['ductility', 20], ['strength', 300], ['kq', 7.5], ['kd', 2.5], ['reflows', 2], ['reflowPeak', 245]]) typeInto($(`#pcb-${key}`), v);
+  assert.equal($('#pcb-kq-band').textContent, 'Yours is superior.');
+  assert.doesNotMatch(warn(), /circuit-board/);
+  assert.match($('#pcb-result').textContent, /Weakest: 0.3 mm vias, assembly uses \d+ % of its life.*Added to the board total/);
+  assert.match($('[data-out="used"]', hole()).textContent, /^\d+ %$/);
+  assert.match($('#results').textContent, /Circuit board/);
+  assert.ok(boardTotal() > beforePcb, `${boardTotal()} > ${beforePcb}`);
+  // Standard FR-4 through many hot reflows cracks before service.
+  choose($('#pcb-laminate'), 'fr4');
+  typeInto($('#pcb-reflows'), 10);
+  typeInto($('#pcb-reflowPeak'), 260);
+  assert.match(warn(), /1 plated hole size is predicted to crack during assembly/);
+  assert.equal($('[data-out="fit"]', hole()).textContent, 'Cracks');
+  // A custom laminate asks for its own values.
+  choose($('#pcb-laminate'), 'custom');
+  assert.equal($('#pcb-custom').hidden, false);
+  assert.ok($('#pcb .field[data-field="custom-tg"]').classList.contains('missing'));
+  click($('[data-act="export-json"]'));
+  const savedPcb = JSON.parse(await downloads.at(-1).text()).pcb;
+  assert.deepEqual([savedPcb.laminate, savedPcb.reflows, savedPcb.holes[0]], ['custom', 10, { label: '0.3 mm vias', drill: 0.3, plating: 25 }]);
+  click($('[data-act="pcb-del"]'));
+  assert.equal(boardTotal(), beforePcb);
+
   // Last: changing a part's type keeps its reference, quantity and netlist data.
   choose($('[data-bind="part-model"]', cardFor('R1')), 'vendor');
   const asVendor = cardFor('R1');

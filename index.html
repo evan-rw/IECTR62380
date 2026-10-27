@@ -109,6 +109,49 @@
       <div id="parts" class="parts"></div>
     </section>
 
+    <section class="panel" id="pcb" aria-labelledby="pcb-heading">
+      <h2 id="pcb-heading">Circuit board</h2>
+      <p class="hint">The bare board’s main wear-out: plated holes and vias crack around the barrel because the laminate swells through its thickness far more than copper does, much more once it passes its glass transition (Tg) in reflow. Following the IPC-TR-579 model as published in open papers (see Data sources), each hole size gets a cycles-to-failure life from the board thickness, drill, plating and laminate; the assembly reflows use up part of that life and the mission profile’s thermal cycles the rest, and the weakest hole size adds its rate, averaged over the mission length, to the board total. The plating’s quality K<sub>Q</sub> and strain distribution K<sub>d</sub> move the result a lot, so they are entered rather than assumed.</p>
+      <div class="pcb-settings">
+        <div class="field wide" data-field="laminate"><label for="pcb-laminate">Laminate <span class="state-tag"></span></label><select id="pcb-laminate" data-bind="pcb" data-key="laminate"></select></div>
+        <div id="pcb-custom" class="pcb-custom" hidden>
+          <div class="field" data-field="custom-tg"><label for="pcb-custom-tg">Tg <span class="unit">°C</span></label><input id="pcb-custom-tg" type="number" step="any" inputmode="decimal" data-bind="pcb" data-key="custom.tg"></div>
+          <div class="field" data-field="custom-alpha1"><label for="pcb-custom-alpha1">z-axis expansion below Tg <span class="unit">ppm/°C</span></label><input id="pcb-custom-alpha1" type="number" step="any" inputmode="decimal" data-bind="pcb" data-key="custom.alpha1"></div>
+          <div class="field" data-field="custom-alpha2"><label for="pcb-custom-alpha2">z-axis expansion above Tg <span class="unit">ppm/°C</span></label><input id="pcb-custom-alpha2" type="number" step="any" inputmode="decimal" data-bind="pcb" data-key="custom.alpha2"></div>
+          <div class="field" data-field="custom-modulus"><label for="pcb-custom-modulus">z-axis modulus <span class="unit">GPa</span></label><input id="pcb-custom-modulus" type="number" step="any" inputmode="decimal" data-bind="pcb" data-key="custom.modulus"></div>
+        </div>
+        <div class="field" data-field="thickness"><label for="pcb-thickness">Board thickness <span class="unit">mm</span> <span class="state-tag"></span></label><input id="pcb-thickness" type="number" min="0" step="any" inputmode="decimal" data-bind="pcb" data-key="thickness"></div>
+        <div class="field" data-field="ductility"><label for="pcb-ductility">Plating ductility <span class="unit">% elongation</span> <span class="state-tag"></span></label><input id="pcb-ductility" type="number" min="0" step="any" inputmode="decimal" data-bind="pcb" data-key="ductility"><p class="help">From the fabricator’s plating data (IPC-TM-650 2.4.18).</p></div>
+        <div class="field" data-field="strength"><label for="pcb-strength">Plating tensile strength <span class="unit">MPa</span> <span class="state-tag"></span></label><input id="pcb-strength" type="number" min="0" step="any" inputmode="decimal" data-bind="pcb" data-key="strength"><p class="help">From the same plating data.</p></div>
+        <div class="field" data-field="kq"><label for="pcb-kq">Plating quality K<sub>Q</sub> <span class="unit">0 to 10</span> <span class="state-tag"></span></label><input id="pcb-kq" type="number" min="0" step="any" inputmode="decimal" data-bind="pcb" data-key="kq"><p class="help">7.5 and over superior, 6 good, 3.5 marginal, below poor. <span id="pcb-kq-band"></span></p></div>
+        <div class="field" data-field="kd"><label for="pcb-kd">Strain distribution K<sub>d</sub> <span class="unit">2.5 to 5</span> <span class="state-tag"></span></label><input id="pcb-kd" type="number" min="0" step="any" inputmode="decimal" data-bind="pcb" data-key="kd"><p class="help">The published range; higher is harsher.</p></div>
+        <div class="field" data-field="reflows"><label for="pcb-reflows">Reflows, assembly and rework <span class="unit">passes</span> <span class="state-tag"></span></label><input id="pcb-reflows" type="number" min="0" step="1" inputmode="decimal" data-bind="pcb" data-key="reflows"></div>
+        <div class="field" data-field="reflowPeak"><label for="pcb-reflowPeak">Reflow peak <span class="unit">°C</span> <span class="state-tag"></span></label><input id="pcb-reflowPeak" type="number" min="0" step="any" inputmode="decimal" data-bind="pcb" data-key="reflowPeak"><p class="help">About 245 to 260 °C lead-free, 220 to 235 °C tin-lead.</p></div>
+      </div>
+      <p class="help" id="pcb-laminate-note"></p>
+      <label class="check-label"><input type="checkbox" id="pcb-include" data-bind="pcb" data-key="include"> Add the weakest hole size to the board total</label>
+      <div class="table-scroll">
+        <table class="smt-devices pcb-holes">
+          <thead>
+            <tr>
+              <th scope="col">Hole size</th>
+              <th scope="col">Drill <span class="unit">mm</span></th>
+              <th scope="col">Plating <span class="unit">µm</span></th>
+              <th scope="col" class="num">Assembly uses</th>
+              <th scope="col" class="num">Life</th>
+              <th scope="col" class="num">λ <span class="unit">FIT</span></th>
+              <th scope="col"><span class="visually-hidden">Remove</span></th>
+            </tr>
+          </thead>
+          <tbody id="pcb-holes"></tbody>
+        </table>
+      </div>
+      <div class="toolbar smt-actions">
+        <button type="button" data-act="pcb-add">Add hole size</button>
+      </div>
+      <div id="pcb-result" class="smt-result" aria-live="polite"></div>
+    </section>
+
     <section class="panel" id="smt" aria-labelledby="smt-heading">
       <h2 id="smt-heading">Surface-mount solder joints</h2>
       <p class="hint">For surface-mount boards: thermal cycling slowly cracks solder joints, worst on large leadless and ceramic parts. Following MIL-HDBK-217F section 16.2, each device listed here gets a cycles-to-failure life from its size, joint height, leads and body against the board's expansion, and the worst one (the weakest link) adds its rate, averaged over the mission length, to the board total. The model was derived for tin-lead solder and leaves out manufacturing defects. IEC TR 62380 parts already include joint fatigue in their package terms, so this counts it again for them; untick the box to leave it out.</p>

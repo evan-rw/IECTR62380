@@ -17,6 +17,8 @@ export const STATUS = {
   single: 'Single source, not checked against the standard',
   // MIL-HDBK-217F tables read from the handbook itself, without a second transcription to compare against.
   handbook: 'Read from the handbook',
+  // Circuit-board data: a published model, or a manufacturer's data sheet.
+  published: 'From a published paper or data sheet',
 };
 
 export const SOURCES = {
