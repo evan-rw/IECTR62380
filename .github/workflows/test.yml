@@ -4,14 +4,28 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm test
+      # The account only allows actions from its own repositories, so this job
+      # uses plain commands instead of actions/checkout and actions/setup-node.
+      # The runner image already has Node.js and npm.
+      - name: Check out
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          git init -q .
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)" \
+            fetch -q --depth 1 origin "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+      - name: Show tool versions
+        run: node --version && npm --version
+      - name: Install
+        run: npm ci
+      - name: Test
+        run: npm test
