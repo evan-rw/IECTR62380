@@ -109,6 +109,34 @@ CHIP = {
 }
 
 
+# A circuit board: bright green traces on dark green, with a darker edge.
+# Each trace is a polyline of horizontal, vertical and 45° segments.
+BOARD_COLOURS = {'edge': '#1d4a14', 'board': '#2f6a22', 'trace': '#7cf25c'}
+BOARD_TRACES = [
+    [(1, 7), (5, 7)],                                # bus from the left
+    [(2, 8), (2, 14)], [(4, 8), (4, 14)],            # a comb of tracks off the bottom
+    [(5, 7), (10, 2), (14, 2)],                      # upper arm, up and off to the right
+    [(5, 7), (7, 9), (9, 9), (14, 4)],               # lower arm, down, along, then up
+    [(7, 14), (14, 7)],                              # a parallel run from the bottom edge
+]
+
+
+def circuit_board():
+    """16×16 circuit-board tile."""
+    size = 16
+    pixel = [[BOARD_COLOURS['board']] * size for _ in range(size)]
+    for i in range(size):
+        for x, y in ((i, 0), (i, size - 1), (0, i), (size - 1, i)):
+            pixel[y][x] = BOARD_COLOURS['edge']
+    for line in BOARD_TRACES:
+        for (x0, y0), (x1, y1) in zip(line, line[1:]):
+            steps = max(abs(x1 - x0), abs(y1 - y0))
+            dx, dy = (x1 > x0) - (x1 < x0), (y1 > y0) - (y1 < y0)
+            for k in range(steps + 1):
+                pixel[y0 + k * dy][x0 + k * dx] = BOARD_COLOURS['trace']
+    return pixel
+
+
 # Portal: concentric square rings, blue outside, then cyan, alternating to the centre.
 PORTAL_COLOURS = ('#0a3cff', '#00e4ff')
 
@@ -175,6 +203,7 @@ def main():
         'portal': portal(),
         'boot': from_grid(BOOT),
         'chip': from_grid(CHIP),
+        'board': circuit_board(),
         'portal-floor': portal_on_floor(),
     }
     for name, pixel in pieces.items():
