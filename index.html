@@ -42,11 +42,13 @@
           <button type="button" data-act="new">New board</button>
           <button type="button" data-act="example">Load example</button>
           <button type="button" data-act="import-netlist">Import netlist</button>
+          <button type="button" data-act="import-bom">Import BOM</button>
           <button type="button" data-act="import">Import JSON</button>
           <button type="button" data-act="export-json">Export JSON</button>
           <button type="button" data-act="export-csv">Export CSV</button>
           <input id="import-file" type="file" accept="application/json,.json" hidden>
           <input id="netlist-file" type="file" hidden>
+          <input id="bom-file" type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" hidden>
         </div>
       </div>
       <div id="summary" class="summary" aria-live="polite"></div>
@@ -101,7 +103,7 @@
           <button type="button" class="primary" data-act="add-part">Add part</button>
         </div>
       </div>
-      <p class="hint">Import a Protel or Protel 2 netlist to start from a schematic. Values the netlist cannot supply are marked <span class="tag-missing">Missing</span> and the part is left out of the total until they are filled in. Values the importer worked out from footprints and part names are marked <span class="tag-guessed">Guessed</span> until you change or confirm them.</p>
+      <p class="hint">Import a Protel or Protel 2 netlist to start from a schematic, a BOM (CSV) to start from a parts list, or both: a BOM imported after a netlist adds part numbers and descriptions to the matching lines and improves their guesses. Values the files cannot supply are marked <span class="tag-missing">Missing</span> and the part is left out of the total until they are filled in. Values the importer worked out from footprints, part names and descriptions are marked <span class="tag-guessed">Guessed</span> until you change or confirm them.</p>
       <div id="import-report" class="import-report" role="status" hidden></div>
       <label class="check-label"><input type="checkbox" id="attention-only"> Only parts that need attention</label>
       <div id="parts" class="parts"></div>

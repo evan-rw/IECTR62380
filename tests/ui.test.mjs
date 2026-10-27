@@ -398,6 +398,20 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   await pick('#import-file', { text: async () => '{"nope":1}' });
   assert.match(alerted, /not a board/);
 
+  // A BOM after the netlist: part numbers land on the matching lines; the CSV carries them.
+  const bomCsv = 'Designator,Description,Manufacturer Part Number,Manufacturer\r\nC1,CAP CER 0.1UF 50V X7R 0603,GRM188R71H104KA93D,Murata\r\nX99,Spare,ABC,Foo\r\n';
+  await pick('#bom-file', { name: 'demo-bom.csv', arrayBuffer: async () => new TextEncoder().encode(bomCsv).buffer });
+  assert.match(report.textContent, /Matched 1 line to “demo-bom.csv”/);
+  assert.match(report.textContent, /Not on the board: X99/);
+  assert.match($('.source-line', cardFor('C1')).textContent, /Manufacturer: Murata · MPN: GRM188R71H104KA93D/);
+  click($('[data-act="export-csv"]'));
+  const withMpn = (await downloads.at(-1).text()).split('\r\n');
+  assert.match(withMpn[0], /"Manufacturer","MPN"$/);
+  assert.ok(withMpn.some((row) => row.startsWith('"C1",') && row.endsWith('"Murata","GRM188R71H104KA93D"')));
+  // A file without a designator column is refused and changes nothing.
+  await pick('#bom-file', { name: 'prices.csv', arrayBuffer: async () => new TextEncoder().encode('Item,Price\nfoo,1').buffer });
+  assert.match(alerted, /Could not read “prices.csv”: No designator column/);
+
   // Last: changing a part's type keeps its reference, quantity and netlist data.
   choose($('[data-bind="part-model"]', cardFor('R1')), 'vendor');
   const asVendor = cardFor('R1');

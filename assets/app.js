@@ -3,9 +3,10 @@ import {
 } from './models.js';
 import { ENVIRONMENTS } from './tables217f.js';
 import { MISSION_PROFILES } from './tables.js';
-import { netlistToParts, expandRefs } from './netlist.js';
+import { netlistToParts, expandRefs, compressRefs } from './netlist.js';
 import { ROOT, sanitizeStructure, migrateGroups, members as structureMembers, label as structureLabel } from './structure.js';
 import { mountStructure, refreshStructure, currentStructure } from './structure-ui.js';
+import { parseBom, bomToParts, mergeBom } from './bom.js';
 import { failureModesFor } from './failuremodes.js';
 import { esc } from './html.js';
 
@@ -95,7 +96,7 @@ function sanitize(raw) {
       if (typeof p.confirmed?.[key] === 'string') confirmed[key] = p.confirmed[key];
     }
     const source = p.source && typeof p.source === 'object'
-      ? { value: str(p.source.value), footprint: str(p.source.footprint), description: str(p.source.description) }
+      ? Object.fromEntries(['value', 'footprint', 'description', 'mpn', 'manufacturer'].filter((k) => p.source[k]).map((k) => [k, str(p.source[k])]))
       : null;
     parts.push({ id: newId(), ref: str(p.ref), qty: isNum(p.qty) ? p.qty : 1, model: p.model, params, inferred, confirmed, source, open: Boolean(p.open), advOpen: Boolean(p.advOpen), traceOpen: Boolean(p.traceOpen) });
   }
@@ -215,9 +216,9 @@ function fieldHTML(part, f, p) {
 
 function sourceHTML(source) {
   if (!source) return '';
-  const bits = [['Value', source.value], ['Footprint', source.footprint], ['Description', source.description]]
+  const bits = [['Value', source.value], ['Footprint', source.footprint], ['Description', source.description], ['Manufacturer', source.manufacturer], ['MPN', source.mpn]]
     .filter(([, v]) => v).map(([k, v]) => `${k}: <b>${esc(v)}</b>`);
-  return bits.length ? `<p class="source-line">From the netlist. ${bits.join(' · ')}</p>` : '';
+  return bits.length ? `<p class="source-line">Imported. ${bits.join(' · ')}</p>` : '';
 }
 
 function partHTML(part) {
@@ -455,7 +456,7 @@ function csvCell(v) {
 
 function boardCSV() {
   const board = computeBoard({ profile: state.profile, components: state.parts });
-  const rows = [['Ref', 'Part type', 'Description', 'Qty', 'Lambda each (FIT)', 'Lambda total (FIT)', 'Share (%)', 'Breakdown (FIT)', 'Problems', 'Guessed values', 'Confirmed guesses']];
+  const rows = [['Ref', 'Part type', 'Description', 'Qty', 'Lambda each (FIT)', 'Lambda total (FIT)', 'Share (%)', 'Breakdown (FIT)', 'Problems', 'Guessed values', 'Confirmed guesses', 'Manufacturer', 'MPN']];
   for (const { comp, result } of board.items) {
     const model = MODELS[comp.model];
     const p = { ...model.defaults, ...comp.params };
@@ -465,7 +466,7 @@ function boardCSV() {
       result.complete ? result.fit : '', result.complete ? result.total : '',
       result.complete && board.total > 0 ? ((100 * result.total) / board.total).toFixed(2) : '',
       result.complete ? result.parts.map(([k, v]) => `${k} ${+v.toPrecision(4)}`).join('; ') : '',
-      result.errors.join(' '), labels(comp.inferred), labels(comp.confirmed),
+      result.errors.join(' '), labels(comp.inferred), labels(comp.confirmed), comp.source?.manufacturer ?? '', comp.source?.mpn ?? '',
     ]);
   }
   rows.push(['Board', '', '', '', '', board.total, '100', '', board.incomplete ? `Lower bound: ${board.incomplete} lines left out` : '', '', '']);
@@ -485,7 +486,7 @@ function boardCSV() {
   };
   blockRows(ROOT, 0);
   if (ev.redundancy) rows.push([`Board with redundancy, average over ${state.years} years`, '', '', '', '', ev.board.fit, '', '', '', '', '']);
-  return rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
+  return rows.map((r) => [...r, ...Array(rows[0].length - r.length).fill('')].map(csvCell).join(',')).join('\r\n');
 }
 
 // Netlists are usually plain ASCII, but values such as "10µF" may be in a
@@ -616,6 +617,7 @@ document.addEventListener('click', (e) => {
     case 'example': replaceBoard(exampleBoard()); return;
     case 'import': $('#import-file').click(); return;
     case 'import-netlist': $('#netlist-file').click(); return;
+    case 'import-bom': $('#bom-file').click(); return;
     case 'dismiss-report': $('#import-report').hidden = true; return;
     case 'export-json': download(`${fileBase()}.iec62380.json`, 'application/json', JSON.stringify(exportable(state), null, 2)); return;
     case 'export-csv': download(`${fileBase()}.csv`, 'text/csv', boardCSV()); return;
@@ -715,6 +717,54 @@ $('#netlist-file').addEventListener('change', async (e) => {
     <strong>${plural(board.incomplete, 'line needs', 'lines need')} input</strong> (red, “Missing”) and ${plural(guessed, 'line has', 'lines have')} guessed values (amber, “Guessed”).
     ${result.groups.length ? `Proposed ${plural(result.groups.length, 'block')} of parts wired in parallel under Reliability structure; they count in series until you mark them redundant.` : ''}
     Tick “Only parts that need attention” to work through them.`);
+});
+
+// A BOM: on an empty board it builds the parts; otherwise it adds part numbers,
+// manufacturers and descriptions to the lines with the same designators.
+$('#bom-file').addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file) return;
+  let text;
+  let bom;
+  try {
+    text = await readText(file);
+    bom = parseBom(text);
+  } catch (err) {
+    alert(`Could not read “${file.name}”: ${err.message}`);
+    return;
+  }
+  const columns = Object.values(bom.columns).map((c) => `“${esc(c)}”`).join(', ');
+  const notes = [
+    bom.notFitted.length ? `Left out ${plural(bom.notFitted.length, 'part')} marked not fitted (${esc(compressRefs(bom.notFitted))}).` : '',
+    bom.quantityMismatch.length ? `The quantity column disagrees with the designators on ${plural(bom.quantityMismatch.length, 'row')} (${esc(bom.quantityMismatch.join('; '))}); the designators were used.` : '',
+  ].join(' ');
+  if (!state.parts.length) {
+    const result = bomToParts(text);
+    state.parts = result.lines.map((l) => makePart(l.model, l.ref, l.qty, l.params, { inferred: { ...l.inferred }, source: l.source }));
+    state.structure = { kind: 'block', id: ROOT, children: [] };
+    if (['Untitled board', 'Example board', ''].includes(state.title)) state.title = file.name.replace(/\.[^.]+$/, '');
+    renderAll();
+    save();
+    const board = computeBoard({ profile: state.profile, components: state.parts });
+    const guessed = state.parts.filter((p) => guessCount(p)).length;
+    showReport(`Read ${plural(bom.items.length, 'row')} from “${esc(file.name)}” (columns ${columns}) into ${plural(result.lines.length, 'line')} for ${plural(result.parts, 'part')}.
+      ${result.skippedCount ? `Skipped ${result.skippedCount} mechanical items (${esc(result.skipped)}).` : ''} ${notes}
+      <strong>${plural(board.incomplete, 'line needs', 'lines need')} input</strong> (red, “Missing”) and ${plural(guessed, 'line has', 'lines have')} guessed values (amber, “Guessed”).
+      A BOM has no connections, so no parallel blocks are proposed; import the netlist too for those.`);
+    return;
+  }
+  const { parts, report } = mergeBom(state.parts, bom, (m) => MODELS[m]?.defaults, newId);
+  state.parts = parts;
+  renderAll();
+  save();
+  showReport(`Matched ${plural(report.matched, 'line')} to “${esc(file.name)}” (columns ${columns}) and added part numbers and descriptions.
+    ${report.retyped ? `${plural(report.retyped, 'line was', 'lines were')} given a better part type from the BOM.` : ''}
+    ${report.improved ? `${plural(report.improved, 'line has', 'lines have')} better guesses.` : ''}
+    ${report.split ? `Split ${plural(report.split, 'line')} whose parts have different BOM rows.` : ''}
+    ${report.kept ? `${plural(report.kept, 'line', 'lines')} you had edited kept ${report.kept > 1 ? 'their' : 'its'} part type, though the BOM suggests another.` : ''}
+    ${report.unmatchedCount ? `Not on the board: ${esc(report.unmatched)}.` : ''}
+    ${report.notInBomCount ? `Not in the BOM: ${esc(report.notInBom)}.` : ''} ${notes}`);
 });
 
 mountStructure($('#structure'), {

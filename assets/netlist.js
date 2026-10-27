@@ -354,30 +354,39 @@ export function classifyComponent(c) {
   } else if (model === 'capacitor') {
     params.type = null;
     const both = `${text} ${fp}`;
-    const type = firstMatch(both, [
+    // Aluminium polymer and solid capacitors have no model here: leave the type to the user.
+    const polymer = /POLYMER|ALUM(?:INUM)?\s+POLY|POLY\s+ALUM|OS-?CON|POSCAP|SP-?CAP/.test(both);
+    const type = polymer ? null : firstMatch(both, [
       [/TANT|\bTAJ|\bT49\d|\bTPS[A-E]|CASE-?[A-E]\b/, 'tantalum-solid'],
       [/ELEC|ALUM|\bELCO|CPOL|CP-?RADIAL|\bCAPAE|RADIAL.*POL/, 'aluminium-wet'],
       [/\bC0G|\bCOG\b|\bNP0|\bNPO\b/, 'ceramic-1'],
       [/\bX[5-8][RSTP]\b|\bY5V|\bZ5U/, 'ceramic-2'],
     ]);
+    const chipText = CHIP_SIZE.test(fp) ? `the chip footprint “${c.footprint}”` : CHIP_SIZE.test(text) ? `the chip size in “${c.description || c.value}”` : null;
     if (type) {
       params.type = type;
       inferred.type = why(`“${[c.value, c.description, c.footprint].filter(Boolean).join(' ')}”`);
-    } else if (CHIP_SIZE.test(fp)) {
+    } else if (chipText && !polymer) {
       params.type = 'ceramic-2';
-      inferred.type = `assumed class II ceramic from the chip footprint “${c.footprint}”; check the dielectric`;
+      inferred.type = `assumed class II ceramic from ${chipText}; check the dielectric`;
     }
   } else if (model === 'resistor') {
     Object.assign(params, { type: null, power: null, rated: null, elements: 1 });
-    const chip = CHIP_SIZE.exec(fp)?.[1];
+    const chip = CHIP_SIZE.exec(fp)?.[1] ?? CHIP_SIZE.exec(text)?.[1];
     if (chip) {
       params.type = 'smd';
-      inferred.type = why(`the chip footprint “${c.footprint}”`);
+      inferred.type = why(CHIP_SIZE.test(fp) ? `the chip footprint “${c.footprint}”` : `the chip size in “${c.description || c.value}”`);
       params.rated = CHIP_RATING[chip];
       inferred.rated = `typical rating for a ${chip} chip; check the datasheet`;
     } else if (/AXIAL|DIN-?0[2-4]\d{2}|\bR-?PTH/.test(fp)) {
       params.type = 'film-low';
       inferred.type = `assumed low-dissipation film from the footprint “${c.footprint}”`;
+    }
+    // A stated rating, such as "1/10W" or "0.25W", beats the typical one for the chip size.
+    const watts = /(?:^|[^\d.])(\d+)\/(\d+)\s*W\b/.exec(text) ?? /(?:^|[^\d.])(\d+(?:\.\d+)?)\s*(M?)W\b/.exec(text);
+    if (watts) {
+      const w = watts[0].includes('/') ? Number(watts[1]) / Number(watts[2]) : Number(watts[1]) / (watts[2] ? 1000 : 1);
+      if (w > 0) { params.rated = +w.toPrecision(4); inferred.rated = why(`“${c.description || c.value}”`); }
     }
     if (['RN', 'RA', 'RP'].includes(prefix) || /ARRAY|NETWORK|X4\b|X8\b/.test(`${text} ${fp}`)) {
       params.type = 'smd';
@@ -464,19 +473,35 @@ export function expandRefs(text) {
   return out;
 }
 
+const LINE_ORDER = ['ic', 'transistor', 'diode', 'capacitor', 'mil-capacitor', 'resistor', 'mil-resistor', 'inductor', 'mil-inductive', 'mil-opto', 'mil-relay', 'mil-ssr',
+  'mil-switch', 'mil-connector', 'mil-socket', 'mil-crystal', 'mil-fuse', 'mil-lamp', 'mil-pwb', 'fixed'];
+
+// Group classified parts ([{ designator, cls }]) with identical results into lines.
+export function groupLines(classified) {
+  const groups = new Map();
+  for (const { designator, cls } of classified) {
+    const key = JSON.stringify([cls.model, cls.params, cls.inferred, cls.source]);
+    const g = groups.get(key) ?? { ...cls, refs: [] };
+    g.refs.push(designator);
+    groups.set(key, g);
+  }
+  const lines = [...groups.values()].map((g) => ({
+    ref: compressRefs(g.refs), qty: g.refs.length, model: g.model, params: g.params, inferred: g.inferred, source: g.source,
+  }));
+  lines.sort((a, b) => LINE_ORDER.indexOf(a.model) - LINE_ORDER.indexOf(b.model) || a.ref.localeCompare(b.ref, 'en', { numeric: true }));
+  return lines;
+}
+
 // Parse a netlist and return grouped part lines plus a report.
 export function netlistToParts(text) {
   const parsed = parseProtel(text);
-  const groups = new Map();
+  const classified = [];
   const parallel = new Map();
   const skipped = [];
   for (const c of parsed.components) {
     const cls = classifyComponent(c);
     if (cls.skip) { skipped.push(c.designator); continue; }
-    const key = JSON.stringify([cls.model, cls.params, cls.inferred, cls.source]);
-    const g = groups.get(key) ?? { ...cls, refs: [] };
-    g.refs.push(c.designator);
-    groups.set(key, g);
+    classified.push({ designator: c.designator, cls });
     // Parts of the same type connected to exactly the same nets are wired in parallel.
     if (c.nets.length >= 2 && cls.model !== 'fixed' && cls.model !== 'ic') {
       const pkey = JSON.stringify([cls.model, c.nets]);
@@ -485,12 +510,7 @@ export function netlistToParts(text) {
       parallel.set(pkey, pg);
     }
   }
-  const lines = [...groups.values()].map((g) => ({
-    ref: compressRefs(g.refs), qty: g.refs.length, model: g.model, params: g.params, inferred: g.inferred, source: g.source,
-  }));
-  const order = ['ic', 'transistor', 'diode', 'capacitor', 'mil-capacitor', 'resistor', 'mil-resistor', 'inductor', 'mil-inductive', 'mil-opto', 'mil-relay', 'mil-ssr',
-    'mil-switch', 'mil-connector', 'mil-socket', 'mil-crystal', 'mil-fuse', 'mil-lamp', 'mil-pwb', 'fixed'];
-  lines.sort((a, b) => order.indexOf(a.model) - order.indexOf(b.model) || a.ref.localeCompare(b.ref, 'en', { numeric: true }));
+  const lines = groupLines(classified);
   return {
     format: parsed.format,
     components: parsed.components.length,
