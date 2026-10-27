@@ -15,7 +15,7 @@ const OTHER_USES = {
   tiSloa294: ['the IC failure-rate formula (die + package + overstress)', 'the vendor IEC 62380 FIT report rescaling'],
   pmcTantalum: ['the capacitor model structure'],
   thurlbeck: ['the MOS transistor model structure (0.3 eV, 100 °C reference)'],
-  failureModes: ['failure modes shown with each part', 'suggested critical shares for redundant groups'],
+  failureModes: ['failure modes shown with each part', 'suggested critical shares for redundant blocks'],
 };
 
 const link = (key) => {

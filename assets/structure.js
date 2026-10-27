@@ -7,7 +7,9 @@
 // inside it. A share `shortPct` of the failures of the parts in its scope (the
 // parts directly in it and in series blocks inside it) breaks it at once, the
 // rest are tolerated; a redundant block inside counts as one member with its
-// own share. Redundant blocks have no constant failure rate, so the board is
+// own share. Each part fails once: with probability shortPct/100 that failure
+// is critical, otherwise it only takes out its member (a capacitor that has
+// failed open cannot short afterwards). Redundant blocks have no constant failure rate, so the board is
 // evaluated over the mission time T: survival R(T), the mission-average rate
 // −ln R(T)/T, and the mean time to failure ∫R(t)dt. Survival is carried as
 // ln R so deeply nested redundancy does not round to zero. Pure functions.
@@ -47,17 +49,25 @@ export function atMostFailing(p, allowed) {
 }
 
 // Probability that more than `allowed` fail, summed directly so tiny values keep their digits.
+// Capped at 1: when every member has almost surely failed, rounding can push the sum above it.
 function moreThan(p, allowed) {
-  return failureCounts(p).slice(allowed + 1).reduce((s, d) => s + d, 0);
+  return Math.min(1, failureCounts(p).slice(allowed + 1).reduce((s, d) => s + d, 0));
+}
+
+// One part over [0, t] with a critical share c of its failures: ln P(no critical
+// failure), and ln P(still working | no critical failure).
+export function partOdds(lambda, t, c) {
+  const failed = -Math.expm1(-lambda * t);
+  const noCritical = Math.log1p(-c * failed);
+  return { noCritical, working: -lambda * t - noCritical };
 }
 
 // Survival of one flat k-of-n group of parts at time t (hours); rates in FIT.
 export function groupSurvival(fits, need, shortPct, t) {
   const c = shortPct / 100;
-  const perHour = fits.map((f) => f * 1e-9);
-  const critical = c * perHour.reduce((s, l) => s + l, 0);
-  const p = perHour.map((l) => -Math.expm1(-(1 - c) * l * t));
-  return Math.exp(-critical * t) * atMostFailing(p, fits.length - need);
+  const odds = fits.map((f) => partOdds(f * 1e-9, t, c));
+  const p = odds.map((o) => -Math.expm1(o.working));
+  return Math.exp(odds.reduce((s, o) => s + o.noCritical, 0)) * atMostFailing(p, fits.length - need);
 }
 
 // ∫ R(t) dt from 0 to ∞, by Simpson's rule up to where R has decayed.
@@ -272,26 +282,29 @@ export function evaluateStructure(rt, years) {
     if (n.mode === 'kofn' && !p.length) red.add(n.id);
   }
   const lam = (n) => (n.lineId && rt.lines.get(n.lineId).fit != null ? rt.lines.get(n.lineId).fit * 1e-9 : 0);
-  const scopeRate = (id) => rt.nodes.get(id).children.reduce((s, c) => {
-    const k = rt.nodes.get(c);
-    return s + (k.kind === 'leaf' ? lam(k) * leafPieces(rt, k) : red.has(c) ? 0 : scopeRate(c));
+  // ln P(no critical failure) over the parts in a redundant block's scope with share c.
+  const lnNoCritical = (id, t, c) => rt.nodes.get(id).children.reduce((s, cid) => {
+    const k = rt.nodes.get(cid);
+    if (k.kind === 'leaf') return s + leafPieces(rt, k) * partOdds(lam(k), t, c).noCritical;
+    return s + (red.has(cid) ? 0 : lnNoCritical(cid, t, c));
   }, 0);
 
-  // ln R(t) of a node; s scales the constant rates (1 − c inside a redundant block).
-  const lnR = (id, t, s = 1) => {
+  // ln R(t) of a node. Inside a redundant block with share c, the parts in its
+  // scope are taken given that none has failed critically (c = 0 elsewhere).
+  const lnR = (id, t, c = 0) => {
     const n = rt.nodes.get(id);
-    if (n.kind === 'leaf') return -s * lam(n) * leafPieces(rt, n) * t;
-    if (!red.has(id)) return n.children.reduce((sum, c) => sum + lnR(c, t, s), 0);
-    const c = n.shortPct / 100;
+    if (n.kind === 'leaf') return leafPieces(rt, n) * partOdds(lam(n), t, c).working;
+    if (!red.has(id)) return n.children.reduce((sum, k) => sum + lnR(k, t, c), 0);
+    const own = n.shortPct / 100;
     const q = [];
     for (const cid of n.children) {
       const k = rt.nodes.get(cid);
       if (k.kind === 'leaf') {
-        const qi = -Math.expm1(-(1 - c) * lam(k) * t);
+        const qi = -Math.expm1(partOdds(lam(k), t, own).working);
         for (let i = 0; i < leafPieces(rt, k); i++) q.push(qi);
-      } else q.push(-Math.expm1(lnR(cid, t, 1 - c)));
+      } else q.push(-Math.expm1(lnR(cid, t, own)));
     }
-    return -c * scopeRate(id) * t + Math.log1p(-moreThan(q, q.length - n.need));
+    return lnNoCritical(id, t, own) + Math.log1p(-moreThan(q, q.length - n.need));
   };
 
   const guessedLine = (line) => Object.keys(line.comp.inferred ?? {}).length > 0;

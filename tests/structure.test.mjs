@@ -63,9 +63,14 @@ test('nested: two series power paths in a 1-of-2 block', () => {
   const { ev, rt } = evaluate(lines, paths(0));
   assert.equal(members(rt, [...rt.nodes.values()].find((n) => n.name === 'Power').id), 2);
   close(ev.survival(T10), 1 - q * q, 1e-12);
-  // With 20% of failures critical: R = e^(−0.2·2λt) × (1 − q'²), q' = 1 − e^(−0.8λt).
-  const q8 = -Math.expm1(-0.8 * lam * T10);
-  close(evaluate(lines, paths(20)).ev.survival(T10), Math.exp(-0.2 * 2 * lam * T10) * (1 - q8 * q8), 1e-12);
+  // With 20% of each part's failures critical: part j has failed critically by t with
+  // s_j = 0.2(1 − e^(−λ_j t)). Given no critical failure, a path works with
+  // Π a_j / (1 − s_j), a_j = e^(−λ_j t); R = Π(1 − s_j) × (1 − q_path²).
+  const s = (fit) => 0.2 * -Math.expm1(-fit * 1e-9 * T10);
+  const ok = (fit) => Math.exp(-fit * 1e-9 * T10) / (1 - s(fit));
+  const qPath = 1 - ok(12) * ok(1.2);
+  const noCritical = ((1 - s(12)) * (1 - s(1.2))) ** 2;
+  close(evaluate(lines, paths(20)).ev.survival(T10), noCritical * (1 - qPath * qPath), 1e-12);
 });
 
 test('deeply nested redundancy keeps its digits', () => {

@@ -353,6 +353,38 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.ok(csv.some((row) => row.startsWith('"C1–C3 in parallel","Redundant block","2 of 3 must work; 50% of failures break it anyway"')));
   assert.ok(csv.some((row) => row.startsWith('"Board with redundancy, average over 10 years"')));
 
+  // Drag and drop. jsdom has no layout, so the element under the pointer is set by hand.
+  globalThis.CSS ??= { escape: (s) => String(s).replace(/[^\w-]/g, (c) => `\\${c}`) };
+  let under = null;
+  document.elementFromPoint = () => under;
+  const pointer = (el, type, x, y) => el.dispatchEvent(new window.MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 }));
+  click($('#st-t-rest .st-twisty'));
+  const r1Row = () => $$('#st-tree li[role="treeitem"]').find((li) => $('.st-nm b', li)?.textContent === 'R1');
+  // Tree: drag R1 by its handle onto the redundant block.
+  pointer($('.st-handle', r1Row()), 'pointerdown', 0, 0);
+  under = $('.st-nm', capsRow());
+  pointer(window, 'pointermove', 40, 40);
+  assert.equal($('#st-ghost').hidden, false);
+  assert.match($('#st-status').textContent, /Drop into C1–C3 in parallel/);
+  assert.ok($('.st-row', capsRow()).classList.contains('drop'));
+  pointer(window, 'pointerup', 40, 40);
+  assert.equal($('#st-ghost').hidden, true);
+  assert.match($('#st-status').textContent, /Moved 1 item into C1–C3 in parallel/);
+  assert.equal($('.st-badge.kofn', capsRow()).textContent, '2 of 4');
+  // Diagram: drag R1's box out onto the empty board; a part dropped there goes back to "Everything else".
+  const r1Box = $$('#st-vp .st-box').find((g) => g.dataset.id.endsWith('|R1'));
+  assert.ok(r1Box, 'R1 is drawn inside the block');
+  pointer(r1Box, 'pointerdown', 0, 0);
+  under = $('#st-rbd');
+  pointer(window, 'pointermove', -5000, -5000);
+  pointer(window, 'pointerup', -5000, -5000);
+  assert.match($('#st-status').textContent, /Moved 1 item into Board/);
+  assert.equal($('.st-badge.kofn', capsRow()).textContent, '2 of 3');
+  // A short drag is a click: it selects instead of moving.
+  pointer($('.st-handle', capsRow()), 'pointerdown', 0, 0);
+  pointer(window, 'pointerup', 2, 2);
+  assert.equal(capsRow().getAttribute('aria-selected'), 'true');
+
   // Leaving the page saves at once, without waiting for the autosave delay.
   typeInto($('#title'), 'Saved on leave');
   window.dispatchEvent(new window.Event('pagehide'));
