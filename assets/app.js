@@ -1,13 +1,18 @@
 import {
-  MODELS, PENDING_FAMILIES, computeBoard, profileProblems, mtbfHours, reliability, byId, fieldLabel,
+  MODELS, MODEL_GROUPS, PENDING_FAMILIES, computeBoard, profileProblems, mtbfHours, reliability, byId, fieldLabel,
 } from './models.js';
+import { ENVIRONMENTS, TABLES_217F, SOURCES_217F } from './tables217f.js';
 import { MISSION_PROFILES, ALL_TABLES, SOURCES, STATUS } from './tables.js';
 import { netlistToParts, expandRefs } from './netlist.js';
 import { computeStructure } from './structure.js';
 
 const STORAGE_KEY = 'iec62380.board.v1';
 const FORMAT = 'iec62380-board';
-const REF_PREFIX = { ic: 'U', diode: 'D', transistor: 'Q', capacitor: 'C', resistor: 'R', inductor: 'L', fixed: 'X' };
+const REF_PREFIX = {
+  ic: 'U', diode: 'D', transistor: 'Q', capacitor: 'C', resistor: 'R', inductor: 'L', fixed: 'X',
+  'mil-relay': 'K', 'mil-ssr': 'K', 'mil-switch': 'SW', 'mil-connector': 'J', 'mil-socket': 'XU',
+  'mil-pwb': 'PCB', 'mil-crystal': 'Y', 'mil-fuse': 'F', 'mil-lamp': 'DS', 'mil-opto': 'D',
+};
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -40,9 +45,9 @@ function makePart(model, ref, qty = 1, params = {}, extra = {}) {
   return { id: newId(), ref, qty, model, params: { ...clone(MODELS[model].defaults), ...params }, inferred: {}, confirmed: {}, source: null, open: false, ...extra };
 }
 
-function presetProfile(id) {
+function presetProfile(id, env217f = 'GB') {
   const row = byId(MISSION_PROFILES, id);
-  return { preset: row.id, phases: clone(row.phases), tauOff: null };
+  return { preset: row.id, phases: clone(row.phases), tauOff: null, env217f };
 }
 
 function emptyBoard() {
@@ -115,7 +120,10 @@ function sanitize(raw) {
       format: FORMAT, version: 1,
       title: str(raw.title) || 'Untitled board',
       years: isNum(raw.years) ? raw.years : 10,
-      profile: { preset, phases, tauOff: isNum(raw.profile.tauOff) ? raw.profile.tauOff : null },
+      profile: {
+        preset, phases, tauOff: isNum(raw.profile.tauOff) ? raw.profile.tauOff : null,
+        env217f: ENVIRONMENTS.some((e) => e.id === raw.profile.env217f) ? raw.profile.env217f : 'GB',
+      },
       parts,
       groups,
     },
@@ -159,6 +167,7 @@ const findPart = (id) => state.parts.find((p) => p.id === id);
 const guessCount = (part) => Object.keys(part.inferred ?? {}).length;
 const canSplit = (part) => part.qty > 1 && expandRefs(part.ref).length === part.qty;
 const findGroup = (id) => state.groups.find((g) => g.id === id);
+const clauseOf = (m) => (m.group === 'MIL-HDBK-217F' ? m.clause : `Clause ${m.clause}`);
 const newGroup = (extra = {}) => ({ id: newId(), refs: '', nets: [], mode: 'series', need: null, shortPct: null, proposed: null, ...extra });
 
 // ---------------------------------------------------------------------------
@@ -241,7 +250,7 @@ function partHTML(part) {
         ${adv ? `<details class="advanced" data-id="${part.id}" data-open-key="advOpen"${part.advOpen ? ' open' : ''}><summary>Override table values</summary><div class="fields">${adv}</div></details>` : ''}
         <ul class="part-errors" data-out="errors"></ul>
         <details class="trace" data-id="${part.id}" data-open-key="traceOpen"${part.traceOpen ? ' open' : ''}><summary>Show the calculation</summary><div class="trace-body" data-out="trace"></div></details>
-        <p class="status-line">Clause ${esc(model.clause)}. ${esc(model.status)}</p>
+        <p class="status-line">${esc(clauseOf(model))}. ${esc(model.status)}</p>
       </div>
     </article>`;
 }
@@ -254,7 +263,7 @@ function traceHTML(r, phases) {
     : '';
   const name = (i) => esc(phases[i]?.name || `Phase ${i + 1}`);
   const op = r.operating.length
-    ? `<div class="table-scroll"><table class="trace-table"><caption>Working phases</caption><thead><tr><th>Phase</th><th class="num">${esc(r.tempLabel)} °C</th><th class="num">π_t</th><th class="num">τ</th></tr></thead><tbody>${
+    ? `<div class="table-scroll"><table class="trace-table"><caption>Working phases</caption><thead><tr><th>Phase</th><th class="num">${esc(r.tempLabel)} °C</th><th class="num">${esc(r.operatingLabel ?? 'π_t')}</th><th class="num">τ</th></tr></thead><tbody>${
       r.operating.map((o) => `<tr><td>${name(o.phase)}</td><td class="num">${fmt(o.t)}</td><td class="num">${fmt(o.piT)}</td><td class="num">${fmt(o.tau)}</td></tr>`).join('')}</tbody></table></div>`
     : '';
   const cyc = r.cycling.length
@@ -287,10 +296,12 @@ function renderPhases() {
   }).join('');
   $('#tau-off').value = state.profile.tauOff ?? '';
   $('#preset').value = state.profile.preset ?? '';
+  $('#env217f').innerHTML = optionsHTML(ENVIRONMENTS.map((e) => ({ value: e.id, label: e.label })), state.profile.env217f ?? 'GB');
 }
 
 function renderAddModel() {
-  $('#add-model').innerHTML = optionsHTML(Object.entries(MODELS).map(([id, m]) => ({ value: id, label: m.label })), 'ic');
+  const entries = Object.entries(MODELS).sort(([, a], [, b]) => MODEL_GROUPS.indexOf(a.group) - MODEL_GROUPS.indexOf(b.group));
+  $('#add-model').innerHTML = optionsHTML(entries.map(([id, m]) => ({ value: id, label: m.label.replace(/ \(MIL-HDBK-217F\)$/, ''), group: m.group })), 'ic');
 }
 
 function renderParts() {
@@ -348,18 +359,18 @@ function rerenderGroup(g, focusKey) {
 
 function renderSources() {
   const link = (key) => {
-    const s = SOURCES[key];
+    const s = SOURCES[key] ?? SOURCES_217F[key];
     return s.url ? `<a href="${esc(s.url)}" rel="noopener">${esc(s.label)}</a>` : esc(s.label);
   };
-  const rows = ALL_TABLES.map((t) => `<tr>
-      <td>${esc(t.title)}<br><span class="unit">${t.status === 'excerpt' ? `IEC TR 62380 ${esc(t.ref)}` : `${esc(t.ref)} of the standard, according to the source`}</span></td>
+  const rows = [...ALL_TABLES, ...TABLES_217F].map((t) => `<tr>
+      <td>${esc(t.title)}<br><span class="unit">${t.ref.startsWith('MIL-HDBK') ? esc(t.ref) : t.status === 'excerpt' ? `IEC TR 62380 ${esc(t.ref)}` : `${esc(t.ref)} of the standard, according to the source`}</span></td>
       <td><span class="badge ${t.status === 'single' ? 'no' : 'ok'}">${esc(STATUS[t.status])}</span></td>
       <td>${t.sources.map(link).join('<br>')}${t.note ? `<p class="help">${esc(t.note)}</p>` : ''}</td>
     </tr>`).join('');
-  const models = Object.values(MODELS).map((m) => `<li><strong>${esc(m.label)}</strong> (clause ${esc(m.clause)}): ${esc(m.status)}</li>`).join('');
+  const models = Object.values(MODELS).map((m) => `<li><strong>${esc(m.label)}</strong> (${esc(clauseOf(m))}): ${esc(m.status)}</li>`).join('');
   const pending = PENDING_FAMILIES.map((f) => `<li>${esc(f)}</li>`).join('');
   $('#source-list').innerHTML = `
-    <p class="hint">None of the values were taken from the standard. The mission profiles are published excerpts of it: the free preview and TI's application note. Everything else was copied from one open-source project, Kicad-Space-Reliability (MIT licence, see <a href="THIRD_PARTY_NOTICES.md">third-party notices</a>), and has not been checked against the standard.</p>
+    <p class="hint">None of the IEC TR 62380 values were taken from the standard. Its mission profiles are published excerpts: the free preview and TI's application note. Its other tables were copied from one open-source project, Kicad-Space-Reliability (MIT licence, see <a href="THIRD_PARTY_NOTICES.md">third-party notices</a>), and have not been checked against the standard. The MIL-HDBK-217F tables come from the public-domain handbook itself, read from its scanned pages and cross-checked as each table says.</p>
     <div class="table-scroll"><table class="source-table"><thead><tr><th>Table</th><th>Status</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table></div>
     <h3>Models</h3><ul>${models}</ul>
     <h3>Not modelled yet</h3>
@@ -632,9 +643,11 @@ document.addEventListener('change', (e) => {
     return;
   }
   if (!bind) return;
-  if (bind === 'preset') {
+  if (bind === 'env217f') {
+    state.profile.env217f = el.value;
+  } else if (bind === 'preset') {
     if (!el.value) return;
-    state.profile = presetProfile(el.value);
+    state.profile = presetProfile(el.value, state.profile.env217f);
     renderPhases();
   } else if (bind === 'phase' && el.type === 'checkbox') {
     state.profile.phases[Number(el.dataset.i)].addRise = el.checked;

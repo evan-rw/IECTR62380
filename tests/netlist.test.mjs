@@ -117,8 +117,9 @@ test('netlist parts: what is guessed, what is missing', () => {
   assert.deepEqual([byRef(parts, 'D3').params.type, byRef(parts, 'D3').params.package], ['tvs-lp', 'smb']);
 
   const led = byRef(parts, 'D2');
-  assert.equal(led.model, 'fixed');
-  assert.match(led.params.note, /^LED/);
+  assert.equal(led.model, 'mil-opto');
+  assert.equal(led.params.type, 'led');
+  assert.ok(led.inferred.type);
 
   const caps = byRef(parts, 'C1–C3, C5');
   assert.equal(caps.qty, 4);
@@ -134,8 +135,12 @@ test('netlist parts: what is guessed, what is missing', () => {
   assert.deepEqual([rn.params.type, rn.params.elements], ['smd', null]);
 
   assert.equal(byRef(parts, 'L1').model, 'inductor');
-  assert.match(byRef(parts, 'J1').params.note, /^Connector/);
-  assert.match(byRef(parts, 'Y1').params.note, /^Crystal/);
+  const j1 = byRef(parts, 'J1');
+  assert.deepEqual([j1.model, j1.params.type], ['mil-connector', 'rectangular']);
+  assert.match(j1.inferred.type, /PinHeader/);
+  const y1 = byRef(parts, 'Y1');
+  assert.deepEqual([y1.model, y1.params.freq], ['mil-crystal', 8]);
+  assert.match(y1.inferred.freq, /8MHz/);
 });
 
 test('imported parts compute once their missing values are filled', () => {
@@ -173,4 +178,20 @@ test('footprint library prefixes are ignored', () => {
   assert.equal(c('Package_SO:SOIC-14_3.9x8.7mm_P1.27mm').pins, 14);
   const r = classifyComponent({ designator: 'R9', footprint: 'Resistor_SMD:R_0402_1005Metric', value: '1k', description: '' }).params;
   assert.equal(r.rated, 0.063);
+});
+
+test('relays, fuses, switches and optocouplers map to the MIL-HDBK-217F models', () => {
+  const c = (designator, value, footprint = '') => classifyComponent({ designator, footprint, value, description: '' });
+  assert.equal(c('K1', 'G5V-1').model, 'mil-relay');
+  assert.deepEqual(c('F1', '500mA').params, {});
+  assert.equal(c('F1', '500mA').model, 'mil-fuse');
+  assert.equal(c('SW1', 'SW_Push', 'SW_PUSH_6mm').params.type, 'pushbutton');
+  assert.equal(c('SW2', 'SW_DIP_x04', 'SW_DIP_SPSTx04').params.type, 'dip');
+  assert.equal(c('SW3', 'SW_SPDT', 'SW_Slide').params.type, null, 'slide switches have no 217F category');
+  assert.equal(c('U9', 'PC817').model, 'ic', 'an optocoupler under U stays an IC');
+  assert.equal(c('ISO1', 'PC817').params.type, 'iso-transistor');
+  assert.equal(c('J2', 'SMA', 'SMA_Amphenol_132134').params.type, 'rf-coax');
+  assert.equal(c('J3', 'RJ45', 'RJ45_Amphenol').params.type, 'telephone');
+  assert.equal(c('Y2', '32.768kHz').params.freq, 0.032768);
+  assert.equal(c('X1', '16MHz').model, 'fixed', 'X is ambiguous between connector and crystal');
 });

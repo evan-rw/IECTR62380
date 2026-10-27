@@ -8,6 +8,7 @@ import {
   EA, IC_FAMILIES, IC_PACKAGES, CTE_SUBSTRATES, CTE_PACKAGES, EOS,
   DISCRETE_PACKAGES, DIODES, TRANSISTORS, CAPACITORS, RESISTORS, INDUCTORS,
 } from './tables.js';
+import { MODELS_217F } from './models217f.js';
 
 // Coefficient of the solder-joint / package thermal-cycling term.
 export const PACKAGE_K = 2.75e-3;
@@ -59,7 +60,8 @@ export function normaliseProfile(profile) {
   }));
   const tauOn = phases.reduce((s, p) => s + p.tau, 0);
   const tauOff = isNum(profile.tauOff) ? profile.tauOff : Math.max(0, 1 - tauOn);
-  return { phases, tauOn, tauOff };
+  // Operating environment for the MIL-HDBK-217F models (ground, benign by default).
+  return { phases, tauOn, tauOff, env217f: profile.env217f ?? 'GB' };
 }
 
 export function profileProblems(profile) {
@@ -469,20 +471,23 @@ export const MODELS = {
   },
 };
 
-// Families in the standard that have no model here yet.
+// The MIL-HDBK-217F models cover relays, switches, connectors, sockets,
+// plated-through-hole boards, crystals, fuses, lamps and optoelectronics.
+for (const m of Object.values(MODELS)) m.group ??= 'IEC TR 62380 approach';
+MODELS.fixed.group = 'Other';
+Object.assign(MODELS, MODELS_217F);
+export const MODEL_GROUPS = ['IEC TR 62380 approach', 'MIL-HDBK-217F', 'Other'];
+
+// Families with no model here yet, under either method.
 export const PENDING_FAMILIES = [
-  'Equipped printed circuit boards and hybrid circuits (6)',
-  'Optocouplers (8.6)',
-  'LEDs, laser diodes, photodiodes, passive optics (9)',
-  'Film and paper capacitors, aluminium solid and polymer capacitors, variable ceramic capacitors, NTC thermistors (10.1, 10.6–10.9)',
-  'Carbon composition, high-dissipation film and wirewound resistors, cermet potentiometers (11.2–11.5, 11.7)',
-  'Microwave passives, piezoelectric parts, SAW filters (13)',
-  'Relays (14)',
-  'Switches and keyboards (15)',
-  'Connectors (16)',
-  'Displays and solid-state lamps (17)',
-  'PTC thermistors, varistors, fuses, arrestors (18)',
-  'Batteries, fans, thermoelectric coolers, disk drives, converters (19)',
+  'Hybrid circuits, and surface-mount boards (62380 clause 6; 217F section 16.2)',
+  'Laser diodes, passive optics (62380 clause 9)',
+  'Film and paper capacitors, aluminium solid and polymer capacitors, variable ceramic capacitors, NTC thermistors (62380 clauses 10.1, 10.6–10.9)',
+  'Carbon composition, high-dissipation film and wirewound resistors, cermet potentiometers (62380 clauses 11.2–11.5, 11.7)',
+  'Microwave passives, SAW filters (62380 clause 13)',
+  'Keyboards, displays (62380 clauses 15, 17)',
+  'PTC thermistors, varistors, arrestors (62380 clause 18)',
+  'Batteries, fans, thermoelectric coolers, disk drives, converters (62380 clause 19)',
 ];
 
 // ---------------------------------------------------------------------------

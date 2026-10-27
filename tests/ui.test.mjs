@@ -101,7 +101,7 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.doesNotMatch(total(), /≥/);
 
   // New parts start with their operating values missing, then compute once filled.
-  for (const opt of [...$('#add-model').options]) {
+  for (const opt of [...$('#add-model').options].filter((o) => o.parentElement.label !== 'MIL-HDBK-217F')) {
     $('#add-model').value = opt.value;
     click($('[data-act="add-part"]'));
   }
@@ -115,6 +115,33 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   fill(cardFor('L1'), { l0: 1, ploss: 0.1, area: 0.04 });
   fill(cardFor('X1'), { fit: 25 });
   assert.equal(warn(), '');
+
+  // MIL-HDBK-217F parts: grouped in the list, scaled by the board's environment.
+  assert.deepEqual([...$('#add-model').querySelectorAll('optgroup')].map((g) => g.label), ['IEC TR 62380 approach', 'MIL-HDBK-217F', 'Other']);
+  assert.equal($('#env217f').options.length, 14);
+  assert.equal($('#env217f').value, 'GB');
+  const before217f = boardTotal();
+  $('#add-model').value = 'mil-fuse';
+  click($('[data-act="add-part"]'));
+  const fuse = cardFor('F1');
+  assert.match($('.part-kind .model', fuse).textContent, /Fuse \(MIL-HDBK-217F\)/);
+  assert.equal($('[data-out="fit"] .each', fuse).textContent, '10 FIT', 'λ_b 0.010 per 10⁶ h × π_E 1 (ground, benign)');
+  choose($('#env217f'), 'GF');
+  assert.equal($('[data-out="fit"] .each', cardFor('F1')).textContent, '20 FIT');
+  $('#add-model').value = 'mil-crystal';
+  click($('[data-act="add-part"]'));
+  assert.deepEqual($$('.field.missing', cardFor('Y1')).map((f) => f.dataset.field), ['freq']);
+  typeInto($('[data-key="freq"]', cardFor('Y1')), 10);
+  assert.match($('[data-out="trace"]', cardFor('Y1')).textContent, /0\.013·f\^0\.23/);
+  $('#add-model').value = 'mil-relay';
+  click($('[data-act="add-part"]'));
+  assert.ok(cardFor('K1'), 'relays are numbered K1, K2…');
+  choose($('#preset'), 'leo-permanent');
+  assert.equal($('#env217f').value, 'GF', 'loading a preset keeps the environment');
+  for (const ref of ['F1', 'Y1', 'K1']) click($('[data-act="del"]', cardFor(ref)));
+  choose($('#env217f'), 'GB');
+  choose($('#preset'), 'geo-permanent');
+  assert.equal(boardTotal(), before217f);
 
   // Quantity, duplicate, remove, collapse.
   const fixed = cardFor('X1');
@@ -163,7 +190,7 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   // Only the capacitors are complete: 3 × 0.15 × (π_t(26 °C)·0.5 + 3.3e-3 × 36^0.76 × 15^0.68).
   assert.equal(boardTotal(), 0.356);
   assert.equal(total(), '≥ 0.36 FIT');
-  assert.match(warn(), /3 part lines need more input.*3 lines use guessed values/);
+  assert.match(warn(), /3 part lines need more input.*4 lines use guessed values/, "U1, C1–C3, R1 and the connector type of J1");
 
   const mcu = cardFor('U1');
   assert.ok(mcu.classList.contains('needs-input') && mcu.classList.contains('has-guesses'));
@@ -173,7 +200,8 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.deepEqual($$('.field.inferred', mcu).map((f) => f.dataset.field), ['family', 'package']);
   assert.match($('[data-guess-for="package"]', mcu).textContent, /from footprint “LQFP-48_7x7mm_P0.5mm”/);
   assert.match($('.source-line', cardFor('R1')).textContent, /Value: 10µ/, 'Windows-1252 µ decoded');
-  assert.match($('[data-out="desc"]', cardFor('J1')).textContent, /^Connector \(clause 16\)/);
+  assert.equal($('[data-out="desc"]', cardFor('J1')).textContent, 'Rectangular connector');
+  assert.deepEqual($$('.field.missing', cardFor('J1')).map((f) => f.dataset.field), ['current', 'cycles']);
 
   // The attention filter hides parts with nothing to do.
   const onlyAttention = $('#attention-only');
@@ -277,7 +305,7 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.match(csv[0], /^"Ref","Part type"/);
   assert.equal(csv.length, $$('.part').length + 4, 'header, part lines, board, the group, board with redundancy');
   assert.match(csv[1], /^"'=HYPERLINK\(""x""\)"/);
-  assert.ok(csv.some((row) => row.includes('Missing: Failure rate λ.')), 'missing values listed');
+  assert.ok(csv.some((row) => row.includes('Missing: Current per contact, Mating cycles.')), 'missing values listed');
   assert.ok(csv.some((row) => row.startsWith('"Group C1–C3","Redundant group","2 of 3 must work; 50% of failures break it anyway"')));
   assert.ok(csv.some((row) => row.startsWith('"Board with redundancy, average over 10 years"')));
 

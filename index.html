@@ -13,14 +13,14 @@
   <header class="site-header">
     <div class="wrap">
       <h1>IEC TR 62380 calculator</h1>
-      <p class="lede">Estimate the failure rate of an electronic board from its parts list and mission profile, following the IEC TR 62380:2004 approach as described in public sources.</p>
+      <p class="lede">Estimate the failure rate of an electronic board from its parts list and mission profile, following the IEC TR 62380:2004 approach as described in public sources, with MIL-HDBK-217F models for the parts it does not cover.</p>
     </div>
   </header>
 
   <main class="wrap">
     <aside class="notice" role="note">
-      <strong>The coefficients are not taken from the standard.</strong>
-      Most were copied from one open-source project and have not been checked against IEC TR 62380, so treat results as rough estimates. They are not suitable as evidence for an ISO 26262 or IEC 61508 safety case. Every table value can be overridden per part. <a href="#sources">See where each table came from.</a>
+      <strong>The IEC TR 62380 coefficients are not taken from the standard.</strong>
+      Most were copied from one open-source project and have not been checked against IEC TR 62380. Parts marked MIL-HDBK-217F use that public-domain handbook, a different and older method. Treat results as rough estimates: they are not suitable as evidence for an ISO 26262 or IEC 61508 safety case. Every table value can be overridden per part. <a href="#sources">See where each table came from.</a>
     </aside>
 
     <section class="panel" aria-labelledby="board-heading">
@@ -76,6 +76,10 @@
       <div class="profile-foot">
         <button type="button" data-act="add-phase">Add phase</button>
         <div id="tau-summary" class="tau-summary"></div>
+        <div class="field inline">
+          <label for="env217f">Environment for MIL-HDBK-217F parts</label>
+          <select id="env217f" data-bind="env217f"></select>
+        </div>
         <div class="field inline narrow">
           <label for="tau-off">τ<sub>off</sub> override</label>
           <input id="tau-off" type="number" min="0" step="any" inputmode="decimal" placeholder="auto" data-bind="tauOff">

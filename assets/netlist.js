@@ -95,6 +95,13 @@ const PREFIX_MODEL = {
   C: 'capacitor', CE: 'capacitor', CT: 'capacitor',
   R: 'resistor', RN: 'resistor', RA: 'resistor', RP: 'resistor',
   L: 'inductor', FB: 'inductor', T: 'inductor',
+  // MIL-HDBK-217F models
+  K: 'mil-relay', RLY: 'mil-relay', RL: 'mil-relay',
+  J: 'mil-connector', P: 'mil-connector', CN: 'mil-connector', CON: 'mil-connector',
+  Y: 'mil-crystal', XTAL: 'mil-crystal',
+  F: 'mil-fuse', FU: 'mil-fuse',
+  SW: 'mil-switch', S: 'mil-switch',
+  LED: 'mil-opto', OK: 'mil-opto', OC: 'mil-opto', ISO: 'mil-opto',
 };
 
 // Parts with no failure rate of their own.
@@ -102,17 +109,12 @@ const MECHANICAL = new Set(['TP', 'MH', 'H', 'FID', 'FD', 'MTG', 'HOLE', 'LOGO',
 
 // Families the calculator does not model yet, for the note on an "Other" part.
 const OTHER_FAMILY = {
-  J: 'Connector (clause 16)', P: 'Connector (clause 16)', CN: 'Connector (clause 16)', CON: 'Connector (clause 16)',
-  X: 'Connector or crystal (clause 16 or 13)', Y: 'Crystal or resonator (clause 13)', XTAL: 'Crystal or resonator (clause 13)',
-  F: 'Fuse (clause 18)', FU: 'Fuse (clause 18)',
-  K: 'Relay (clause 14)', RLY: 'Relay (clause 14)', RL: 'Relay (clause 14)',
-  SW: 'Switch (clause 15)', S: 'Switch (clause 15)',
-  BT: 'Battery (clause 19)', B: 'Battery (clause 19)',
-  LED: 'LED (clause 9)', DS: 'LED or display (clauses 9, 17)',
-  RV: 'Varistor or potentiometer (clauses 18, 11)', VR: 'Potentiometer or regulator',
-  RT: 'Thermistor (clauses 10, 18)', TH: 'Thermistor (clauses 10, 18)',
-  OK: 'Optocoupler (clause 8.6)', OC: 'Optocoupler (clause 8.6)', ISO: 'Optocoupler (clause 8.6)',
-  M: 'Motor or fan (clause 19)', FAN: 'Fan (clause 19)', FL: 'Filter',
+  X: 'Connector or crystal: choose Connector or Quartz crystal instead if you know which',
+  BT: 'Battery (62380 clause 19)', B: 'Battery (62380 clause 19)',
+  DS: 'LED or display (62380 clauses 9, 17)',
+  RV: 'Varistor or potentiometer (62380 clauses 18, 11)', VR: 'Potentiometer or regulator',
+  RT: 'Thermistor (62380 clauses 10, 18)', TH: 'Thermistor (62380 clauses 10, 18)',
+  M: 'Motor or fan (62380 clause 19)', FAN: 'Fan (62380 clause 19)', FL: 'Filter',
 };
 
 const prefixOf = (designator) => (/^[A-Za-z_]+/.exec(designator)?.[0] ?? '').toUpperCase();
@@ -248,6 +250,29 @@ const TRANSISTOR_RULES = [
   [/\bBJT\b|\bNPN\b|\bPNP\b|\b2N(?:3904|3906|2222|2907|4401|4403)|\bBC\d{3}|\bMMBT|\bPMBT|\bBC[PX]\d|\bBF[RS]\d|\bMJD|\bTIP\d|\bPBSS|\bZXT/, 'bip'],
 ];
 
+const CONNECTOR_RULES = [
+  [/\bSMA\b|\bBNC\b|U-?FL|\bMMCX|\bMCX\b|\bSMB-?CONN|COAX/, 'rf-coax'],
+  [/CARD-?EDGE|\bPCIE|\bM\.2\b/, 'card-edge'],
+  [/\bRJ-?(?:11|12|45)\b|MODULAR/, 'telephone'],
+  [/PIN-?HEADER|\bHEADER|\bIDC\b|\bJST|\bMOLEX|\bUSB|\bHDMI|D-?SUB|\bDB-?\d|CONN-\d|\bFFC|\bFPC/, 'rectangular'],
+  [/\bM8\b|\bM12\b|CIRCULAR|\bDIN-?\d/, 'circular'],
+];
+
+const SWITCH_RULES = [
+  [/PUSH|TACT|BUTTON|\bSKQG|\bTL\d{4}/, 'pushbutton'],
+  [/DIP-?SW|SW-?DIP/, 'dip'],
+  [/TOGGLE/, 'toggle'],
+  [/ROCKER/, 'rocker'],
+  [/\bREED/, 'reed'],
+  [/THUMB/, 'thumbwheel'],
+  [/ROTARY/, 'rotary'],
+];
+
+const OPTO_RULES = [
+  [/\bPC8\d\d|\bLTV|\bEL8\d\d|\b4N\d\d|\bCNY1\d|\bTLP\d|\bH11A|\bSFH6/, 'iso-transistor'],
+  [/\b6N13[89]|\bH11B|\b4N3[23]/, 'iso-darlington'],
+];
+
 const POWER_PACKAGES = new Set(['to220', 'to247', 'to218', 'd2pak', 'dpak', 'isotop', 'sot32']);
 
 // Turn one netlist component into { model, params, inferred, source, note }
@@ -260,11 +285,8 @@ export function classifyComponent(c) {
   if (MECHANICAL.has(prefix)) return { skip: 'mechanical' };
 
   let model = PREFIX_MODEL[prefix] ?? 'fixed';
-  let family = OTHER_FAMILY[prefix];
-  if (model === 'diode' && firstMatch(text, DIODE_RULES) === 'led') {
-    model = 'fixed';
-    family = OTHER_FAMILY.LED;
-  }
+  const family = OTHER_FAMILY[prefix];
+  if (model === 'diode' && firstMatch(text, DIODE_RULES) === 'led') model = 'mil-opto';
   const params = {};
   let inferred = {};
   const why = (what) => `from ${what}`;
@@ -329,6 +351,29 @@ export function classifyComponent(c) {
     }
   } else if (model === 'inductor') {
     Object.assign(params, { l0: null, ploss: null, area: null });
+  } else if (model === 'mil-relay') {
+    Object.assign(params, { application: null, stress: null, cycles: null });
+  } else if (model === 'mil-connector') {
+    params.type = null;
+    const type = firstMatch(`${text} ${fp}`, CONNECTOR_RULES);
+    if (type) { params.type = type; inferred.type = why(`“${[c.value, c.footprint].filter(Boolean).join(', ')}”`); }
+  } else if (model === 'mil-crystal') {
+    params.freq = null;
+    const m = /(\d+(?:\.\d+)?)\s*(MHZ|KHZ|M\b|K\b)/.exec(norm(c.value).replace(/-/g, ' '));
+    if (m) {
+      params.freq = Number(m[1]) / (m[2].startsWith('K') ? 1000 : 1);
+      inferred.freq = why(`the value “${c.value}”`);
+    }
+  } else if (model === 'mil-switch') {
+    Object.assign(params, { type: null, stress: null });
+    const type = firstMatch(`${text} ${fp}`, SWITCH_RULES);
+    if (type) { params.type = type; inferred.type = why(`“${[c.value, c.footprint].filter(Boolean).join(', ')}”`); }
+  } else if (model === 'mil-opto') {
+    Object.assign(params, { type: null, power: null, rja: null });
+    const type = prefix === 'LED' || /\bLED\b/.test(text) ? 'led' : firstMatch(text, OPTO_RULES);
+    if (type) { params.type = type; inferred.type = why(`“${c.value || c.designator}”`); }
+  } else if (model === 'mil-fuse') {
+    // No inputs beyond the board's environment.
   } else {
     params.fit = null;
     params.note = `${family ?? 'Part not modelled yet'}: ${[c.value, c.footprint].filter(Boolean).join(', ') || c.designator}`;
@@ -403,7 +448,8 @@ export function netlistToParts(text) {
   const lines = [...groups.values()].map((g) => ({
     ref: compressRefs(g.refs), qty: g.refs.length, model: g.model, params: g.params, inferred: g.inferred, source: g.source,
   }));
-  const order = ['ic', 'transistor', 'diode', 'capacitor', 'resistor', 'inductor', 'fixed'];
+  const order = ['ic', 'transistor', 'diode', 'capacitor', 'resistor', 'inductor', 'mil-opto', 'mil-relay', 'mil-ssr',
+    'mil-switch', 'mil-connector', 'mil-socket', 'mil-crystal', 'mil-fuse', 'mil-lamp', 'mil-pwb', 'fixed'];
   lines.sort((a, b) => order.indexOf(a.model) - order.indexOf(b.model) || a.ref.localeCompare(b.ref, 'en', { numeric: true }));
   return {
     format: parsed.format,

@@ -91,6 +91,16 @@ const COMPLETE = {
   resistor: { power: 0.01, rated: 0.1 },
   inductor: { l0: 1, ploss: 0.1, area: 0.04 },
   fixed: { fit: 5 },
+  'mil-relay': { application: 'f6', stress: 0.5, cycles: 5 },
+  'mil-ssr': {},
+  'mil-switch': { type: 'toggle', stress: 0.3 },
+  'mil-connector': { type: 'rectangular', current: 1, cycles: 0 },
+  'mil-socket': { type: 'dip', pins: 16 },
+  'mil-pwb': { n1: 100, planes: 4 },
+  'mil-crystal': { freq: 8 },
+  'mil-fuse': {},
+  'mil-lamp': { voltage: 5, utilization: 0.5, application: 'dc' },
+  'mil-opto': { type: 'led', power: 0.02, rja: 500 },
 };
 
 test('every model gives a finite, non-negative rate for every preset', () => {
