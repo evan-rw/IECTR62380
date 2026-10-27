@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { FAILURE_MODES, deviceTypeFor, failureModesFor, suggestedShortShare } from '../assets/failuremodes.js';
 import { MODELS } from '../assets/models.js';
 import { IC_FAMILIES, DIODES, TRANSISTORS, CAPACITORS, RESISTORS } from '../assets/tables.js';
-import { SWITCHES, OPTOELECTRONICS, CAPACITORS_217F, RESISTORS_217F } from '../assets/tables217f.js';
+import { SWITCHES, OPTOELECTRONICS, CAPACITORS_217F, RESISTORS_217F, INDUCTIVE_217F } from '../assets/tables217f.js';
 
 test('every device\'s mode probabilities sum to 1', () => {
   assert.equal(FAILURE_MODES.size, 88);
@@ -33,7 +33,8 @@ test('every part type maps to a device row that exists', () => {
     ...OPTOELECTRONICS.types.map((r) => ['mil-opto', { type: r.id }]),
     ...CAPACITORS_217F.styles.map((r) => ['mil-capacitor', { style: r.id }]),
     ...RESISTORS_217F.styles.map((r) => ['mil-resistor', { style: r.id }]),
-    ...Object.keys(MODELS).filter((m) => !['ic', 'diode', 'transistor', 'capacitor', 'resistor', 'mil-switch', 'mil-opto', 'mil-capacitor', 'mil-resistor'].includes(m)).map((m) => [m, {}]),
+    ...INDUCTIVE_217F.kinds.map((r) => ['mil-inductive', { kind: r.id }]),
+    ...Object.keys(MODELS).filter((m) => !['ic', 'diode', 'transistor', 'capacitor', 'resistor', 'mil-switch', 'mil-opto', 'mil-capacitor', 'mil-resistor', 'mil-inductive'].includes(m)).map((m) => [m, {}]),
   ];
   for (const [model, p] of cases) {
     const device = deviceTypeFor(model, p);
@@ -50,6 +51,8 @@ test('every part type maps to a device row that exists', () => {
   assert.equal(deviceTypeFor('mil-resistor', { style: 'RW' }), 'Resistor, Wirewound');
   assert.equal(deviceTypeFor('mil-resistor', { style: 'RJ' }), 'Resistor, Variable');
   assert.equal(deviceTypeFor('mil-resistor', { style: 'RTH' }), null, 'the table has no thermistor row');
+  assert.equal(deviceTypeFor('mil-inductive', { kind: 'flyback' }), 'Transformer');
+  assert.equal(deviceTypeFor('mil-inductive', { kind: 'coil-fixed' }), 'Coil');
   assert.equal(deviceTypeFor('fixed', {}), null);
 });
 

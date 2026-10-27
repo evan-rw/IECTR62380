@@ -111,4 +111,9 @@ test('new parts of every 217F type start with their unknowns missing', () => {
   const shown = (style) => MODELS['mil-resistor'].fields.filter((f) => !f.show || f.show({ style })).map((f) => f.key);
   assert.deepEqual(shown('RD'), ['style', 'power', 'rated', 'quality']);
   assert.deepEqual(shown('RTH'), ['style', 'power', 'quality']);
+  assert.deepEqual(missing('mil-inductive'), ['kind', 'dT']);
+  const ind = (riseMethod) => computeComponent({ model: 'mil-inductive', qty: 1, params: { kind: 'power', riseMethod } }, profile()).missing;
+  assert.deepEqual(ind('mil39010-15'), []);
+  assert.deepEqual(ind('loss-area'), ['loss', 'area']);
+  assert.deepEqual(ind('input-weight'), ['input', 'weight']);
 });

@@ -312,6 +312,8 @@ export function classifyComponent(c) {
   else if (['RV', 'VR', 'POT'].includes(prefix) && /POT|TRIM|\bR-?POT|CERMET/.test(`${prefix} ${text} ${fp}`)) resStyle = 'RJ';
   else if (['RT', 'TH', 'NTC', 'PTC'].includes(prefix) && !/FUSE|POLY/.test(text)) resStyle = 'RTH';
   if (resStyle) model = 'mil-resistor';
+  // The IEC TR 62380 inductor model here has no base rates; the 217F one does.
+  if (model === 'inductor') model = 'mil-inductive';
   const params = {};
   let inferred = {};
   const why = (what) => `from ${what}`;
@@ -382,8 +384,13 @@ export function classifyComponent(c) {
       inferred.type = 'resistor array';
       params.elements = null;
     }
-  } else if (model === 'inductor') {
-    Object.assign(params, { l0: null, ploss: null, area: null });
+  } else if (model === 'mil-inductive') {
+    // Coils and beads are fixed inductors or chokes; a transformer's type cannot be told from the netlist.
+    Object.assign(params, { kind: null, dT: null });
+    if (prefix !== 'T') {
+      params.kind = 'coil-fixed';
+      inferred.kind = prefix === 'FB' ? 'a ferrite bead, taken as a fixed choke' : why(`the designator ${c.designator}`);
+    }
   } else if (model === 'mil-relay') {
     Object.assign(params, { application: null, stress: null, cycles: null });
   } else if (model === 'mil-connector') {
@@ -481,7 +488,7 @@ export function netlistToParts(text) {
   const lines = [...groups.values()].map((g) => ({
     ref: compressRefs(g.refs), qty: g.refs.length, model: g.model, params: g.params, inferred: g.inferred, source: g.source,
   }));
-  const order = ['ic', 'transistor', 'diode', 'capacitor', 'mil-capacitor', 'resistor', 'mil-resistor', 'inductor', 'mil-opto', 'mil-relay', 'mil-ssr',
+  const order = ['ic', 'transistor', 'diode', 'capacitor', 'mil-capacitor', 'resistor', 'mil-resistor', 'inductor', 'mil-inductive', 'mil-opto', 'mil-relay', 'mil-ssr',
     'mil-switch', 'mil-connector', 'mil-socket', 'mil-crystal', 'mil-fuse', 'mil-lamp', 'mil-pwb', 'fixed'];
   lines.sort((a, b) => order.indexOf(a.model) - order.indexOf(b.model) || a.ref.localeCompare(b.ref, 'en', { numeric: true }));
   return {

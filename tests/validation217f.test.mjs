@@ -1,7 +1,7 @@
 // Validation of the MIL-HDBK-217F models against the handbook's printed tables.
 //
 // Every expected value here was read a second time from the scanned pages
-// (Notice 2 pages 9-1 to 9-3, 10-1 to 10-6, 13-1, 13-2, 13-3, 14-1, 14-2, 15-1, 15-2, 15-3,
+// (Notice 2 pages 9-1 to 9-3, 10-1 to 10-6, 11-1 to 11-4, 13-1, 13-2, 13-3, 14-1, 14-2, 15-1, 15-2, 15-3,
 // 16-1; 1991 pages 6-19, 19-1, 20-1, 22-1), independently of assets/tables217f.js. Each
 // check runs the full model (computeComponent), so it covers the table, the
 // formula and the FIT conversion together.
@@ -376,4 +376,35 @@ test('9.1 resistors (Notice 2, pages 9-1 to 9-3)', () => {
   const quality = { S: 0.03, R: 0.1, P: 0.3, M: 1.0, 'non-er': 3.0, commercial: 10 };
   for (const [q, v] of Object.entries(quality)) exactly(res('RM', { quality: q }) / res('RM'), v, `resistor π_Q(${q})`);
   checkEnvironments('mil-resistor', { ...p, style: 'RM' }, [1.0, 4.0, 16, 12, 42, 18, 23, 31, 43, 63, 0.50, 37, 87, 1728]);
+});
+
+test('11.1–11.3 transformers and coils (Notice 2, pages 11-1 to 11-4)', () => {
+  // ΔT = 0 puts the hot spot at the board ambient; quality MIL-SPEC (π_Q 1), G_B.
+  const p = { riseMethod: 'given', dT: 0, quality: 'milspec' };
+  const ind = (kind, extra = {}, prof = profile(25)) => fit('mil-inductive', { ...p, kind, ...extra }, prof);
+  // Base failure rates (pages 11-1 and 11-3).
+  const lb = { flyback: 0.0054, audio: 0.014, 'pulse-low': 0.022, power: 0.049, rf: 0.13, 'coil-fixed': 0.000030, 'coil-variable': 0.000050 };
+  for (const [kind, v] of Object.entries(lb)) exactly(ind(kind), v * 1000, `inductive λ_b(${kind})`);
+  // Temperature factor π_T against hot-spot temperature, T_HS = 20 … 190 °C (the same table on both pages).
+  const piT = ['.93', '1.1', '1.2', '1.4', '1.6', '1.8', '1.9', '2.2', '2.4', '2.6', '2.8', '3.1', '3.3', '3.5', '3.8', '4.1', '4.3', '4.6'];
+  for (const kind of ['rf', 'coil-fixed']) {
+    piT.forEach((printed, i) => {
+      const T = 20 + 10 * i;
+      matchesPrinted(run('mil-inductive', { ...p, kind }, profile(T)).operating[0].piT, printed, `inductive π_T(${kind}, ${T} °C)`);
+    });
+  }
+  // Hot spot (page 11-4): T_HS = T_A + 1.1·ΔT.
+  const hot = (extra) => run('mil-inductive', { ...p, kind: 'power', ...extra }, profile(40)).operating[0].t;
+  exactly(hot({ dT: 20 }), 40 + 22, 'T_HS with ΔT = 20 °C');
+  exactly(hot({ riseMethod: 'mil39010-15' }), 40 + 1.1 * 15, 'MIL-C-39010 15 °C');
+  exactly(hot({ riseMethod: 'mil39010-35' }), 40 + 1.1 * 35, 'MIL-C-39010 35 °C');
+  // ΔT = 125·W_L/A with A in in² (here 2 W over a 25 in² case, entered as cm²).
+  exactly(hot({ riseMethod: 'loss-area', loss: 2, area: 25 * 6.4516 }), 40 + 1.1 * 125 * 2 / 25, 'ΔT from power loss and area');
+  // ΔT = 11.5·W_L/Wt^0.6766 and 2.1·W_I/Wt^0.6766 with Wt in lb (here 2 lb, entered in grams).
+  exactly(hot({ riseMethod: 'loss-weight', loss: 3, weight: 2 * 453.59237 }), 40 + 1.1 * 11.5 * 3 / 2 ** 0.6766, 'ΔT from power loss and weight');
+  exactly(hot({ riseMethod: 'input-weight', input: 10, weight: 2 * 453.59237 }), 40 + 1.1 * 2.1 * 10 / 2 ** 0.6766, 'ΔT from input power and weight');
+  // Quality π_Q (pages 11-1 and 11-3), relative to MIL-SPEC.
+  const quality = { S: 0.03, R: 0.10, P: 0.30, M: 1.0, milspec: 1.0, lower: 3.0 };
+  for (const [q, v] of Object.entries(quality)) exactly(ind('coil-fixed', { quality: q }) / ind('coil-fixed'), v, `inductive π_Q(${q})`);
+  checkEnvironments('mil-inductive', { ...p, kind: 'audio' }, [1.0, 6.0, 12, 5.0, 16, 6.0, 8.0, 7.0, 9.0, 24, 0.50, 13, 34, 610]);
 });

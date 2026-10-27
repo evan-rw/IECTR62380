@@ -9,7 +9,7 @@
 
 import {
   ENVIRONMENTS, LOAD_TYPES, RELAY_MECHANICAL, RELAY_SOLID_STATE, SWITCHES, CONNECTORS, SOCKETS,
-  PTH_BOARDS, CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS, CAPACITORS_217F, RESISTORS_217F,
+  PTH_BOARDS, CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS, CAPACITORS_217F, RESISTORS_217F, INDUCTIVE_217F,
 } from './tables217f.js';
 
 const BOLTZMANN_EV = 8.617e-5;
@@ -473,6 +473,58 @@ export const MODELS_217F = {
         ['π_S', fmtE(piS), st?.s ? `${a}·e^(${b}·S), S = ${fmtE(S)}` : 'no stress factor for this style'],
         ['π_Q', fmtE(piQ), ''],
       ], { tempLabel: 'T', operatingLabel: 'π_T' });
+    },
+  },
+  'mil-inductive': {
+    label: 'Inductor, choke or transformer (MIL-HDBK-217F)',
+    group: 'MIL-HDBK-217F',
+    clause: INDUCTIVE_217F.ref,
+    status: status(INDUCTIVE_217F),
+    defaults: { kind: null, riseMethod: 'given', dT: null, loss: null, input: null, area: null, weight: null, quality: 'lower' },
+    fields: [
+      { key: 'kind', label: 'Type', type: 'select', required: true, wide: true, options: INDUCTIVE_217F.kinds.map((r) => ({ value: r.id, label: `${r.label} (λ_b ${r.lb})`, group: r.group })) },
+      { key: 'riseMethod', label: 'Temperature rise from', type: 'select', required: true, wide: true, options: opts(INDUCTIVE_217F.rise) },
+      { key: 'dT', label: 'Average temperature rise ΔT', unit: '°C', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.riseMethod === 'given', help: 'Above the part\'s ambient. The hot spot is taken as 1.1 × ΔT above ambient.' },
+      { key: 'loss', label: 'Power loss W_L', unit: 'W', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.riseMethod === 'loss-area' || p.riseMethod === 'loss-weight' },
+      { key: 'input', label: 'Input power W_I', unit: 'W', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.riseMethod === 'input-weight' },
+      { key: 'area', label: 'Case radiating surface area', unit: 'cm²', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.riseMethod === 'loss-area', help: 'Without the mounting surface. The handbook\'s formula is for 3 to 150 in² (19 to 970 cm²).' },
+      { key: 'weight', label: 'Weight', unit: 'g', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.riseMethod === 'loss-weight' || p.riseMethod === 'input-weight' },
+      { ...qualityField(INDUCTIVE_217F), help: 'Commercial parts are "Lower" (π_Q = 3). The S, R, P and M levels apply to coils.' },
+    ],
+    describe: (p) => find(INDUCTIVE_217F.kinds, p.kind)?.label ?? 'Inductive device',
+    compute(p, prof) {
+      const t = INDUCTIVE_217F;
+      const env = environment(t, prof);
+      const kind = find(t.kinds, p.kind);
+      const lb = kind?.lb ?? 0;
+      const piQ = find(t.quality, p.quality)?.piQ ?? 1;
+      // ΔT by section 11.3, with metric inputs converted to the handbook's in² and lb.
+      const SQ_IN = 6.4516;
+      const LB = 453.59237;
+      const areaIn2 = (p.area || 0) / SQ_IN;
+      const weightLb = (p.weight || 0) / LB;
+      const method = find(t.rise, p.riseMethod) ?? t.rise[0];
+      let dT = 0;
+      let how = '';
+      if (method.dT != null) { dT = method.dT; how = method.label; }
+      else if (method.id === 'loss-area') { dT = areaIn2 > 0 ? (125 * (p.loss || 0)) / areaIn2 : 0; how = `125·W_L/A, A = ${fmtE(areaIn2)} in²`; }
+      else if (method.id === 'loss-weight') { dT = weightLb > 0 ? (11.5 * (p.loss || 0)) / weightLb ** 0.6766 : 0; how = `11.5·W_L/Wt^0.6766, Wt = ${fmtE(weightLb)} lb`; }
+      else if (method.id === 'input-weight') { dT = weightLb > 0 ? (2.1 * (p.input || 0)) / weightLb ** 0.6766 : 0; how = `2.1·W_I/Wt^0.6766, Wt = ${fmtE(weightLb)} lb`; }
+      else { dT = p.dT || 0; how = 'entered'; }
+      const outOfRange = method.id === 'loss-area' && areaIn2 > 0 && (areaIn2 < 3 || areaIn2 > 150);
+      const hot = t.hotSpotFactor * dT;
+      const piT = (temp) => Math.exp((-t.ea / BOLTZMANN_EV) * (1 / (temp + 273) - 1 / 298));
+      const w = weighted(prof, (temp) => {
+        const f = piT(temp);
+        return { lambda: lb * f * piQ * (env.piE ?? 0), factor: f };
+      }, (ph) => ph.tac + hot);
+      return result(t, env, w, [
+        ['λ_b', fmtE(lb), kind?.label ?? ''],
+        ['ΔT', fmtE(dT), `°C, ${how}${outOfRange ? '; outside the 3–150 in² the formula is given for' : ''}`],
+        ['T_HS', 'T_A + 1.1·ΔT', `°C, hot spot ${fmtE(hot)} °C above ambient`],
+        ['π_T', `exp(−${t.ea}/k·[1/(T_HS+273) − 1/298])`, 'per phase, below'],
+        ['π_Q', fmtE(piQ), ''],
+      ], { tempLabel: 'T_HS', operatingLabel: 'π_T' });
     },
   },
 };

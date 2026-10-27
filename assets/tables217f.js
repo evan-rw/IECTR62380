@@ -408,7 +408,47 @@ export const RESISTORS_217F = {
   piE: [1.0, 4.0, 16, 12, 42, 18, 23, 31, 43, 63, 0.50, 37, 87, 1728],
 };
 
+export const INDUCTIVE_217F = {
+  id: 'mil-inductive',
+  title: 'Inductive devices: transformers and coils',
+  ref: 'MIL-HDBK-217F Notice 2, sections 11.1–11.3',
+  status: 'handbook',
+  sources: ['mil217fN2'],
+  note: 'Transformers (11.1) and coils (11.2) share the temperature and environment factors; π_T uses the hot-spot temperature T_HS = T_A + 1.1·ΔT from section 11.3, which gives ΔT from a test, from the handbook\'s 15 °C or 35 °C for microminiature coils, or from power loss with case area or weight (for cases of 3 to 150 in²). The model assumes the insulation rating is exceeded no more than 5 % of the time.',
+  kinds: [
+    { id: 'flyback', group: 'Transformers', label: 'Flyback (< 20 V)', lb: 0.0054, fm: 'Transformer' },
+    { id: 'audio', group: 'Transformers', label: 'Audio (15 Hz – 20 kHz)', lb: 0.014, fm: 'Transformer' },
+    { id: 'pulse-low', group: 'Transformers', label: 'Low-power pulse (peak < 300 W, average < 5 W)', lb: 0.022, fm: 'Transformer' },
+    { id: 'power', group: 'Transformers', label: 'High power, high-power pulse (peak ≥ 300 W, average ≥ 5 W)', lb: 0.049, fm: 'Transformer' },
+    { id: 'rf', group: 'Transformers', label: 'RF (10 kHz – 10 MHz)', lb: 0.13, fm: 'Transformer' },
+    { id: 'coil-fixed', group: 'Coils', label: 'Fixed inductor or choke', lb: 0.000030, fm: 'Coil', coil: true },
+    { id: 'coil-variable', group: 'Coils', label: 'Variable inductor', lb: 0.000050, fm: 'Coil', coil: true },
+  ],
+  // π_T = exp(−0.11/k·[1/(T_HS+273) − 1/298]).
+  ea: 0.11,
+  // Section 11.3: T_HS = T_A + 1.1·ΔT, and the ways to estimate ΔT (non-space environments).
+  hotSpotFactor: 1.1,
+  rise: [
+    { id: 'given', label: 'Temperature rise known (datasheet or test)' },
+    { id: 'mil39010-15', label: 'Microminiature coil, 15 °C (MIL-C-39010/1C–3C, 5C, 7C, 9A, 10A, 13, 14)', dT: 15 },
+    { id: 'mil39010-35', label: 'Microminiature coil, 35 °C (MIL-C-39010/4C, 6C, 8A, 11, 12)', dT: 35 },
+    { id: 'loss-area', label: 'Power loss and case surface area: ΔT = 125·W_L/A' },
+    { id: 'loss-weight', label: 'Power loss and weight: ΔT = 11.5·W_L/Wt^0.6766' },
+    { id: 'input-weight', label: 'Input power and weight (80 % efficiency): ΔT = 2.1·W_I/Wt^0.6766' },
+  ],
+  // Coils grade by established-reliability level; transformers are MIL-SPEC or lower.
+  quality: [
+    { id: 'S', label: 'S (established reliability, coils)', piQ: 0.03 },
+    { id: 'R', label: 'R (established reliability, coils)', piQ: 0.10 },
+    { id: 'P', label: 'P (established reliability, coils)', piQ: 0.30 },
+    { id: 'M', label: 'M (established reliability, coils)', piQ: 1.0 },
+    { id: 'milspec', label: 'MIL-SPEC', piQ: 1.0 },
+    { id: 'lower', label: 'Lower (commercial)', piQ: 3.0 },
+  ],
+  piE: [1.0, 6.0, 12, 5.0, 16, 6.0, 8.0, 7.0, 9.0, 24, 0.50, 13, 34, 610],
+};
+
 export const TABLES_217F = [
   RELAY_MECHANICAL, RELAY_SOLID_STATE, SWITCHES, CONNECTORS, SOCKETS, PTH_BOARDS,
-  CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS, CAPACITORS_217F, RESISTORS_217F,
+  CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS, CAPACITORS_217F, RESISTORS_217F, INDUCTIVE_217F,
 ];

@@ -380,7 +380,7 @@ export const INDUCTORS = {
   ref: 'Clause 12',
   status: 'single',
   sources: ['kicad'],
-  note: 'No λ0 values are included; enter one from a datasheet or vendor data.',
+  note: 'No λ0 values are included; enter one from a datasheet or vendor data, or use the MIL-HDBK-217F inductor, choke or transformer model, which has its own base rates.',
   k: 7e-3,
   riseCoef: 8.2,
 };

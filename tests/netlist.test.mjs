@@ -134,7 +134,9 @@ test('netlist parts: what is guessed, what is missing', () => {
   const rn = byRef(parts, 'RN1');
   assert.deepEqual([rn.params.type, rn.params.elements], ['smd', null]);
 
-  assert.equal(byRef(parts, 'L1').model, 'inductor');
+  const l1 = byRef(parts, 'L1');
+  assert.deepEqual([l1.model, l1.params.kind, l1.params.dT], ['mil-inductive', 'coil-fixed', null], 'inductors use the 217F model, which has base rates');
+  assert.match(l1.inferred.kind, /designator L1/);
   const j1 = byRef(parts, 'J1');
   assert.deepEqual([j1.model, j1.params.type], ['mil-connector', 'rectangular']);
   assert.match(j1.inferred.type, /PinHeader/);
