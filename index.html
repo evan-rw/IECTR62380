@@ -12,6 +12,7 @@
 <body>
   <header class="site-header">
     <div class="wrap">
+      <nav class="site-nav" aria-label="Pages"><a href="./" aria-current="page">Calculator</a><a href="sources.html">Data sources</a></nav>
       <h1>IEC TR 62380 calculator</h1>
       <p class="lede">Estimate the failure rate of an electronic board from its parts list and mission profile, following the IEC TR 62380:2004 approach as described in public sources, with MIL-HDBK-217F models for the parts it does not cover.</p>
     </div>
@@ -20,7 +21,7 @@
   <main class="wrap">
     <aside class="notice" role="note">
       <strong>The IEC TR 62380 coefficients are not taken from the standard.</strong>
-      Most were copied from one open-source project and have not been checked against IEC TR 62380. Parts marked MIL-HDBK-217F use that public-domain handbook, a different and older method. Treat results as rough estimates: they are not suitable as evidence for an ISO 26262 or IEC 61508 safety case. Every table value can be overridden per part. <a href="#sources">See where each table came from.</a>
+      Most were copied from one open-source project and have not been checked against IEC TR 62380. Parts marked MIL-HDBK-217F use that public-domain handbook, a different and older method. Treat results as rough estimates: they are not suitable as evidence for an ISO 26262 or IEC 61508 safety case. Every table value can be overridden per part. <a href="sources.html">See where each table came from.</a>
     </aside>
 
     <section class="panel" aria-labelledby="board-heading">
@@ -132,16 +133,11 @@
         </table>
       </div>
     </section>
-
-    <section class="panel" id="sources" aria-labelledby="sources-heading">
-      <h2 id="sources-heading">Data sources</h2>
-      <div id="source-list"></div>
-    </section>
   </main>
 
   <footer class="site-footer">
     <div class="wrap">
-      <p>Not affiliated with the IEC. IEC TR 62380:2004 was withdrawn in favour of IEC 61709:2017 but is still referenced by ISO 26262-11:2018. Your work is saved in this browser only; use Export JSON to keep a copy. <a href="https://github.com/evan-rw/IECTR62380">Source code</a> (AGPL-3.0) · <a href="THIRD_PARTY_NOTICES.md">Third-party notices</a>.</p>
+      <p>Not affiliated with the IEC. IEC TR 62380:2004 was withdrawn in favour of IEC 61709:2017 but is still referenced by ISO 26262-11:2018. Your work is saved in this browser only; use Export JSON to keep a copy. <a href="https://github.com/evan-rw/IECTR62380">Source code</a> (AGPL-3.0) · <a href="sources.html">Data sources and licences</a>.</p>
     </div>
   </footer>
 </body>

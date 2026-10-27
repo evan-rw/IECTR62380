@@ -15,6 +15,8 @@ export const STATUS = {
   excerpt: 'Published excerpt of the standard',
   corroborated: 'Two or more independent sources agree',
   single: 'Single source, not checked against the standard',
+  // MIL-HDBK-217F tables read from the handbook itself, without a second transcription to compare against.
+  handbook: 'Read from the handbook',
 };
 
 export const SOURCES = {
@@ -37,10 +39,6 @@ export const SOURCES = {
   thurlbeck: {
     label: 'Thurlbeck & Cao, "A Mission Profile Based Reliability Modeling Framework for Fault-tolerant Electric Propulsion", IEEE Trans. Industry Applications, 2022 (author copy)',
     url: 'https://web.engr.oregonstate.edu/~caoy2/files/IAS_thurlbeck.pdf',
-  },
-  reconstructed: {
-    label: 'Model structure reconstructed from secondary descriptions of the standard',
-    url: null,
   },
 };
 

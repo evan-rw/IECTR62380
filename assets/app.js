@@ -1,11 +1,12 @@
 import {
-  MODELS, MODEL_GROUPS, PENDING_FAMILIES, computeBoard, profileProblems, mtbfHours, reliability, byId, fieldLabel,
+  MODELS, MODEL_GROUPS, computeBoard, profileProblems, mtbfHours, reliability, byId, fieldLabel, clauseOf,
 } from './models.js';
-import { ENVIRONMENTS, TABLES_217F, SOURCES_217F } from './tables217f.js';
-import { MISSION_PROFILES, ALL_TABLES, SOURCES, STATUS } from './tables.js';
+import { ENVIRONMENTS } from './tables217f.js';
+import { MISSION_PROFILES } from './tables.js';
 import { netlistToParts, expandRefs } from './netlist.js';
 import { computeStructure } from './structure.js';
-import { failureModesFor, suggestedShortShare, FAILURE_MODE_SOURCE } from './failuremodes.js';
+import { failureModesFor, suggestedShortShare } from './failuremodes.js';
+import { esc } from './html.js';
 
 const STORAGE_KEY = 'iec62380.board.v1';
 const FORMAT = 'iec62380-board';
@@ -16,7 +17,6 @@ const REF_PREFIX = {
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const numOrNull = (s) => (s === '' || s == null || !Number.isFinite(Number(s)) ? null : Number(s));
@@ -157,19 +157,23 @@ function load() {
 }
 
 let saveTimer = null;
+function writeNow() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* private mode or storage blocked */ }
+}
 function save() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* private mode or storage blocked */ }
-  }, 250);
+  saveTimer = setTimeout(writeNow, 250);
 }
+// Going to the data sources page must not lose the last keystrokes.
+window.addEventListener('pagehide', () => { if (saveTimer) writeNow(); });
 
 let state = load() ?? exampleBoard();
 const findPart = (id) => state.parts.find((p) => p.id === id);
 const guessCount = (part) => Object.keys(part.inferred ?? {}).length;
 const canSplit = (part) => part.qty > 1 && expandRefs(part.ref).length === part.qty;
 const findGroup = (id) => state.groups.find((g) => g.id === id);
-const clauseOf = (m) => (m.group === 'MIL-HDBK-217F' ? m.clause : `Clause ${m.clause}`);
 const newGroup = (extra = {}) => ({ id: newId(), refs: '', nets: [], mode: 'series', need: null, shortPct: null, proposed: null, inferred: {}, ...extra });
 
 // ---------------------------------------------------------------------------
@@ -372,29 +376,6 @@ function rerenderGroup(g, focusKey) {
   if (focusKey) $(`[data-gid="${g.id}"][data-key="${focusKey}"]`)?.focus();
 }
 
-function renderSources() {
-  const link = (key) => {
-    const s = SOURCES[key] ?? SOURCES_217F[key];
-    return s.url ? `<a href="${esc(s.url)}" rel="noopener">${esc(s.label)}</a>` : esc(s.label);
-  };
-  const rows = [...ALL_TABLES, ...TABLES_217F].map((t) => `<tr>
-      <td>${esc(t.title)}<br><span class="unit">${t.ref.startsWith('MIL-HDBK') ? esc(t.ref) : t.status === 'excerpt' ? `IEC TR 62380 ${esc(t.ref)}` : `${esc(t.ref)} of the standard, according to the source`}</span></td>
-      <td><span class="badge ${t.status === 'single' ? 'no' : 'ok'}">${esc(STATUS[t.status])}</span></td>
-      <td>${t.sources.map(link).join('<br>')}${t.note ? `<p class="help">${esc(t.note)}</p>` : ''}</td>
-    </tr>`).join('');
-  const models = Object.values(MODELS).map((m) => `<li><strong>${esc(m.label)}</strong> (${esc(clauseOf(m))}): ${esc(m.status)}</li>`).join('');
-  const pending = PENDING_FAMILIES.map((f) => `<li>${esc(f)}</li>`).join('');
-  $('#source-list').innerHTML = `
-    <p class="hint">None of the IEC TR 62380 values were taken from the standard. Its mission profiles are published excerpts: the free preview and TI's application note. Its other tables were copied from one open-source project, Kicad-Space-Reliability (MIT licence, see <a href="THIRD_PARTY_NOTICES.md">third-party notices</a>), and have not been checked against the standard. The MIL-HDBK-217F tables come from the public-domain handbook itself, read from its scanned pages and cross-checked as each table says.</p>
-    <div class="table-scroll"><table class="source-table"><thead><tr><th>Table</th><th>Status</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <h3>Failure modes</h3>
-    <p class="hint">How each part type's failures split between short, open and drift, shown in each part's calculation and used to suggest a redundant group's critical share: <a href="${esc(FAILURE_MODE_SOURCE.url)}" rel="noopener">${esc(FAILURE_MODE_SOURCE.label)}</a>.</p>
-    <h3>Models</h3><ul>${models}</ul>
-    <h3>Not modelled yet</h3>
-    <p class="hint">Add these as “Other part (failure rate entered)” with a rate from a datasheet or a vendor reliability report.</p>
-    <ul>${pending}</ul>`;
-}
-
 function renderAll() {
   renderBoardBar();
   renderPresets();
@@ -402,7 +383,6 @@ function renderAll() {
   renderAddModel();
   renderParts();
   renderGroups();
-  renderSources();
   update();
 }
 

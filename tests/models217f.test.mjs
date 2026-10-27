@@ -17,11 +17,13 @@ const fit = (model, params, prof = profile()) => {
   return r.fit;
 };
 
-test('every 217F table lists 14 environment factors and real sources', () => {
+test('every 217F table lists 14 environment factors, real sources and a status', () => {
   assert.equal(ENVIRONMENTS.length, 14);
   for (const t of TABLES_217F) {
     assert.equal(t.piE.length, 14, t.id);
     assert.ok(t.sources.length > 0, t.id);
+    assert.ok(['handbook', 'corroborated'].includes(t.status), `${t.id}: ${t.status}`);
+    if (t.status === 'corroborated') assert.ok(t.sources.includes('ramstk'), t.id);
   }
 });
 

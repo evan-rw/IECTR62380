@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Data Sources: IEC TR 62380 Calculator</title>
+  <meta name="description" content="Where every coefficient, model and failure-mode figure in the IEC TR 62380 calculator comes from, and how far each has been checked.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23245c73'/%3E%3Cpath d='M6 22 L12 14 L17 18 L26 8' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+  <script type="module" src="assets/sources.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <nav class="site-nav" aria-label="Pages"><a href="./">Calculator</a><a href="sources.html" aria-current="page">Data sources</a></nav>
+      <h1>Data sources</h1>
+      <p class="lede">Where every coefficient, model and failure-mode figure in the calculator comes from, and how far each has been checked.</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="panel" aria-labelledby="where-heading">
+      <h2 id="where-heading">Where the numbers come from</h2>
+      <ul class="summary-list">
+        <li><strong>IEC TR 62380 approach.</strong> None of the values were taken from the standard: the IEC's licence for purchased copies does not allow using them in software. The mission profiles are published excerpts of it, from the free preview and TI's application note SLOA294A. The other coefficients were copied from one open-source project, Kicad-Space-Reliability, and have not been checked against the standard. The integrated-circuit formula matches the one TI publishes.</li>
+        <li><strong>MIL-HDBK-217F.</strong> A US Department of Defense handbook cleared for public release. Values were read from its scanned pages (Notice 2 where it replaces a page) and cross-checked against RAMSTK or the scan's text, as each table says. It is older (1991–1995) and generally more pessimistic than the 62380 approach.</li>
+        <li><strong>Vendor data.</strong> Failure rates you enter from a manufacturer, rescaled to your mission profile with the Arrhenius law or the 62380 formula. No coefficient tables are involved.</li>
+        <li><strong>Failure modes.</strong> MIL-HDBK-338B Table 7.8-1, a public-release reproduction of the Reliability Analysis Center's FMD-91 (1991).</li>
+      </ul>
+      <p class="hint">Results are rough estimates and not suitable as evidence for an ISO 26262 or IEC 61508 safety case.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="tables-heading">
+      <h2 id="tables-heading">Coefficient tables</h2>
+      <p class="hint">“Published excerpt” means copied from a public excerpt of the standard. “Two or more independent sources agree” means at least two independent sources give the same values. “Single source” means one source so far. “Read from the handbook” means a MIL-HDBK-217F table read from the handbook's own pages, with no second transcription to compare against.</p>
+      <h3>IEC TR 62380 approach</h3>
+      <div id="method-tables-62380"></div>
+      <h3>MIL-HDBK-217F</h3>
+      <div id="method-tables-217f"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="bib-heading">
+      <h2 id="bib-heading">Bibliography</h2>
+      <div id="bibliography"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="models-heading">
+      <h2 id="models-heading">Models</h2>
+      <div id="model-list"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="fm-heading">
+      <h2 id="fm-heading">Failure modes</h2>
+      <p class="hint">How each part type's failures split between modes such as short, open and drift, from <span id="failure-mode-source"></span>. Shown in each part's calculation, and used to suggest a redundant group's critical share.</p>
+      <div id="failure-mode-table"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="pending-heading">
+      <h2 id="pending-heading">Not modelled yet</h2>
+      <p class="hint">Add these as “Other part (failure rate entered)”, or as “Part with a vendor failure rate” if the manufacturer publishes one.</p>
+      <ul id="pending-list"></ul>
+    </section>
+
+    <section class="panel" aria-labelledby="licence-heading">
+      <h2 id="licence-heading">Licences</h2>
+      <ul>
+        <li>The calculator's code: GNU Affero General Public License v3.0 (<a href="https://github.com/evan-rw/IECTR62380/blob/main/LICENSE">licence text</a>).</li>
+        <li>Coefficients copied from Kicad-Space-Reliability: MIT licence; its notice is in <a href="https://github.com/evan-rw/IECTR62380/blob/main/THIRD_PARTY_NOTICES.md">third-party notices</a>.</li>
+        <li>MIL-HDBK-217F, its Notice 2 and MIL-HDBK-338B: US government works marked “approved for public release; distribution unlimited”.</li>
+        <li>IEC TR 62380 itself is not reproduced. This project is not affiliated with the IEC.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p><a href="./">Back to the calculator</a> · <a href="https://github.com/evan-rw/IECTR62380">Source code</a> (AGPL-3.0)</p>
+    </div>
+  </footer>
+</body>
+</html>

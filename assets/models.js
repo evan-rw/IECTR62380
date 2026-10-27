@@ -566,6 +566,9 @@ MODELS.fixed.group = 'Other';
 Object.assign(MODELS, MODELS_217F);
 export const MODEL_GROUPS = ['IEC TR 62380 approach', 'MIL-HDBK-217F', 'Vendor data', 'Other'];
 
+// "Clause 7" for the 62380 models; 217F models already name their handbook section.
+export const clauseOf = (m) => (m.group === 'MIL-HDBK-217F' ? m.clause : `Clause ${m.clause}`);
+
 // Families with no model here yet, under either method.
 export const PENDING_FAMILIES = [
   'Hybrid circuits, and surface-mount boards (62380 clause 6; 217F section 16.2)',

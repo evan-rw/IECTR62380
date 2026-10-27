@@ -24,7 +24,7 @@ Families of the standard not modelled yet (optocouplers, optoelectronics, relays
 
 ## How it is built
 
-A static site with no build step: `index.html` plus ES modules in `assets/`.
+A static site with no build step: the calculator (`index.html`), a data sources page (`sources.html`) listing every table, source, model and licence, and ES modules in `assets/`.
 
 | File | Contents |
 | --- | --- |
@@ -35,7 +35,8 @@ A static site with no build step: `index.html` plus ES modules in `assets/`.
 | `assets/failuremodes.js` | Failure-mode distributions (MIL-HDBK-338B Table 7.8-1) and the part-type mapping |
 | `assets/netlist.js` | Protel netlist parser, the rules that guess part details, and parallel-group proposals |
 | `assets/structure.js` | Series and redundant groups: survival, mission-average rate, mean time to failure |
-| `assets/app.js` | The page: state, rendering, import/export |
+| `assets/app.js` | The calculator page: state, rendering, import/export |
+| `assets/sources.js` | The data sources page, rendered from the same data modules |
 | `tests/` | `node:test` tests for the models, the netlist import, the reliability structure and page behaviour (jsdom) |
 | `THIRD_PARTY_NOTICES.md` | Licence notice for the copied coefficient values |
 
@@ -62,6 +63,7 @@ Each table in `assets/tables.js` has a `status`:
 | `excerpt` | A published excerpt of the standard (the free preview, or a vendor note that reproduces a table) |
 | `corroborated` | Two or more independent public sources give the same values |
 | `single` | One source so far, not checked against the standard |
+| `handbook` | A MIL-HDBK-217F table read from the handbook's own pages, with no second transcription to compare against |
 
 To strengthen a table, find an independent public source that states the same values, such as a semiconductor vendor's functional-safety FIT report that lists its IEC 62380 parameters, or a paper that applies the model. Add it to `SOURCES`, list it on the table, and raise the status to `corroborated` once every row is covered. Correct any value the sources contradict, and run `npm test`.
 

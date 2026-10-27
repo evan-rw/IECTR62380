@@ -69,6 +69,10 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.equal(warn(), '');
   assert.match($('.notice').textContent, /not taken from the standard.*not suitable as evidence for an ISO 26262 or IEC 61508 safety case/s);
   assert.match($('#summary .scope').textContent, /parts wired in parallel still add up/);
+  // The data sources now live on their own page.
+  assert.equal($('.site-nav [aria-current="page"]').textContent, 'Calculator');
+  assert.equal($('.notice a').getAttribute('href'), 'sources.html');
+  assert.equal($('#source-list'), null);
 
   // Typing updates results without replacing the input being typed in.
   const u1 = $$('.part')[0];
@@ -319,6 +323,11 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.ok(csv.some((row) => row.includes('Missing: Current per contact, Mating cycles.')), 'missing values listed');
   assert.ok(csv.some((row) => row.startsWith('"Group C1–C3","Redundant group","2 of 3 must work; 50% of failures break it anyway"')));
   assert.ok(csv.some((row) => row.startsWith('"Board with redundancy, average over 10 years"')));
+
+  // Leaving the page saves at once, without waiting for the autosave delay.
+  typeInto($('#title'), 'Saved on leave');
+  window.dispatchEvent(new window.Event('pagehide'));
+  assert.equal(JSON.parse(localStorage.getItem('iec62380.board.v1')).title, 'Saved on leave');
 
   // Autosave, and a bad JSON import leaves the board alone.
   await settle(300);

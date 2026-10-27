@@ -341,3 +341,18 @@ ul.tree b { font-weight: 650; }
 @media (max-width: 760px) {
   .group-result { text-align: left; min-width: 0; }
 }
+
+/* Page navigation and the data sources page */
+
+.site-nav { display: flex; gap: 4px; margin-bottom: 10px; font-size: 0.875rem; }
+.site-nav a { padding: 4px 10px; border-radius: 999px; color: var(--text-2); text-decoration: none; border: 1px solid transparent; }
+.site-nav a:hover { border-color: var(--border); color: var(--text); }
+.site-nav a[aria-current="page"] { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+
+.summary-list { margin: 8px 0; padding-left: 20px; }
+.summary-list li { margin-bottom: 8px; max-width: 90ch; }
+ol.bibliography { padding-left: 24px; margin: 4px 0; }
+ol.bibliography li { margin-bottom: 8px; overflow-wrap: anywhere; }
+.panel h3 { margin: 18px 0 8px; }
+.panel h3:first-of-type { margin-top: 8px; }
+details.fm-details > summary { margin: 4px 0 8px; }

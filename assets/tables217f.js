@@ -136,7 +136,7 @@ export const SWITCHES = {
   id: 'mil-switch',
   title: 'Switches',
   ref: 'MIL-HDBK-217F Notice 2, section 14.1',
-  status: 'single',
+  status: 'handbook',
   sources: ['mil217fN2'],
   note: 'Read from the Notice 2 page and checked against its OCR text (13 of 14 base rates; "Pressure 2.8" from the image only). RAMSTK implements the older 1991 switch model, so it cannot cross-check this one.',
   types: [
@@ -169,7 +169,7 @@ export const CONNECTORS = {
   id: 'mil-connector',
   title: 'Connectors, general',
   ref: 'MIL-HDBK-217F Notice 2, section 15.1',
-  status: 'single',
+  status: 'handbook',
   sources: ['mil217fN2', 'ramstk'],
   note: 'Base rates and gauge coefficients read from the page and confirmed by its OCR text. π_E, π_K and four gauge coefficients also agree with RAMSTK; RAMSTK uses the older 1991 base-rate model.',
   // λ_b is for a mated pair; dT is a fixed insert temperature rise where the handbook gives one.
@@ -200,7 +200,7 @@ export const SOCKETS = {
   id: 'mil-socket',
   title: 'Connectors, sockets',
   ref: 'MIL-HDBK-217F Notice 2, section 15.2',
-  status: 'single',
+  status: 'handbook',
   sources: ['mil217fN2', 'ramstk'],
   note: 'π_E agrees with RAMSTK; base rates and π_Q from the Notice 2 page. π_P = exp(((N − 1)/10)^0.39) reproduces the page\'s table.',
   types: [
@@ -220,7 +220,7 @@ export const PTH_BOARDS = {
   id: 'mil-pwb',
   title: 'Interconnection assemblies with plated through holes',
   ref: 'MIL-HDBK-217F Notice 2, section 16.1',
-  status: 'single',
+  status: 'handbook',
   sources: ['mil217fN2', 'ramstk'],
   note: 'π_E agrees with RAMSTK. Notice 2 lowered λ_b to 0.000017 (0.00011 for discrete wiring); RAMSTK still has the 1991 values. The handbook applies this model to leaded parts in plated through holes; surface-mount boards need its section 16.2, which is not included.',
   technologies: [
