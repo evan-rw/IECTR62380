@@ -58,33 +58,29 @@ KEY = {
 }
 
 
-# One side-view boot, toe to the right; BOOTS stamps two of them, the back one higher.
-BOOT = [
-    '.KKKK..',
-    'KHHHK..',
-    'KLLLK..',
-    'KHBBK..',
-    'KHBBK..',
-    'KHBBK..',
-    'KHBBK..',
-    'KHBBKK.',
-    'KHBBBLK',
-    'KBBBBBK',
-    'KSSSSSK',
-    '.KKKKK.',
-]
-BOOT_COLOURS = {'K': '#241000', 'H': '#e09a48', 'L': '#f6d29a', 'B': '#9a5418', 'S': '#4a2a10'}
-
-
-def boots():
-    """16×16: a pair of boots, the back one set up and to the left."""
-    pixel = [[None] * 16 for _ in range(16)]
-    for x0, y0 in ((1, 1), (8, 4)):
-        for y, row in enumerate(BOOT):
-            for x, ch in enumerate(row):
-                if ch != '.':
-                    pixel[y0 + y][x0 + x] = BOOT_COLOURS[ch]
-    return pixel
+# One boot in a three-quarter view: the shaft rises at the back right, the toe
+# comes towards the viewer at about seven o'clock. Lit from the upper left.
+BOOT = {
+    'grid': [
+        '................',
+        '.......KKKKKKK..',
+        '......KLLLLLLLK.',
+        '......KLOOOOOBK.',
+        '......KHLLLBBDK.',
+        '......KHHHHBDDK.',
+        '......KHHHHBDDK.',
+        '......KHHHHBDDK.',
+        '.....KHHHHHBDDK.',
+        '....KLHHHHHBDDK.',
+        '...KLLHHHHBBDSK.',
+        '..KLLHHHHBBBSK..',
+        '.KLLHHHHBBBSSK..',
+        '.KLHHHHBBSSKK...',
+        '.KHHHBSSSKK.....',
+        '..KSSSKKK.......',
+    ],
+    'colours': {'K': '#241000', 'O': '#3a1c06', 'L': '#f6d29a', 'H': '#e09a48', 'B': '#9a5418', 'D': '#6a3a10', 'S': '#4a2a10'},
+}
 
 
 # Portal: concentric square rings, blue outside, then cyan, alternating to the centre.
@@ -151,7 +147,7 @@ def main():
         'flame': from_grid(FLAME),
         'key': from_grid(KEY),
         'portal': portal(),
-        'boots': boots(),
+        'boot': from_grid(BOOT),
         'portal-floor': portal_on_floor(),
     }
     for name, pixel in pieces.items():
