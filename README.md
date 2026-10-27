@@ -11,7 +11,8 @@ Online calculation for IEC TR 62380. A browser calculator that estimates the fai
 - **Mission profile:** one row per phase of a typical year: board ambient temperature t<sub>ac</sub>, working-time ratio τ, annual thermal cycles n and amplitude ΔT. Includes the profiles of Tables 1–2 of the standard and the automotive *motor control* and *passenger compartment* profiles of Table 11, as reproduced in TI SLOA294A.
 - **Parts:** integrated circuits (die + package + electrical overstress), diodes, transistors, ceramic/tantalum/aluminium capacitors, film and SMD resistors, inductors and transformers. Any other part can be entered with a known failure rate.
 - **Netlist import:** load a Protel or Protel 2.0 netlist (Altium, gEDA/Lepton and other tools export these). Parts are typed from their designators (U, C, R, Q, D, L…), identical parts are grouped into one line ("C1–C12, C15"), and test points, mounting holes and fiducials are skipped. Package, pin count, capacitor dielectric, resistor rating and some part families are worked out from footprint names and values; these are marked **Guessed** with the reason until changed or confirmed (a confirmed guess keeps its reason on record). Everything a netlist cannot hold (power, thermal resistance, voltage stress, transistor count…) is marked **Missing**, and that part is left out of the board total until it is filled in. A grouped line can be split into one line per reference when its parts run at different conditions.
-- **Results:** board failure rate, MTBF, survival over the mission, and each part's share of the total. While any line is incomplete, the total is shown as a lower bound (≥) and MTBF and survival as upper bounds (≤). The total counts a failure of any listed part as a board failure, so parts wired in parallel still add up. A "Show the calculation" panel on every part lists each factor (π<sub>t</sub>, π<sub>n</sub>, π<sub>α</sub>, λ3, …) per phase.
+- **Results:** board failure rate, MTBF, survival over the mission, and each part's share of the total. While any line is incomplete, the total is shown as a lower bound (≥) and MTBF and survival as upper bounds (≤). By default the total counts a failure of any listed part as a board failure, so parts wired in parallel still add up. A "Show the calculation" panel on every part lists each factor (π<sub>t</sub>, π<sub>n</sub>, π<sub>α</sub>, λ3, …) per phase.
+- **Reliability structure:** parts that back each other up can be put in a group and marked redundant: you say how many must keep working, and what share of their failures (shorts, say) breaks the group anyway. Netlist import proposes groups of parts of the same type wired to the same nets, such as decoupling capacitors on one rail or paralleled MOSFETs; they count in series until marked redundant. A redundant group has no constant failure rate, so the board figures become averages over the mission length: survival over the mission, the mission-average failure rate −ln R(T)/T, and the mean time to failure ∫R(t)dt.
 - Every table value can be overridden per part.
 - Boards are saved in the browser and can be exported/imported as JSON, or exported as CSV.
 
@@ -25,9 +26,10 @@ A static site with no build step: `index.html` plus ES modules in `assets/`.
 | --- | --- |
 | `assets/tables.js` | Every coefficient table, each with its sources and a `status` |
 | `assets/models.js` | The failure-rate models: pure functions, no DOM |
-| `assets/netlist.js` | Protel netlist parser and the rules that guess part details |
+| `assets/netlist.js` | Protel netlist parser, the rules that guess part details, and parallel-group proposals |
+| `assets/structure.js` | Series and redundant groups: survival, mission-average rate, mean time to failure |
 | `assets/app.js` | The page: state, rendering, import/export |
-| `tests/` | `node:test` tests for the models, the netlist import and page behaviour (jsdom) |
+| `tests/` | `node:test` tests for the models, the netlist import, the reliability structure and page behaviour (jsdom) |
 | `THIRD_PARTY_NOTICES.md` | Licence notice for the copied coefficient values |
 
 Run locally:

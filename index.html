@@ -99,9 +99,19 @@
       <div id="parts" class="parts"></div>
     </section>
 
+    <section class="panel" aria-labelledby="structure-heading">
+      <div class="panel-head">
+        <h2 id="structure-heading">Reliability structure</h2>
+        <button type="button" data-act="add-group">Add group</button>
+      </div>
+      <p class="hint">By default every part is in series: any failure fails the board. Put parts that back each other up into a group, such as capacitors in parallel on a rail, and mark it redundant. Then say how many must keep working, and what share of their failures breaks the group anyway (a shorted capacitor takes the whole rail down). Netlist import proposes groups of parts wired to the same nets; they count in series until you mark them redundant. A redundant group has no constant failure rate, so the board figures become averages over the mission length.</p>
+      <div id="structure-tree"></div>
+      <div id="groups" class="groups"></div>
+    </section>
+
     <section class="panel" aria-labelledby="results-heading">
       <h2 id="results-heading">Results by part</h2>
-      <p class="hint">Sorted by contribution to the board total. Rates are per calendar hour, dormant time included.</p>
+      <p class="hint">Sorted by contribution. Rates are per calendar hour, dormant time included; shares are of the sum of all part rates.</p>
       <div class="table-scroll">
         <table class="results">
           <thead>

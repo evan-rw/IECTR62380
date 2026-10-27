@@ -17,7 +17,8 @@ const NETLIST = [
     ['J1', 'PinHeader_1x04', 'Conn_01x04'],
     ['TP1', 'TestPoint', 'TP'],
   ].map(([d, f, v]) => `[\r\nDESIGNATOR\r\n${d}\r\nFOOTPRINT\r\n${f}\r\nPARTTYPE\r\n${v}\r\nDESCRIPTION\r\n\r\n]`),
-  '(\r\nGND\r\nU1-8\r\nC1-2\r\n)',
+  '(\r\nGND\r\nU1-8\r\nC1-2\r\nC2-2\r\nC3-2\r\n)',
+  '(\r\n+3V3\r\nU1-48\r\nC1-1\r\nC2-1\r\nC3-1\r\n)',
 ].join('\r\n');
 
 // Encode as Windows-1252 so "µ" is the single byte 0xB5, as older EDA tools write it.
@@ -153,7 +154,10 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.equal($('#title').value, 'demo');
   const report = $('#import-report');
   assert.equal(report.hidden, false);
-  assert.match(report.textContent, /Read 7 components from “demo.NET” \(Protel 2.0, 1 net\) into 4 lines/);
+  assert.match(report.textContent, /Read 7 components from “demo.NET” \(Protel 2.0, 2 nets\) into 4 lines/);
+  assert.match(report.textContent, /Proposed 1 group of parts wired in parallel/);
+  assert.match($('#structure-tree').textContent, /C1–C3: in series/);
+  assert.match($('[data-gout="proposed"]').textContent, /same nets \(\+3V3, GND\)/);
   assert.match(report.textContent, /Skipped 1 mechanical items \(TP1\)/);
   assert.match(report.textContent, /3 lines need input/);
   // Only the capacitors are complete: 3 × 0.15 × (π_t(26 °C)·0.5 + 3.3e-3 × 36^0.76 × 15^0.68).
@@ -216,7 +220,28 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.match(alerted, /Could not read “notes.txt”: No components found/);
   assert.equal($$('.part').length, partsBefore);
 
-  // JSON round trip keeps guesses, confirmed guesses and netlist sources.
+  // Marking the proposed group redundant: its two inputs are Missing and it counts
+  // in series until they are filled; then the board figures become mission averages.
+  const seriesTotal = boardTotal();
+  choose($('[data-bind="group"][data-key="mode"]'), 'redundant');
+  let group = $('.group');
+  assert.equal($('[data-gout="proposed"]', group), null, 'editing a proposal makes it the user\'s');
+  assert.deepEqual($$('.field.missing', group).map((f) => f.dataset.gfield), ['need', 'shortPct']);
+  assert.match($('[data-gout="problems"]', group).textContent, /Missing: how many parts must keep working/);
+  assert.equal(boardTotal(), seriesTotal);
+  typeInto($('[data-key="need"]', group), 2);
+  typeInto($('[data-key="shortPct"]', group), 50);
+  group = $('.group');
+  assert.equal($$('.field.missing', group).length, 0);
+  assert.equal($('[data-gout="of"]', group).textContent, 'of 3 in the group');
+  assert.match($('[data-gout="result"]', group).textContent, /average over the mission/);
+  assert.match($('#summary .label').textContent, /average over 10 years/);
+  assert.equal($$('#summary .label')[1].textContent, 'Mean time to failure');
+  assert.match($('#results tr:last-child').textContent, /Board, with redundancy/);
+  assert.ok(boardTotal() < seriesTotal, `${boardTotal()} < ${seriesTotal}`);
+  assert.ok($('#structure-tree li.redundant'));
+
+  // JSON round trip keeps guesses, confirmed guesses, netlist sources and groups.
   click($('[data-act="toggle"]', cardFor('C3')));
   click($('[data-act="confirm-guesses"]', cardFor('C3')));
   const exported = total();
@@ -228,12 +253,15 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.equal(parsed.parts.find((p) => p.ref === 'C1').inferred.type.startsWith('assumed class II'), true);
   assert.match(parsed.parts.find((p) => p.ref === 'C3').confirmed.type, /assumed class II/);
   assert.equal(parsed.parts.find((p) => p.ref === 'C3').inferred, undefined);
+  assert.deepEqual(parsed.groups.map((g) => [g.refs, g.mode, g.need, g.shortPct]), [['C1–C3', 'redundant', 2, 50]]);
+  assert.ok(!('id' in parsed.groups[0]));
   assert.equal(parsed.parts.find((p) => p.ref === 'R1').source.value, '10µ');
   click($('[data-act="new"]'));
   assert.equal(total(), '0 FIT');
   await pick('#import-file', { text: async () => json });
   assert.equal(total(), exported);
   assert.equal($$('.field.inferred', cardFor('C1')).length, 1);
+  assert.equal($('[data-key="need"]', $('.group')).value, '2');
 
   // A blank phase temperature survives a save and reload instead of becoming a default.
   choose($('#preset'), 'auto-motor');
@@ -242,14 +270,16 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.equal($('#phases [data-i="3"][data-key="tac"]').value, '');
   assert.equal($('#profile-problems').textContent, '');
 
-  // CSV: one row per line plus header and total; formula-like text neutralised.
+  // CSV: header, one row per line, board total, groups; formula-like text neutralised.
   typeInto($('[data-key="ref"]', $$('.part')[0]), '=HYPERLINK("x")');
   click($('[data-act="export-csv"]'));
   const csv = (await downloads.at(-1).text()).split('\r\n');
   assert.match(csv[0], /^"Ref","Part type"/);
-  assert.equal(csv.length, $$('.part').length + 2);
+  assert.equal(csv.length, $$('.part').length + 4, 'header, part lines, board, the group, board with redundancy');
   assert.match(csv[1], /^"'=HYPERLINK\(""x""\)"/);
   assert.ok(csv.some((row) => row.includes('Missing: Failure rate λ.')), 'missing values listed');
+  assert.ok(csv.some((row) => row.startsWith('"Group C1–C3","Redundant group","2 of 3 must work; 50% of failures break it anyway"')));
+  assert.ok(csv.some((row) => row.startsWith('"Board with redundancy, average over 10 years"')));
 
   // Autosave, and a bad JSON import leaves the board alone.
   await settle(300);

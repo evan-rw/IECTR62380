@@ -24,7 +24,7 @@ export function parseProtel(text) {
   const first = lines.find((l) => l.trim() !== '') ?? '';
   const format = /^PROTEL\s+NETLIST\s+2/i.test(first.trim()) ? 'Protel 2.0' : 'Protel';
   const components = [];
-  const pins = new Map(); // designator -> { count, max }
+  const pins = new Map(); // designator -> { count, max, nets }
   let nets = 0;
 
   for (let i = 0; i < lines.length; i++) {
@@ -39,14 +39,16 @@ export function parseProtel(text) {
       const block = [];
       for (i++; i < lines.length && lines[i].trim() !== ')'; i++) block.push(lines[i].trim());
       nets++;
+      const net = block[0] ?? '';
       for (const node of block.slice(1)) {
         const token = node.split(/\s+/)[0];
         const dash = token.lastIndexOf('-');
         if (dash <= 0) continue;
         const ref = token.slice(0, dash);
         const pin = token.slice(dash + 1);
-        const entry = pins.get(ref) ?? { count: 0, max: 0 };
+        const entry = pins.get(ref) ?? { count: 0, max: 0, nets: new Set() };
         entry.count++;
+        entry.nets.add(net);
         if (/^\d+$/.test(pin)) entry.max = Math.max(entry.max, Number(pin));
         pins.set(ref, entry);
       }
@@ -60,6 +62,7 @@ export function parseProtel(text) {
     const p = pins.get(c.designator);
     c.connectedPins = p?.count ?? 0;
     c.highestPin = p?.max ?? 0;
+    c.nets = p ? [...p.nets].sort() : [];
   }
   return { format, components, nets };
 }
@@ -380,6 +383,7 @@ export function expandRefs(text) {
 export function netlistToParts(text) {
   const parsed = parseProtel(text);
   const groups = new Map();
+  const parallel = new Map();
   const skipped = [];
   for (const c of parsed.components) {
     const cls = classifyComponent(c);
@@ -388,6 +392,13 @@ export function netlistToParts(text) {
     const g = groups.get(key) ?? { ...cls, refs: [] };
     g.refs.push(c.designator);
     groups.set(key, g);
+    // Parts of the same type connected to exactly the same nets are wired in parallel.
+    if (c.nets.length >= 2 && cls.model !== 'fixed' && cls.model !== 'ic') {
+      const pkey = JSON.stringify([cls.model, c.nets]);
+      const pg = parallel.get(pkey) ?? { nets: c.nets, refs: [] };
+      pg.refs.push(c.designator);
+      parallel.set(pkey, pg);
+    }
   }
   const lines = [...groups.values()].map((g) => ({
     ref: compressRefs(g.refs), qty: g.refs.length, model: g.model, params: g.params, inferred: g.inferred, source: g.source,
@@ -401,5 +412,13 @@ export function netlistToParts(text) {
     skipped: compressRefs(skipped),
     skippedCount: skipped.length,
     lines,
+    groups: [...parallel.values()].filter((g) => g.refs.length >= 2).map((g) => ({
+      refs: compressRefs(g.refs),
+      nets: g.nets,
+      mode: 'series',
+      need: null,
+      shortPct: null,
+      proposed: `wired in parallel: same part type connected to the same nets (${g.nets.join(', ')})`,
+    })),
   };
 }

@@ -3,6 +3,7 @@ import {
 } from './models.js';
 import { MISSION_PROFILES, ALL_TABLES, SOURCES, STATUS } from './tables.js';
 import { netlistToParts, expandRefs } from './netlist.js';
+import { computeStructure } from './structure.js';
 
 const STORAGE_KEY = 'iec62380.board.v1';
 const FORMAT = 'iec62380-board';
@@ -45,7 +46,7 @@ function presetProfile(id) {
 }
 
 function emptyBoard() {
-  return { format: FORMAT, version: 1, title: 'Untitled board', years: 10, profile: presetProfile('geo-permanent'), parts: [] };
+  return { format: FORMAT, version: 1, title: 'Untitled board', years: 10, profile: presetProfile('geo-permanent'), parts: [], groups: [] };
 }
 
 function exampleBoard() {
@@ -100,6 +101,15 @@ function sanitize(raw) {
     addRise: Boolean(ph?.addRise),
   }));
   const preset = MISSION_PROFILES.rows.some((r) => r.id === raw.profile.preset) ? raw.profile.preset : null;
+  const groups = (Array.isArray(raw.groups) ? raw.groups : []).map((g) => ({
+    id: newId(),
+    refs: str(g?.refs),
+    nets: Array.isArray(g?.nets) ? g.nets.map(str) : [],
+    mode: g?.mode === 'redundant' ? 'redundant' : 'series',
+    need: isNum(g?.need) ? g.need : null,
+    shortPct: isNum(g?.shortPct) ? g.shortPct : null,
+    proposed: typeof g?.proposed === 'string' ? g.proposed : null,
+  }));
   return {
     board: {
       format: FORMAT, version: 1,
@@ -107,6 +117,7 @@ function sanitize(raw) {
       years: isNum(raw.years) ? raw.years : 10,
       profile: { preset, phases, tauOff: isNum(raw.profile.tauOff) ? raw.profile.tauOff : null },
       parts,
+      groups,
     },
     skipped,
   };
@@ -122,6 +133,7 @@ function exportable(board) {
       ...(Object.keys(confirmed ?? {}).length ? { confirmed } : {}),
       ...(source ? { source } : {}),
     })),
+    groups: (board.groups ?? []).map(({ id, ...g }) => g),
   };
 }
 
@@ -146,6 +158,8 @@ let state = load() ?? exampleBoard();
 const findPart = (id) => state.parts.find((p) => p.id === id);
 const guessCount = (part) => Object.keys(part.inferred ?? {}).length;
 const canSplit = (part) => part.qty > 1 && expandRefs(part.ref).length === part.qty;
+const findGroup = (id) => state.groups.find((g) => g.id === id);
+const newGroup = (extra = {}) => ({ id: newId(), refs: '', nets: [], mode: 'series', need: null, shortPct: null, proposed: null, ...extra });
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -292,6 +306,46 @@ function rerenderPart(part, focusKey) {
   if (focusKey) $(`[data-id="${part.id}"][data-key="${focusKey}"]`)?.focus();
 }
 
+function groupHTML(g) {
+  const d = (key) => `data-bind="group" data-gid="${g.id}" data-key="${key}"`;
+  const redundant = g.mode === 'redundant';
+  return `
+    <article class="group" data-group="${g.id}">
+      <div class="group-fields">
+        <div class="field wide" data-gfield="refs"><label for="${g.id}-refs">Parts in the group <span class="unit">(references)</span></label>
+          <input id="${g.id}-refs" type="text" value="${esc(g.refs)}" placeholder="e.g. C1–C8" autocomplete="off" ${d('refs')}></div>
+        <div class="field"><label for="${g.id}-mode">How failures count</label>
+          <select id="${g.id}-mode" ${d('mode')}>${optionsHTML([
+            { value: 'series', label: 'Series: any failure fails the board' },
+            { value: 'redundant', label: 'Redundant: some may fail' },
+          ], g.mode)}</select></div>
+        ${redundant ? `
+        <div class="field" data-gfield="need"><label for="${g.id}-need">Must keep working<span class="state-tag"></span></label>
+          <input id="${g.id}-need" type="number" min="1" step="1" inputmode="numeric" value="${esc(g.need ?? '')}" ${d('need')}>
+          <p class="help" data-gout="of"></p></div>
+        <div class="field" data-gfield="shortPct"><label for="${g.id}-short">Failures that break it anyway <span class="unit">(%)</span><span class="state-tag"></span></label>
+          <input id="${g.id}-short" type="number" min="0" max="100" step="any" inputmode="decimal" value="${esc(g.shortPct ?? '')}" ${d('shortPct')}>
+          <p class="help">For example shorts. 100% makes the group the same as series.</p></div>` : ''}
+        <div class="group-result" data-gout="result"></div>
+        <button type="button" class="icon" data-act="del-group" data-gid="${g.id}" title="Remove group">✕</button>
+      </div>
+      ${g.proposed ? `<p class="guess" data-gout="proposed">Proposed by the netlist import: ${esc(g.proposed)}.</p>` : ''}
+      ${g.nets?.length && !g.proposed ? `<p class="source-line">Nets: ${esc(g.nets.join(', '))}</p>` : ''}
+      <ul class="part-errors" data-gout="problems"></ul>
+    </article>`;
+}
+
+function renderGroups() {
+  $('#groups').innerHTML = state.groups.map(groupHTML).join('');
+}
+
+function rerenderGroup(g, focusKey) {
+  const el = $(`[data-group="${g.id}"]`);
+  if (!el) return;
+  el.outerHTML = groupHTML(g);
+  if (focusKey) $(`[data-gid="${g.id}"][data-key="${focusKey}"]`)?.focus();
+}
+
 function renderSources() {
   const link = (key) => {
     const s = SOURCES[key];
@@ -319,6 +373,7 @@ function renderAll() {
   renderPhases();
   renderAddModel();
   renderParts();
+  renderGroups();
   renderSources();
   update();
 }
@@ -372,10 +427,14 @@ function update() {
     }
   });
 
-  const total = board.total;
   const years = isNum(state.years) ? state.years : 0;
-  const R = reliability(total, years);
-  const mtbf = mtbfHours(total);
+  const structure = computeStructure(board.items, state.groups, years);
+  updateGroups(structure);
+  // With redundant groups the board figures are averages over the mission.
+  const redundancy = structure.redundancy;
+  const total = redundancy ? structure.boardFit : board.total;
+  const R = redundancy ? structure.survival(years * 8760) : reliability(total, years);
+  const mtbf = redundancy ? structure.mttfHours : mtbfHours(total);
   const pieces = board.items.reduce((s, it) => s + it.result.qty, 0);
   const warn = [];
   if (problems.length) warn.push('The mission profile has problems (see above).');
@@ -389,21 +448,57 @@ function update() {
   const pct = (r) => `${(r * 100).toFixed(r > 0.999 ? 3 : 1)}%`;
   const boundNote = partial ? `<div class="sub">Lower bound: ${plural(board.incomplete, 'line')} left out</div>` : '';
   $('#summary').innerHTML = `<div class="tiles${partial ? ' partial' : ''}">
-    <div class="tile"><div class="label">Board failure rate</div><div class="value">${ge}${fmt2(total)} FIT</div><div class="sub">${fmt(pieces)} pieces in ${state.parts.length} lines</div>${boundNote}</div>
-    <div class="tile bounded"><div class="label">MTBF</div><div class="value">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf)} h` : '—'}</div><div class="sub">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf / 8760)} years` : 'no failure rate yet'}</div></div>
+    <div class="tile"><div class="label">${redundancy ? `Board failure rate, average over ${fmt(years)} years` : 'Board failure rate'}</div><div class="value">${ge}${fmt2(total)} FIT</div><div class="sub">${fmt(pieces)} pieces in ${state.parts.length} lines${redundancy ? ', with redundancy' : ''}</div>${boundNote}</div>
+    <div class="tile bounded"><div class="label">${redundancy ? 'Mean time to failure' : 'MTBF'}</div><div class="value">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf)} h` : '—'}</div><div class="sub">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf / 8760)} years` : 'no failure rate yet'}</div></div>
     <div class="tile bounded"><div class="label">Survival over ${fmt(years)} years</div><div class="value">${le}${pct(R)}</div><div class="sub">${ge}${fmt2(1000 * (1 - R))} failures per 1000 boards</div></div>
     </div>${warn.length ? `<p class="warn">${warn.map(esc).join(' ')}</p>` : ''}
-    <p class="scope">The total counts a failure of any listed part as a board failure, so parts wired in parallel still add up. Solder joints are part of each component's package term; the bare printed circuit board and anything not in the list are not included.</p>`;
+    <p class="scope">${redundancy
+    ? 'Parts in redundant groups count as set under Reliability structure; every other part counts in series.'
+    : 'The total counts a failure of any listed part as a board failure, so parts wired in parallel still add up unless you group them under Reliability structure.'} Solder joints are part of each component's package term; the bare printed circuit board and anything not in the list are not included.</p>`;
 
+  const sum = board.total;
   const sorted = [...board.items].sort((a, b) => b.result.total - a.result.total || Number(a.result.complete) - Number(b.result.complete));
   $('#results').innerHTML = sorted.length
     ? sorted.map(({ comp, result }) => {
       const model = MODELS[comp.model];
-      const share = total > 0 ? (100 * result.total) / total : 0;
+      const share = sum > 0 ? (100 * result.total) / sum : 0;
       const each = result.complete ? fmt(result.fit) : '<span class="bad">Missing</span>';
       return `<tr><td>${esc(comp.ref)}</td><td class="opt">${esc(model.describe({ ...model.defaults, ...comp.params }))}</td><td class="num">${fmt(result.qty)}</td><td class="num opt">${each}</td><td class="num">${result.complete ? fmt(result.total) : '—'}</td><td class="num">${result.complete ? `${share.toFixed(1)}%` : '—'}</td></tr>`;
-    }).join('') + `<tr><td><strong>Board</strong></td><td class="opt"></td><td></td><td class="opt"></td><td class="num"><strong>${fmt(total)}</strong></td><td class="num">100%</td></tr>`
+    }).join('')
+      + (redundancy ? `<tr><td colspan="4">Sum of part rates (all in series)</td><td class="num">${fmt(sum)}</td><td class="num">100%</td></tr>` : '')
+      + `<tr><td><strong>${redundancy ? `Board, with redundancy (average over ${fmt(years)} years)` : 'Board'}</strong></td><td class="opt"></td><td></td><td class="opt"></td><td class="num"><strong>${fmt(total)}</strong></td><td class="num">${redundancy ? '' : '100%'}</td></tr>`
     : '<tr><td colspan="6">No parts yet.</td></tr>';
+}
+
+// Group results, problems and the summary tree.
+function updateGroups(structure) {
+  structure.groups.forEach(({ group, refs, redundant, fit, sum, problems }) => {
+    const el = $(`[data-group="${group.id}"]`);
+    if (!el) return;
+    const out = (k) => $(`[data-gout="${k}"]`, el);
+    out('result').innerHTML = redundant
+      ? `<div class="each">${fmt(fit)} FIT</div><div class="total">average over the mission (${fmt(sum)} FIT if in series)</div>`
+      : `<div class="each">${fmt(sum)} FIT</div><div class="total">in series${group.mode === 'redundant' ? ' until the problems below are fixed' : ''}</div>`;
+    out('problems').innerHTML = problems.map((p) => `<li>${esc(p)}</li>`).join('');
+    if (out('of')) out('of').textContent = `of ${refs.length} in the group`;
+    for (const wrap of el.querySelectorAll('[data-gfield]')) {
+      const key = wrap.dataset.gfield;
+      const missing = group.mode === 'redundant' && (key === 'need' || key === 'shortPct') && group[key] == null;
+      wrap.classList.toggle('missing', missing);
+      const tag = wrap.querySelector('.state-tag');
+      if (tag) tag.textContent = missing ? 'Missing' : '';
+      wrap.querySelector('input')?.setAttribute('aria-invalid', String(missing));
+    }
+  });
+  const label = (g) => `${esc(g.group.refs || '(empty group)')}${g.redundant ? `: ${g.group.need} of ${g.refs.length} must work, ${fmt(g.group.shortPct)}% break it anyway` : ': in series'}`;
+  const inGroups = structure.groups.filter((g) => !g.redundant).reduce((s, g) => s + g.sum, 0);
+  $('#structure-tree').innerHTML = state.groups.length
+    ? `<ul class="tree"><li><span>Board</span><b>${fmt(structure.boardFit)} FIT</b>
+        <ul>
+          <li><span>All other parts, in series</span><b>${fmt(structure.seriesFit - inGroups)} FIT</b></li>
+          ${structure.groups.map((g) => `<li class="${g.redundant ? 'redundant' : ''}"><span>${label(g)}</span><b>${fmt(g.redundant ? g.fit : g.sum)} FIT</b></li>`).join('')}
+        </ul></li></ul>`
+    : '<p class="empty">No groups: every part counts in series.</p>';
 }
 
 // ---------------------------------------------------------------------------
@@ -444,6 +539,13 @@ function boardCSV() {
     ]);
   }
   rows.push(['Board', '', '', '', '', board.total, '100', '', board.incomplete ? `Lower bound: ${board.incomplete} lines left out` : '', '', '']);
+  const structure = computeStructure(board.items, state.groups, state.years);
+  for (const g of structure.groups) {
+    rows.push([`Group ${g.group.refs}`, g.redundant ? 'Redundant group' : 'Group, in series',
+      g.redundant ? `${g.group.need} of ${g.refs.length} must work; ${g.group.shortPct}% of failures break it anyway` : '',
+      g.refs.length, '', g.redundant ? g.fit : g.sum, '', '', g.problems.join(' '), '', '']);
+  }
+  if (structure.redundancy) rows.push([`Board with redundancy, average over ${state.years} years`, '', '', '', '', structure.boardFit, '', '', '', '', '']);
   return rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
 }
 
@@ -480,6 +582,13 @@ function nextRef(model) {
   return `${prefix}${max + 1}`;
 }
 
+// Once the user edits a proposed group, it is theirs; the proposal note goes.
+function clearProposal(g) {
+  if (!g.proposed) return;
+  g.proposed = null;
+  $(`[data-group="${g.id}"] [data-gout="proposed"]`)?.remove();
+}
+
 // An edited value is the user's own, no longer a guess, confirmed or not.
 function clearGuess(part, key) {
   if (part.inferred?.[key]) delete part.inferred[key];
@@ -497,6 +606,10 @@ document.addEventListener('input', (e) => {
     const ph = state.profile.phases[Number(el.dataset.i)];
     ph[el.dataset.key] = el.dataset.key === 'name' ? el.value : numOrNull(el.value);
     if (el.dataset.key !== 'name') markCustomProfile();
+  } else if (bind === 'group') {
+    const g = findGroup(el.dataset.gid);
+    g[el.dataset.key] = el.dataset.key === 'refs' ? el.value : numOrNull(el.value);
+    clearProposal(g);
   } else if (bind === 'part') {
     const part = findPart(el.dataset.id);
     const key = el.dataset.key;
@@ -526,6 +639,11 @@ document.addEventListener('change', (e) => {
   } else if (bind === 'phase' && el.type === 'checkbox') {
     state.profile.phases[Number(el.dataset.i)].addRise = el.checked;
     markCustomProfile();
+  } else if (bind === 'group' && el.tagName === 'SELECT') {
+    const g = findGroup(el.dataset.gid);
+    g.mode = el.value;
+    clearProposal(g);
+    rerenderGroup(g, 'mode');
   } else if (bind === 'part' && el.tagName === 'SELECT') {
     const part = findPart(el.dataset.id);
     part.params[el.dataset.key] = el.value || null;
@@ -612,6 +730,17 @@ document.addEventListener('click', (e) => {
       state.parts.splice(state.parts.indexOf(part), 1);
       renderParts();
       break;
+    case 'add-group': {
+      const g = newGroup();
+      state.groups.push(g);
+      renderGroups();
+      $(`#${g.id}-refs`)?.focus();
+      break;
+    }
+    case 'del-group':
+      state.groups.splice(state.groups.indexOf(findGroup(btn.dataset.gid)), 1);
+      renderGroups();
+      break;
     default: return;
   }
   save();
@@ -648,6 +777,7 @@ $('#netlist-file').addEventListener('change', async (e) => {
   }
   if (state.parts.length && !confirm(`Replace the current parts with the ${result.lines.length} lines from “${file.name}”? The mission profile is kept.`)) return;
   state.parts = result.lines.map((l) => makePart(l.model, l.ref, l.qty, l.params, { inferred: { ...l.inferred }, source: l.source }));
+  state.groups = result.groups.map((g) => newGroup(g));
   if (['Untitled board', 'Example board', ''].includes(state.title)) state.title = file.name.replace(/\.[^.]+$/, '');
   renderAll();
   save();
@@ -656,6 +786,7 @@ $('#netlist-file').addEventListener('change', async (e) => {
   showReport(`Read ${plural(result.components, 'component')} from “${esc(file.name)}” (${esc(result.format)}, ${plural(result.nets, 'net')}) into ${plural(result.lines.length, 'line')}.
     ${result.skippedCount ? `Skipped ${result.skippedCount} mechanical items (${esc(result.skipped)}).` : ''}
     <strong>${plural(board.incomplete, 'line needs', 'lines need')} input</strong> (red, “Missing”) and ${plural(guessed, 'line has', 'lines have')} guessed values (amber, “Guessed”).
+    ${result.groups.length ? `Proposed ${plural(result.groups.length, 'group')} of parts wired in parallel under Reliability structure; they count in series until you mark them redundant.` : ''}
     Tick “Only parts that need attention” to work through them.`);
 });
 

@@ -315,3 +315,28 @@ table.results tfoot td { font-weight: 650; border-bottom: none; }
   .add-bar, .add-bar select { width: 100%; }
   table.results .opt { display: none; }
 }
+
+/* Reliability structure */
+
+.groups { display: grid; gap: 10px; margin-top: 12px; }
+.group { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; }
+.group-fields { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.group-fields .field { flex: 1 1 170px; }
+.group-fields .field.wide { flex: 2 1 220px; }
+.group-result { flex: 0 0 auto; min-width: 150px; text-align: right; font-variant-numeric: tabular-nums; }
+.group-result .each { font-weight: 650; }
+.group-result .total { color: var(--text-2); font-size: 0.8125rem; }
+.group .guess, .group .source-line { margin: 8px 0 0; }
+.group .part-errors { margin-top: 8px; }
+
+ul.tree, ul.tree ul { list-style: none; margin: 0; padding: 0; }
+ul.tree { font-variant-numeric: tabular-nums; }
+ul.tree li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; padding: 3px 0; }
+ul.tree li > ul { grid-column: 1 / -1; margin-left: 10px; padding-left: 12px; border-left: 2px solid var(--border); }
+ul.tree li > span { overflow-wrap: anywhere; }
+ul.tree li.redundant > span { font-weight: 600; }
+ul.tree b { font-weight: 650; }
+
+@media (max-width: 760px) {
+  .group-result { text-align: left; min-width: 0; }
+}
