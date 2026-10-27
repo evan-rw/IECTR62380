@@ -59,13 +59,14 @@ KEY = {
 
 
 # One boot in a three-quarter view: the shaft rises at the back right, the toe
-# comes towards the viewer at about seven o'clock. Lit from the upper left.
+# comes towards the viewer at about seven o'clock. Lit from the upper left; the
+# ankle opening is a gray hole, darker at the back.
 BOOT = {
     'grid': [
         '................',
         '.......KKKKKKK..',
-        '......KLLLLLLLK.',
-        '......KLOOOOOBK.',
+        '......KLGGGGGLK.',
+        '......KLgggggBK.',
         '......KHLLLBBDK.',
         '......KHHHHBDDK.',
         '......KHHHHBDDK.',
@@ -79,7 +80,7 @@ BOOT = {
         '.KHHHBSSSKK.....',
         '..KSSSKKK.......',
     ],
-    'colours': {'K': '#241000', 'O': '#3a1c06', 'L': '#f6d29a', 'H': '#e09a48', 'B': '#9a5418', 'D': '#6a3a10', 'S': '#4a2a10'},
+    'colours': {'K': '#241000', 'G': '#4e4e4e', 'g': '#8a8a8a', 'L': '#f6d29a', 'H': '#e09a48', 'B': '#9a5418', 'D': '#6a3a10', 'S': '#4a2a10'},
 }
 
 
