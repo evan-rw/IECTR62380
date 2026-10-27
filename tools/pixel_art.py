@@ -137,6 +137,24 @@ DETECTIVE = {
 }
 
 
+# Right-pointing chevrons in repeating bands: black, dark green, bright green, white.
+ARROW_BANDS = ('#101010', '#2f8a1e', '#7cf25c', '#f4f4f4')
+
+
+def arrows(size=16, band=4):
+    """16×16 tile of '>' chevrons, with a dark gray frame top and bottom."""
+    pixel = [[None] * size for _ in range(size)]
+    mid = (size - 1) / 2
+    for y in range(size):
+        for x in range(size):
+            if y in (0, size - 1):
+                pixel[y][x] = '#5a5a5a'
+                continue
+            s = x + abs(y - mid)
+            pixel[y][x] = ARROW_BANDS[int(s // band) % len(ARROW_BANDS)]
+    return pixel
+
+
 # A circuit board: bright green traces on dark green, with a darker edge.
 # Each trace is a polyline of horizontal, vertical and 45° segments.
 BOARD_COLOURS = {'edge': '#1d4a14', 'board': '#2f6a22', 'trace': '#7cf25c'}
@@ -233,6 +251,7 @@ def main():
         'chip': from_grid(CHIP),
         'board': circuit_board(),
         'detective': from_grid(DETECTIVE),
+        'arrows': arrows(),
         'portal-floor': portal_on_floor(),
     }
     for name, pixel in pieces.items():

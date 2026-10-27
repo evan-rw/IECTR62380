@@ -370,8 +370,9 @@ table.results tr:last-child td { background: var(--face); font-weight: bold; bor
 .st-ghost::before, .st-row.drop .st-nm::before { background-image: url(art/portal.svg); }
 /* Title-bar icons, where 1990s windows put theirs: a circuit board for the board, a
    chip for the parts, a boot for the mission profile (a walk through the year), and an
-   inspector for the reliability structure, who traces how failures travel. */
-#board-heading, #profile-heading, #parts-heading, #structure-heading {
+   inspector for the reliability structure, who traces how failures travel, and arrows
+   for the results, where the parts flow into the board total. */
+#board-heading, #profile-heading, #parts-heading, #structure-heading, #results-heading {
   padding-left: 27px;
   background: var(--title-icon) 6px center / 16px 16px no-repeat, linear-gradient(90deg, var(--title-a), var(--title-b));
   image-rendering: pixelated;
@@ -380,6 +381,7 @@ table.results tr:last-child td { background: var(--face); font-weight: bold; bor
 #profile-heading { --title-icon: url(art/boot.svg); }
 #parts-heading { --title-icon: url(art/chip.svg); }
 #structure-heading { --title-icon: url(art/detective.svg); }
+#results-heading { --title-icon: url(art/arrows.svg); }
 /* An empty board: parts arrive from the schematic. */
 .parts .empty {
   display: flex; align-items: center; min-height: 64px; padding-left: 76px;
