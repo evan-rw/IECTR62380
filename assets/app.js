@@ -5,13 +5,14 @@ import { ENVIRONMENTS, TABLES_217F, SOURCES_217F } from './tables217f.js';
 import { MISSION_PROFILES, ALL_TABLES, SOURCES, STATUS } from './tables.js';
 import { netlistToParts, expandRefs } from './netlist.js';
 import { computeStructure } from './structure.js';
+import { failureModesFor, suggestedShortShare, FAILURE_MODE_SOURCE } from './failuremodes.js';
 
 const STORAGE_KEY = 'iec62380.board.v1';
 const FORMAT = 'iec62380-board';
 const REF_PREFIX = {
   ic: 'U', diode: 'D', transistor: 'Q', capacitor: 'C', resistor: 'R', inductor: 'L', fixed: 'X',
   'mil-relay': 'K', 'mil-ssr': 'K', 'mil-switch': 'SW', 'mil-connector': 'J', 'mil-socket': 'XU',
-  'mil-pwb': 'PCB', 'mil-crystal': 'Y', 'mil-fuse': 'F', 'mil-lamp': 'DS', 'mil-opto': 'D',
+  'mil-pwb': 'PCB', 'mil-crystal': 'Y', 'mil-fuse': 'F', 'mil-lamp': 'DS', 'mil-opto': 'D', vendor: 'U',
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -114,6 +115,7 @@ function sanitize(raw) {
     need: isNum(g?.need) ? g.need : null,
     shortPct: isNum(g?.shortPct) ? g.shortPct : null,
     proposed: typeof g?.proposed === 'string' ? g.proposed : null,
+    inferred: typeof g?.inferred?.shortPct === 'string' ? { shortPct: g.inferred.shortPct } : {},
   }));
   return {
     board: {
@@ -141,7 +143,7 @@ function exportable(board) {
       ...(Object.keys(confirmed ?? {}).length ? { confirmed } : {}),
       ...(source ? { source } : {}),
     })),
-    groups: (board.groups ?? []).map(({ id, ...g }) => g),
+    groups: (board.groups ?? []).map(({ id, inferred, ...g }) => ({ ...g, ...(inferred?.shortPct ? { inferred } : {}) })),
   };
 }
 
@@ -168,7 +170,7 @@ const guessCount = (part) => Object.keys(part.inferred ?? {}).length;
 const canSplit = (part) => part.qty > 1 && expandRefs(part.ref).length === part.qty;
 const findGroup = (id) => state.groups.find((g) => g.id === id);
 const clauseOf = (m) => (m.group === 'MIL-HDBK-217F' ? m.clause : `Clause ${m.clause}`);
-const newGroup = (extra = {}) => ({ id: newId(), refs: '', nets: [], mode: 'series', need: null, shortPct: null, proposed: null, ...extra });
+const newGroup = (extra = {}) => ({ id: newId(), refs: '', nets: [], mode: 'series', need: null, shortPct: null, proposed: null, inferred: {}, ...extra });
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -245,6 +247,8 @@ function partHTML(part) {
       </div>
       <div class="part-body" id="${part.id}-body"${part.open ? '' : ' hidden'}>
         ${sourceHTML(part.source)}
+        <div class="field model-field"><label for="${part.id}-model">Part type</label>
+          <select id="${part.id}-model" data-bind="part-model" data-id="${part.id}">${optionsHTML(modelOptions(), part.model)}</select></div>
         <div class="fields">${main}</div>
         ${guessCount(part) ? `<p class="guess-bar">Amber fields were guessed from the netlist. <button type="button" data-act="confirm-guesses" data-id="${part.id}">Confirm guesses</button></p>` : ''}
         ${adv ? `<details class="advanced" data-id="${part.id}" data-open-key="advOpen"${part.advOpen ? ' open' : ''}><summary>Override table values</summary><div class="fields">${adv}</div></details>` : ''}
@@ -255,8 +259,14 @@ function partHTML(part) {
     </article>`;
 }
 
-function traceHTML(r, phases) {
-  if (!r.complete) return '<p class="help">Fill in the missing values to see the calculation.</p>';
+function failureModesHTML(fm) {
+  if (!fm) return '';
+  const modes = fm.modes.map(([mode, a]) => `${esc(mode)} ${Math.round(a * 100)}%`).join(' · ');
+  return `<p class="help">Failure modes of ${esc(fm.device.toLowerCase())}: ${modes} <span class="unit">(MIL-HDBK-338B Table 7.8-1)</span></p>`;
+}
+
+function traceHTML(r, phases, fm) {
+  if (!r.complete) return `<p class="help">Fill in the missing values to see the calculation.</p>${failureModesHTML(fm)}`;
   const breakdown = r.parts.map(([label, v]) => `<span>${esc(label)}: ${fmt(v)} FIT</span>`).join('');
   const values = r.values.length
     ? `<dl class="values">${r.values.map(([k, v, note]) => `<dt>${esc(k)}</dt><dd>${esc(v)}${note ? `<span class="note">${esc(note)}</span>` : ''}</dd>`).join('')}</dl>`
@@ -270,7 +280,7 @@ function traceHTML(r, phases) {
     ? `<div class="table-scroll"><table class="trace-table"><caption>Thermal cycles</caption><thead><tr><th>Phase</th><th class="num">n</th><th class="num">π_n</th><th class="num">ΔT °C</th><th class="num">π_n·ΔT^0.68</th></tr></thead><tbody>${
       r.cycling.map((c) => `<tr><td>${name(c.phase)}</td><td class="num">${fmt(c.n)}</td><td class="num">${fmt(c.piN)}</td><td class="num">${fmt(c.dT)}</td><td class="num">${fmt(c.term)}</td></tr>`).join('')}</tbody></table></div>`
     : '';
-  return `<div class="breakdown">${breakdown}</div>${values}${op}${cyc}`;
+  return `<div class="breakdown">${breakdown}</div>${values}${op}${cyc}${failureModesHTML(fm)}`;
 }
 
 function renderBoardBar() {
@@ -299,9 +309,13 @@ function renderPhases() {
   $('#env217f').innerHTML = optionsHTML(ENVIRONMENTS.map((e) => ({ value: e.id, label: e.label })), state.profile.env217f ?? 'GB');
 }
 
+// Part types grouped by method, for the Add part list and each part's type select.
+const modelOptions = () => Object.entries(MODELS)
+  .sort(([, a], [, b]) => MODEL_GROUPS.indexOf(a.group) - MODEL_GROUPS.indexOf(b.group))
+  .map(([id, m]) => ({ value: id, label: m.label.replace(/ \(MIL-HDBK-217F\)$/, ''), group: m.group }));
+
 function renderAddModel() {
-  const entries = Object.entries(MODELS).sort(([, a], [, b]) => MODEL_GROUPS.indexOf(a.group) - MODEL_GROUPS.indexOf(b.group));
-  $('#add-model').innerHTML = optionsHTML(entries.map(([id, m]) => ({ value: id, label: m.label.replace(/ \(MIL-HDBK-217F\)$/, ''), group: m.group })), 'ic');
+  $('#add-model').innerHTML = optionsHTML(modelOptions(), 'ic');
 }
 
 function renderParts() {
@@ -336,6 +350,7 @@ function groupHTML(g) {
           <p class="help" data-gout="of"></p></div>
         <div class="field" data-gfield="shortPct"><label for="${g.id}-short">Failures that break it anyway <span class="unit">(%)</span><span class="state-tag"></span></label>
           <input id="${g.id}-short" type="number" min="0" max="100" step="any" inputmode="decimal" value="${esc(g.shortPct ?? '')}" ${d('shortPct')}>
+          ${g.inferred?.shortPct ? `<p class="guess" data-gguess="shortPct">Guessed ${esc(g.inferred.shortPct)}. <button type="button" class="link" data-act="confirm-group-guess" data-gid="${g.id}">Confirm</button></p>` : ''}
           <p class="help">For example shorts. 100% makes the group the same as series.</p></div>` : ''}
         <div class="group-result" data-gout="result"></div>
         <button type="button" class="icon" data-act="del-group" data-gid="${g.id}" title="Remove group">✕</button>
@@ -372,6 +387,8 @@ function renderSources() {
   $('#source-list').innerHTML = `
     <p class="hint">None of the IEC TR 62380 values were taken from the standard. Its mission profiles are published excerpts: the free preview and TI's application note. Its other tables were copied from one open-source project, Kicad-Space-Reliability (MIT licence, see <a href="THIRD_PARTY_NOTICES.md">third-party notices</a>), and have not been checked against the standard. The MIL-HDBK-217F tables come from the public-domain handbook itself, read from its scanned pages and cross-checked as each table says.</p>
     <div class="table-scroll"><table class="source-table"><thead><tr><th>Table</th><th>Status</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <h3>Failure modes</h3>
+    <p class="hint">How each part type's failures split between short, open and drift, shown in each part's calculation and used to suggest a redundant group's critical share: <a href="${esc(FAILURE_MODE_SOURCE.url)}" rel="noopener">${esc(FAILURE_MODE_SOURCE.label)}</a>.</p>
     <h3>Models</h3><ul>${models}</ul>
     <h3>Not modelled yet</h3>
     <p class="hint">Add these as “Other part (failure rate entered)” with a rate from a datasheet or a vendor reliability report.</p>
@@ -417,7 +434,7 @@ function update() {
       ? '<span class="bad">Needs input</span>'
       : `<div class="each">${fmt(result.fit)} FIT</div>${result.qty !== 1 ? `<div class="total">× ${fmt(result.qty)} = ${fmt(result.total)} FIT</div>` : ''}`;
     $('[data-out="errors"]', el).innerHTML = result.errors.map((e) => `<li>${esc(e)}</li>`).join('');
-    $('[data-out="trace"]', el).innerHTML = traceHTML(result, board.prof.phases);
+    $('[data-out="trace"]', el).innerHTML = traceHTML(result, board.prof.phases, failureModesFor(comp.model, p));
     for (const wrap of el.querySelectorAll('[data-field]')) {
       const key = wrap.dataset.field;
       const missing = result.missing.includes(key);
@@ -450,7 +467,9 @@ function update() {
   const warn = [];
   if (problems.length) warn.push('The mission profile has problems (see above).');
   if (board.incomplete) warn.push(`${plural(board.incomplete, 'part line needs', 'part lines need')} more input; the total leaves ${board.incomplete > 1 ? 'them' : 'it'} out.`);
+  const guessedGroups = state.groups.filter((g) => g.mode === 'redundant' && g.inferred?.shortPct).length;
   if (guessedLines) warn.push(`${plural(guessedLines, 'line uses', 'lines use')} guessed values; check and confirm them.`);
+  if (guessedGroups) warn.push(`${plural(guessedGroups, 'redundant group uses', 'redundant groups use')} a guessed share of failures; check and confirm ${guessedGroups > 1 ? 'them' : 'it'}.`);
   // While lines are left out, the total is only a lower bound, so MTBF and
   // survival are upper bounds; say so and show fewer digits.
   const partial = board.incomplete > 0;
@@ -495,9 +514,13 @@ function updateGroups(structure) {
     for (const wrap of el.querySelectorAll('[data-gfield]')) {
       const key = wrap.dataset.gfield;
       const missing = group.mode === 'redundant' && (key === 'need' || key === 'shortPct') && group[key] == null;
+      const guessed = Boolean(group.inferred?.[key]) && !missing;
       wrap.classList.toggle('missing', missing);
+      wrap.classList.toggle('inferred', guessed);
       const tag = wrap.querySelector('.state-tag');
-      if (tag) tag.textContent = missing ? 'Missing' : '';
+      if (tag) tag.textContent = missing ? 'Missing' : guessed ? 'Guessed' : '';
+      const note = wrap.querySelector('[data-gguess]');
+      if (note) note.hidden = !guessed;
       wrap.querySelector('input')?.setAttribute('aria-invalid', String(missing));
     }
   });
@@ -586,11 +609,28 @@ function markCustomProfile() {
 }
 
 function nextRef(model) {
-  const prefix = REF_PREFIX[model];
+  const prefix = REF_PREFIX[model] ?? 'X';
   const re = new RegExp(`(?:^|[^A-Za-z])${prefix}(\\d+)`, 'g');
   let max = 0;
   for (const p of state.parts) for (const m of p.ref.matchAll(re)) max = Math.max(max, Number(m[1]));
   return `${prefix}${max + 1}`;
+}
+
+// Pre-fill a redundant group's critical share with the members' short-circuit
+// probability from MIL-HDBK-338B, marked as a guess.
+function suggestShortShare(g) {
+  const board = computeBoard({ profile: state.profile, components: state.parts });
+  const byRef = new Map();
+  for (const { comp, result } of board.items) {
+    const refs = expandRefs(comp.ref);
+    if (refs.length === result.qty) refs.forEach((r) => byRef.set(r, { comp, result }));
+  }
+  const members = expandRefs(g.refs).map((r) => byRef.get(r)).filter(Boolean)
+    .map(({ comp, result }) => ({ model: comp.model, params: { ...MODELS[comp.model].defaults, ...comp.params }, fit: result.complete ? result.fit : 0 }));
+  const s = suggestedShortShare(members);
+  if (!s) return;
+  g.shortPct = s.pct;
+  g.inferred = { shortPct: `from MIL-HDBK-338B Table 7.8-1: shorts are ${s.pct}% of failures of ${s.devices.map((d) => d.toLowerCase()).join(' and ')}` };
 }
 
 // Once the user edits a proposed group, it is theirs; the proposal note goes.
@@ -620,6 +660,7 @@ document.addEventListener('input', (e) => {
   } else if (bind === 'group') {
     const g = findGroup(el.dataset.gid);
     g[el.dataset.key] = el.dataset.key === 'refs' ? el.value : numOrNull(el.value);
+    if (g.inferred?.[el.dataset.key]) delete g.inferred[el.dataset.key];
     clearProposal(g);
   } else if (bind === 'part') {
     const part = findPart(el.dataset.id);
@@ -652,10 +693,21 @@ document.addEventListener('change', (e) => {
   } else if (bind === 'phase' && el.type === 'checkbox') {
     state.profile.phases[Number(el.dataset.i)].addRise = el.checked;
     markCustomProfile();
+  } else if (bind === 'part-model') {
+    // A new type starts from its own defaults; reference, quantity and netlist data stay.
+    const part = findPart(el.dataset.id);
+    part.model = el.value;
+    part.params = clone(MODELS[part.model].defaults);
+    if ('note' in part.params && part.source?.value) part.params.note = part.source.value;
+    part.inferred = {};
+    part.confirmed = {};
+    rerenderPart(part, null);
+    $(`#${part.id}-model`)?.focus();
   } else if (bind === 'group' && el.tagName === 'SELECT') {
     const g = findGroup(el.dataset.gid);
     g.mode = el.value;
     clearProposal(g);
+    if (g.mode === 'redundant' && g.shortPct == null) suggestShortShare(g);
     rerenderGroup(g, 'mode');
   } else if (bind === 'part' && el.tagName === 'SELECT') {
     const part = findPart(el.dataset.id);
@@ -748,6 +800,12 @@ document.addEventListener('click', (e) => {
       state.groups.push(g);
       renderGroups();
       $(`#${g.id}-refs`)?.focus();
+      break;
+    }
+    case 'confirm-group-guess': {
+      const g = findGroup(btn.dataset.gid);
+      g.inferred = {};
+      rerenderGroup(g);
       break;
     }
     case 'del-group':

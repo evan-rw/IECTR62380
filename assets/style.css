@@ -224,6 +224,7 @@ table.phases td.check { text-align: center; }
 
 .part-body { border-top: 1px solid var(--border); padding: 12px 10px; }
 .part-body[hidden] { display: none; }
+.model-field { max-width: 420px; margin-bottom: 12px; }
 .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
 .fields .wide { grid-column: span 2; }
 .help { margin: 4px 0 0; font-size: 0.78rem; color: var(--text-2); }

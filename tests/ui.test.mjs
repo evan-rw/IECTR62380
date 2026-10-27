@@ -106,18 +106,19 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
     click($('[data-act="add-part"]'));
   }
   const refs = $$('.part [data-key="ref"]').map((i) => i.value);
-  assert.deepEqual(refs.slice(8), ['U4', 'D5', 'Q3', 'C22', 'R31', 'L1', 'X1'], 'numbering continues past ranges like D1–D4');
-  assert.match(warn(), /6 part lines need more input/, 'all but the capacitor');
+  assert.deepEqual(refs.slice(8), ['U4', 'D5', 'Q3', 'C22', 'R31', 'L1', 'U5', 'X1'], 'numbering continues past ranges like D1–D4');
+  assert.match(warn(), /7 part lines need more input/, 'all but the capacitor');
   fill(cardFor('U4'), { count: 1000, power: 0.1, rja: 50 });
   fill(cardFor('D5'), { power: 0.01, rja: 300 });
   fill(cardFor('Q3'), { stress: 0.5, power: 0.05, rja: 300 });
   fill(cardFor('R31'), { power: 0.01, rated: 0.1 });
   fill(cardFor('L1'), { l0: 1, ploss: 0.1, area: 0.04 });
+  fill(cardFor('U5'), { fit: 10, tref: 55, ea: 0.7, power: 0.1, rja: 50 });
   fill(cardFor('X1'), { fit: 25 });
   assert.equal(warn(), '');
 
   // MIL-HDBK-217F parts: grouped in the list, scaled by the board's environment.
-  assert.deepEqual([...$('#add-model').querySelectorAll('optgroup')].map((g) => g.label), ['IEC TR 62380 approach', 'MIL-HDBK-217F', 'Other']);
+  assert.deepEqual([...$('#add-model').querySelectorAll('optgroup')].map((g) => g.label), ['IEC TR 62380 approach', 'MIL-HDBK-217F', 'Vendor data', 'Other']);
   assert.equal($('#env217f').options.length, 14);
   assert.equal($('#env217f').value, 'GB');
   const before217f = boardTotal();
@@ -147,7 +148,7 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   const fixed = cardFor('X1');
   const before = boardTotal();
   typeInto($('[data-key="qty"]', fixed), 2);
-  assert.ok(Math.abs(boardTotal() - before - 25) < 0.15, `${boardTotal()} vs ${before}`);
+  assert.ok(Math.abs(boardTotal() - before - 25) <= 0.6, `${boardTotal()} vs ${before}`); // shown to 3 significant digits
   click($('[data-act="dup"]', fixed));
   assert.ok(cardFor('X1 copy'));
   click($('[data-act="del"]', cardFor('X1 copy')));
@@ -227,6 +228,9 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   choose($('[data-key="package"]', mcuCard), 'pqfp-10');
   assert.equal($('[data-confirmed-for="package"]', cardFor('U1')), null);
 
+  // The calculation panel lists the part's failure modes from MIL-HDBK-338B.
+  assert.match($('[data-out="trace"]', cardFor('C1–C3')).textContent, /Failure modes of capacitor, ceramic: Short 49% · Change in Value 29% · Open 22%/);
+
   // Split turns a grouped line into one line per reference, keeping its values.
   const caps = cardFor('C1–C3');
   click($('[data-act="split"]', caps));
@@ -248,19 +252,26 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.match(alerted, /Could not read “notes.txt”: No components found/);
   assert.equal($$('.part').length, partsBefore);
 
-  // Marking the proposed group redundant: its two inputs are Missing and it counts
-  // in series until they are filled; then the board figures become mission averages.
+  // Marking the proposed group redundant: the short share is pre-filled from
+  // MIL-HDBK-338B as a guess, "must keep working" is Missing, and the group counts
+  // in series until it is filled; then the board figures become mission averages.
   const seriesTotal = boardTotal();
   choose($('[data-bind="group"][data-key="mode"]'), 'redundant');
   let group = $('.group');
   assert.equal($('[data-gout="proposed"]', group), null, 'editing a proposal makes it the user\'s');
-  assert.deepEqual($$('.field.missing', group).map((f) => f.dataset.gfield), ['need', 'shortPct']);
+  assert.deepEqual($$('.field.missing', group).map((f) => f.dataset.gfield), ['need']);
+  assert.equal($('[data-key="shortPct"]', group).value, '49', 'ceramic capacitors: short .49');
+  assert.ok($('[data-gfield="shortPct"]', group).classList.contains('inferred'));
+  assert.match($('[data-gguess="shortPct"]', group).textContent, /Table 7\.8-1: shorts are 49% of failures of capacitor, ceramic/);
+  assert.match(warn(), /1 redundant group uses a guessed share of failures/);
   assert.match($('[data-gout="problems"]', group).textContent, /Missing: how many parts must keep working/);
   assert.equal(boardTotal(), seriesTotal);
   typeInto($('[data-key="need"]', group), 2);
   typeInto($('[data-key="shortPct"]', group), 50);
   group = $('.group');
   assert.equal($$('.field.missing', group).length, 0);
+  assert.ok(!$('[data-gfield="shortPct"]', group).classList.contains('inferred'), 'typing a value replaces the guess');
+  assert.doesNotMatch(warn(), /guessed share/);
   assert.equal($('[data-gout="of"]', group).textContent, 'of 3 in the group');
   assert.match($('[data-gout="result"]', group).textContent, /average over the mission/);
   assert.match($('#summary .label').textContent, /average over 10 years/);
@@ -314,6 +325,15 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.equal(JSON.parse(localStorage.getItem('iec62380.board.v1')).parts.length, $$('.part').length);
   await pick('#import-file', { text: async () => '{"nope":1}' });
   assert.match(alerted, /not a board/);
+
+  // Last: changing a part's type keeps its reference, quantity and netlist data.
+  choose($('[data-bind="part-model"]', cardFor('R1')), 'vendor');
+  const asVendor = cardFor('R1');
+  assert.match($('.part-kind .model', asVendor).textContent, /Part with a vendor failure rate/);
+  assert.equal($('[data-key="note"]', asVendor).value, '10µ', 'the netlist value becomes the note');
+  assert.match($('.source-line', asVendor).textContent, /Footprint: R_0603_1608Metric/);
+  choose($('[data-bind="part-model"]', asVendor), 'resistor');
+  assert.equal($('.part-kind .model', cardFor('R1')).textContent.trim().startsWith('Resistor'), true);
 
   assert.deepEqual(errors, []);
 });

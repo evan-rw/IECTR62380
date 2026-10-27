@@ -101,6 +101,7 @@ const COMPLETE = {
   'mil-fuse': {},
   'mil-lamp': { voltage: 5, utilization: 0.5, application: 'dc' },
   'mil-opto': { type: 'led', power: 0.02, rja: 500 },
+  vendor: { fit: 10, tref: 55, ea: 0.7, power: 0.1, rja: 50 },
 };
 
 test('every model gives a finite, non-negative rate for every preset', () => {
@@ -182,4 +183,33 @@ test('automotive motor-control profile (TI SLOA294A Table 6-1)', () => {
 test('a working phase without a temperature is a profile problem', () => {
   assert.match(profileProblems({ phases: [{ tac: null, tau: 1, n: 0, dT: 0 }] })[0], /Phase 1 is a working phase but has no t_ac/);
   assert.deepEqual(profileProblems({ phases: [{ tac: 25, tau: 1, n: 0, dT: 0 }, { tac: null, tau: 0, n: 30, dT: 10 }] }), []);
+});
+
+test('vendor rate at one temperature, rescaled by Arrhenius', () => {
+  const prof = normaliseProfile({ phases: [{ tac: 40, tau: 1, n: 0, dT: 0 }] });
+  // 10 FIT at 55 °C, Ea 0.7 eV, used at T_j = 40 + 45 = 85 °C.
+  const r = computeComponent({ model: 'vendor', qty: 1, params: { method: 'arrhenius', fit: 10, tref: 55, ea: 0.7, power: 1, rja: 45 } }, prof);
+  assert.deepEqual(r.errors, []);
+  close(r.fit, 79.67904984765495, 1e-4);
+  // Half the time switched off halves it.
+  const half = normaliseProfile({ phases: [{ tac: 40, tau: 0.5, n: 0, dT: 0 }] });
+  close(computeComponent({ model: 'vendor', qty: 1, params: { method: 'arrhenius', fit: 10, tref: 55, ea: 0.7, power: 1, rja: 45 } }, half).fit, 79.67904984765495 / 2, 1e-4);
+});
+
+test('vendor IEC 62380 report rescaled to another profile matches the IC model run there', () => {
+  const motor = normaliseProfile(preset('auto-motor'));
+  const geo = normaliseProfile(preset('geo-permanent'));
+  const ic = { ...MODELS.ic.defaults, family: 'mos-digital', count: 1e5, year: 2020, power: 0.3, rja: 50, package: 'so', pins: 8 };
+  const atMotor = MODELS.ic.compute(ic, motor);
+  const atGeo = MODELS.ic.compute(ic, geo);
+  const report = { method: 'report62380', dieFit: atMotor.parts[0][1], pkgFit: atMotor.parts[1][1], eosFit: 0, refProfile: 'auto-motor', refRise: 15, tech: 'mos', power: 0.3, rja: 50 };
+  // Same profile and rise: the report's numbers come back unchanged.
+  const same = computeComponent({ model: 'vendor', qty: 1, params: report }, motor);
+  assert.deepEqual(same.errors, []);
+  close(same.parts[0][1], atMotor.parts[0][1]);
+  close(same.parts[1][1], atMotor.parts[1][1]);
+  // Rescaled to the GEO profile: equal to the 62380 IC model evaluated there.
+  const moved = computeComponent({ model: 'vendor', qty: 1, params: report }, geo);
+  close(moved.parts[0][1], atGeo.parts[0][1]);
+  close(moved.parts[1][1], atGeo.parts[1][1]);
 });

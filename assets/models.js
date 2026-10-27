@@ -6,7 +6,7 @@
 
 import {
   EA, IC_FAMILIES, IC_PACKAGES, CTE_SUBSTRATES, CTE_PACKAGES, EOS,
-  DISCRETE_PACKAGES, DIODES, TRANSISTORS, CAPACITORS, RESISTORS, INDUCTORS,
+  DISCRETE_PACKAGES, DIODES, TRANSISTORS, CAPACITORS, RESISTORS, INDUCTORS, MISSION_PROFILES,
 } from './tables.js';
 import { MODELS_217F } from './models217f.js';
 
@@ -454,6 +454,94 @@ export const MODELS = {
     },
   },
 
+  vendor: {
+    label: 'Part with a vendor failure rate, rescaled',
+    group: 'Vendor data',
+    clause: 'vendor data',
+    status: 'Rescales a manufacturer\'s FIT to this mission profile. "One temperature" uses the Arrhenius law, per operating hour, weighted by working time. "IEC 62380 FIT report" rescales the die and package terms with the IEC TR 62380 formulas published in TI SLOA294A; no coefficient tables are involved.',
+    defaults: { method: 'arrhenius', note: '', fit: null, tref: null, ea: null, dieFit: null, pkgFit: null, eosFit: 0, refProfile: 'auto-motor', refRise: null, tech: 'mos', power: null, rja: null },
+    fields: [
+      { key: 'method', label: 'Vendor data', type: 'select', required: true, wide: true, options: [
+        { value: 'arrhenius', label: 'Failure rate at one temperature (qualification or reliability report)' },
+        { value: 'report62380', label: 'IEC 62380 FIT report: die and package FIT at a stated mission profile' },
+      ] },
+      { key: 'note', label: 'Part and source', type: 'text', wide: true },
+      { key: 'fit', label: 'Vendor failure rate', unit: 'FIT', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.method === 'arrhenius' },
+      { key: 'tref', label: 'At junction temperature', unit: '°C', type: 'number', step: 'any', required: true, show: (p) => p.method === 'arrhenius', help: 'The temperature the vendor states the rate at, often 55 °C.' },
+      { key: 'ea', label: 'Activation energy', unit: 'eV', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.method === 'arrhenius', help: 'Use the vendor\'s value; 0.7 eV is common for ICs.' },
+      { key: 'dieFit', label: 'Die FIT (report)', unit: 'FIT', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.method === 'report62380' },
+      { key: 'pkgFit', label: 'Package FIT (report)', unit: 'FIT', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.method === 'report62380' },
+      { key: 'eosFit', label: 'Overstress FIT (report)', unit: 'FIT', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.method === 'report62380', help: 'Usually 0 in vendor reports.' },
+      { key: 'refProfile', label: 'Report\'s mission profile', type: 'select', required: true, show: (p) => p.method === 'report62380', options: MISSION_PROFILES.rows.map((r) => ({ value: r.id, label: `${r.label} (${r.ref})` })) },
+      { key: 'refRise', label: 'Report\'s junction temperature rise', unit: '°C', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.method === 'report62380', help: 'Power dissipation × θ_JA as stated in the report.' },
+      { key: 'tech', label: 'Die technology', type: 'select', required: true, show: (p) => p.method === 'report62380', options: [
+        { value: 'mos', label: 'MOS (A = 3480 K)' }, { value: 'bipolar', label: 'Bipolar (A = 4640 K)' },
+      ] },
+      ...thermalFields.map((f) => ({ ...f, label: `${f.label}, in this design` })),
+    ],
+    describe: (p) => p.note || (p.method === 'report62380' ? 'Vendor IEC 62380 FIT report, rescaled' : 'Vendor failure rate, rescaled'),
+    compute(p, prof) {
+      const dTj = (p.rja || 0) * (p.power || 0);
+      if (p.method === 'report62380') {
+        const ref = normaliseProfile({ phases: byId(MISSION_PROFILES, p.refProfile).phases });
+        const ea = p.tech === 'bipolar' ? EA.BIPOLAR : EA.MOS;
+        const refRise = p.refRise || 0;
+        const opRef = operatingSum(ref, (ph) => ph.tac + refRise, ea, 328);
+        const opUser = operatingSum(prof, (ph) => ph.tac + dTj, ea, 328);
+        const cycRef = cyclingSum(ref, refRise);
+        const cycUser = cyclingSum(prof, dTj);
+        const errors = [];
+        if (!(opRef.value > 0)) errors.push('The report\'s mission profile has no working phase.');
+        if (!(cycRef.value > 0) && (p.pkgFit || 0) > 0) errors.push('The report\'s mission profile has no thermal cycles to rescale the package term from.');
+        const die = opRef.value > 0 ? (p.dieFit || 0) * (opUser.value / opRef.value) : 0;
+        const pkg = cycRef.value > 0 ? (p.pkgFit || 0) * (cycUser.value / cycRef.value) : 0;
+        const eos = p.eosFit || 0;
+        return {
+          fit: die + pkg + eos,
+          parts: [['Die', die], ['Package', pkg], ['Overstress', eos]],
+          values: [
+            ['Die', `${fmtE(p.dieFit || 0)} × ${fmtE(opUser.value)} / ${fmtE(opRef.value)}`, 'report die FIT × Σπ_t·τ here / in the report\'s profile'],
+            ['Package', `${fmtE(p.pkgFit || 0)} × ${fmtE(cycUser.value)} / ${fmtE(cycRef.value)}`, 'report package FIT × Σπ_n·ΔT^0.68 here / in the report\'s profile'],
+            ['ΔT_j', `${fmtE(dTj)} here, ${fmtE(refRise)} in the report`, '°C'],
+          ],
+          operating: opUser.rows,
+          cycling: cycUser.rows,
+          tempLabel: 't_j',
+          errors,
+        };
+      }
+      const k = 8.617e-5;
+      const tref = isNum(p.tref) ? p.tref : 25;
+      const ea = p.ea || 0;
+      const denom = prof.tauOn + prof.tauOff;
+      let total = 0;
+      const rows = [];
+      prof.phases.forEach((ph, i) => {
+        if (!(ph.tau > 0)) return;
+        const t = ph.tac + dTj;
+        const factor = Math.exp((ea / k) * (1 / (tref + 273) - 1 / (t + 273)));
+        total += factor * ph.tau;
+        rows.push({ phase: i, t, piT: factor, tau: ph.tau });
+      });
+      const weight = denom > 0 ? total / denom : 0;
+      const fit = (p.fit || 0) * weight;
+      return {
+        fit,
+        parts: [['Rescaled', fit]],
+        values: [
+          ['Vendor rate', `${fmtE(p.fit || 0)} FIT at ${fmtE(tref)} °C`, `E_a = ${fmtE(ea)} eV`],
+          ['ΔT_j', fmtE(dTj), '°C = R_JA × P'],
+          ['Σ AF·τ_i / (τ_on + τ_off)', fmtE(weight), 'AF = exp{E_a/k × [1/(T_ref+273) − 1/(T_j+273)]}'],
+        ],
+        operating: rows,
+        cycling: [],
+        tempLabel: 'T_j',
+        operatingLabel: 'AF',
+        errors: [],
+      };
+    },
+  },
+
   fixed: {
     label: 'Other part (failure rate entered)',
     clause: '—',
@@ -476,7 +564,7 @@ export const MODELS = {
 for (const m of Object.values(MODELS)) m.group ??= 'IEC TR 62380 approach';
 MODELS.fixed.group = 'Other';
 Object.assign(MODELS, MODELS_217F);
-export const MODEL_GROUPS = ['IEC TR 62380 approach', 'MIL-HDBK-217F', 'Other'];
+export const MODEL_GROUPS = ['IEC TR 62380 approach', 'MIL-HDBK-217F', 'Vendor data', 'Other'];
 
 // Families with no model here yet, under either method.
 export const PENDING_FAMILIES = [
