@@ -84,6 +84,31 @@ BOOT = {
 }
 
 
+# A DIP-8 chip from above: dark gray body with the pin-1 notch and dot at the
+# top, four silver legs on each side.
+CHIP = {
+    'grid': [
+        '................',
+        '....KKKKKKKK....',
+        '....KHHNNHHK....',
+        '.PPPKHoBBBBKPPP.',
+        '.pppKHBBBBBKppp.',
+        '....KHBBBBBK....',
+        '.PPPKHBBBBBKPPP.',
+        '.pppKHBBBBBKppp.',
+        '....KHBBBBBK....',
+        '.PPPKHBBBBBKPPP.',
+        '.pppKHBBBBBKppp.',
+        '....KHBBBBBK....',
+        '.PPPKHBBBBBKPPP.',
+        '.pppKHBBBBBKppp.',
+        '....KKKKKKKK....',
+        '................',
+    ],
+    'colours': {'K': '#141414', 'H': '#6a6a6a', 'B': '#3c3c3c', 'N': '#1c1c1c', 'o': '#8c8c8c', 'P': '#dcdcdc', 'p': '#8c8c8c'},
+}
+
+
 # Portal: concentric square rings, blue outside, then cyan, alternating to the centre.
 PORTAL_COLOURS = ('#0a3cff', '#00e4ff')
 
@@ -149,6 +174,7 @@ def main():
         'key': from_grid(KEY),
         'portal': portal(),
         'boot': from_grid(BOOT),
+        'chip': from_grid(CHIP),
         'portal-floor': portal_on_floor(),
     }
     for name, pixel in pieces.items():
