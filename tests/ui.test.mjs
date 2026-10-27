@@ -187,9 +187,16 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   const report = $('#import-report');
   assert.equal(report.hidden, false);
   assert.match(report.textContent, /Read 7 components from “demo.NET” \(Protel 2.0, 2 nets\) into 4 lines/);
-  assert.match(report.textContent, /Proposed 1 group of parts wired in parallel/);
-  assert.match($('#structure-tree').textContent, /C1–C3: in series/);
-  assert.match($('[data-gout="proposed"]').textContent, /same nets \(\+3V3, GND\)/);
+  assert.match(report.textContent, /Proposed 1 block of parts wired in parallel/);
+  // The proposal shows in the structure tree and the diagram; selecting it explains why.
+  const capsRow = () => $$('#st-tree li[role="treeitem"]').find((li) => /C1–C3 in parallel/.test($('.st-nm', li).textContent));
+  const inspector = () => $('#st-inspector');
+  assert.match($('.st-badge', capsRow()).textContent, /proposed/);
+  assert.match($('#st-tree').textContent, /Everything else, in series \(3\)/);
+  assert.ok($('#st-vp .frame.proposed'), 'the diagram draws the proposal dashed');
+  click($('.st-nm', capsRow()));
+  assert.equal(capsRow().getAttribute('aria-selected'), 'true');
+  assert.match($('.st-proposal', inspector()).textContent, /same nets \(\+3V3, GND\)/);
   assert.match(report.textContent, /Skipped 1 mechanical items \(TP1\)/);
   assert.match(report.textContent, /3 lines need input/);
   // Only the capacitors are complete: 3 × 0.15 × (π_t(26 °C)·0.5 + 3.3e-3 × 36^0.76 × 15^0.68).
@@ -256,35 +263,54 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.match(alerted, /Could not read “notes.txt”: No components found/);
   assert.equal($$('.part').length, partsBefore);
 
-  // Marking the proposed group redundant: the short share is pre-filled from
-  // MIL-HDBK-338B as a guess, "must keep working" is Missing, and the group counts
-  // in series until it is filled; then the board figures become mission averages.
+  // Accepting the proposed block marks it redundant: the short share is pre-filled
+  // from MIL-HDBK-338B as a guess, "must keep working" is Missing, and the block
+  // counts in series until it is filled; then the board figures become mission averages.
   const seriesTotal = boardTotal();
-  choose($('[data-bind="group"][data-key="mode"]'), 'redundant');
-  let group = $('.group');
-  assert.equal($('[data-gout="proposed"]', group), null, 'editing a proposal makes it the user\'s');
-  assert.deepEqual($$('.field.missing', group).map((f) => f.dataset.gfield), ['need']);
-  assert.equal($('[data-key="shortPct"]', group).value, '49', 'ceramic capacitors: short .49');
-  assert.ok($('[data-gfield="shortPct"]', group).classList.contains('inferred'));
-  assert.match($('[data-gguess="shortPct"]', group).textContent, /Table 7\.8-1: shorts are 49% of failures of capacitor, ceramic/);
-  assert.match(warn(), /1 redundant group uses a guessed share of failures/);
-  assert.match($('[data-gout="problems"]', group).textContent, /Missing: how many parts must keep working/);
+  click($('.st-nm', capsRow()));
+  click($('[data-st="accept"]', inspector()));
+  assert.equal($('.st-proposal', inspector()), null, 'accepting makes the proposal the user\'s');
+  assert.deepEqual($$('.st-field.missing', inspector()).map((f) => f.dataset.f), ['need']);
+  assert.equal($('#st-short').value, '49', 'ceramic capacitors: short .49');
+  assert.ok($('[data-f="shortPct"]', inspector()).classList.contains('inferred'));
+  assert.match($('[data-guess]', inspector()).textContent, /Table 7\.8-1: shorts are 49% of failures of capacitor, ceramic/);
+  assert.match($('.st-problems', inspector()).textContent, /Missing: how many must keep working/);
+  assert.ok($('.st-badge.kofn', capsRow()).classList.contains('bad'), 'counts in series until complete');
   assert.equal(boardTotal(), seriesTotal);
-  typeInto($('[data-key="need"]', group), 2);
-  typeInto($('[data-key="shortPct"]', group), 50);
-  group = $('.group');
-  assert.equal($$('.field.missing', group).length, 0);
-  assert.ok(!$('[data-gfield="shortPct"]', group).classList.contains('inferred'), 'typing a value replaces the guess');
+  assert.equal($('.st-kn .muted', inspector()).textContent, 'of 3 parts');
+  typeInto($('#st-need'), 2);
+  assert.match(warn(), /1 redundant block uses a guessed share of failures/);
+  typeInto($('#st-short'), 50);
+  assert.equal($$('.st-field.missing', inspector()).length, 0);
+  assert.ok(!$('[data-f="shortPct"]', inspector()).classList.contains('inferred'), 'typing a value replaces the guess');
+  assert.equal($('[data-guess]', inspector()), null);
   assert.doesNotMatch(warn(), /guessed share/);
-  assert.equal($('[data-gout="of"]', group).textContent, 'of 3 in the group');
-  assert.match($('[data-gout="result"]', group).textContent, /average over the mission/);
+  assert.match($('.st-nums', inspector()).textContent, /Mission-average rate/);
   assert.match($('#summary .label').textContent, /average over 10 years/);
   assert.equal($$('#summary .label')[1].textContent, 'Mean time to failure');
   assert.match($('#results tr:last-child').textContent, /Board, with redundancy/);
   assert.ok(boardTotal() < seriesTotal, `${boardTotal()} < ${seriesTotal}`);
-  assert.ok($('#structure-tree li.redundant'));
+  assert.ok(!$('.st-badge.kofn', capsRow()).classList.contains('bad'));
+  assert.equal($('.st-badge.kofn', capsRow()).textContent, '2 of 3');
+  assert.equal($('#st-vp .vote:not(.bad) text').textContent, '2/3');
 
-  // JSON round trip keeps guesses, confirmed guesses, netlist sources and groups.
+  // Find, then the keyboard: select R1 and J1 exactly, group them in series, ungroup.
+  const blocks = () => $$('#st-tree .blockrow').length;
+  const blocksBefore = blocks();
+  const find = $('#st-find');
+  typeInto(find, 'R1, J1');
+  find.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  assert.match($('#st-status').textContent, /Selected 2 parts/);
+  const key = (k) => $('#st-tree').dispatchEvent(new window.KeyboardEvent('keydown', { key: k, bubbles: true }));
+  key('s');
+  assert.equal(blocks(), blocksBefore + 1);
+  assert.match($('#st-status').textContent, /Grouped 2 items as a series block/);
+  assert.ok($('#st-moveto option[value="board"]'), 'the selection can move to the top level');
+  key('u');
+  assert.equal(blocks(), blocksBefore);
+  assert.match($('#st-tree').textContent, /C1–C3 in parallel/, 'the redundant block is untouched');
+
+  // JSON round trip keeps guesses, confirmed guesses, netlist sources and the structure.
   click($('[data-act="toggle"]', cardFor('C3')));
   click($('[data-act="confirm-guesses"]', cardFor('C3')));
   const exported = total();
@@ -296,15 +322,18 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.equal(parsed.parts.find((p) => p.ref === 'C1').inferred.type.startsWith('assumed class II'), true);
   assert.match(parsed.parts.find((p) => p.ref === 'C3').confirmed.type, /assumed class II/);
   assert.equal(parsed.parts.find((p) => p.ref === 'C3').inferred, undefined);
-  assert.deepEqual(parsed.groups.map((g) => [g.refs, g.mode, g.need, g.shortPct]), [['C1–C3', 'redundant', 2, 50]]);
-  assert.ok(!('id' in parsed.groups[0]));
+  const saved = parsed.structure.children;
+  assert.equal(saved.length, 1);
+  assert.deepEqual([saved[0].name, saved[0].mode, saved[0].need, saved[0].shortPct, saved[0].children.map((c) => c.refs)],
+    ['C1–C3 in parallel', 'kofn', 2, 50, ['C1', 'C2', 'C3']], 'split lines stay in their block');
   assert.equal(parsed.parts.find((p) => p.ref === 'R1').source.value, '10µ');
   click($('[data-act="new"]'));
   assert.equal(total(), '0 FIT');
   await pick('#import-file', { text: async () => json });
   assert.equal(total(), exported);
   assert.equal($$('.field.inferred', cardFor('C1')).length, 1);
-  assert.equal($('[data-key="need"]', $('.group')).value, '2');
+  click($('.st-nm', capsRow()));
+  assert.equal($('#st-need').value, '2');
 
   // A blank phase temperature survives a save and reload instead of becoming a default.
   choose($('#preset'), 'auto-motor');
@@ -313,15 +342,15 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.equal($('#phases [data-i="3"][data-key="tac"]').value, '');
   assert.equal($('#profile-problems').textContent, '');
 
-  // CSV: header, one row per line, board total, groups; formula-like text neutralised.
+  // CSV: header, one row per line, board total, blocks; formula-like text neutralised.
   typeInto($('[data-key="ref"]', $$('.part')[0]), '=HYPERLINK("x")');
   click($('[data-act="export-csv"]'));
   const csv = (await downloads.at(-1).text()).split('\r\n');
   assert.match(csv[0], /^"Ref","Part type"/);
-  assert.equal(csv.length, $$('.part').length + 4, 'header, part lines, board, the group, board with redundancy');
+  assert.equal(csv.length, $$('.part').length + 4, 'header, part lines, board, the block, board with redundancy');
   assert.match(csv[1], /^"'=HYPERLINK\(""x""\)"/);
   assert.ok(csv.some((row) => row.includes('Missing: Current per contact, Mating cycles.')), 'missing values listed');
-  assert.ok(csv.some((row) => row.startsWith('"Group C1–C3","Redundant group","2 of 3 must work; 50% of failures break it anyway"')));
+  assert.ok(csv.some((row) => row.startsWith('"C1–C3 in parallel","Redundant block","2 of 3 must work; 50% of failures break it anyway"')));
   assert.ok(csv.some((row) => row.startsWith('"Board with redundancy, average over 10 years"')));
 
   // Leaving the page saves at once, without waiting for the autosave delay.

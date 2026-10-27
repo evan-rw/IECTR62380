@@ -1,27 +1,34 @@
-// Reliability structure: which parts back each other up.
+// Reliability structure: a tree of series and k-of-n blocks over the board's
+// parts, as edited in the structure tree and the block diagram.
 //
-// By default every part is in series: any failure fails the board, and the
-// board failure rate is the sum of the part rates. A group can instead be
-// marked redundant: the group keeps working while at least `need` of its n
-// members work. A share `shortPct` of each member's failures (a capacitor
-// short that takes the rail down, say) breaks the group at once, whatever
-// the redundancy. Redundant groups have no constant failure rate, so they
-// are evaluated over the mission time T:
+// The board is a series block. Parts not placed in any block sit in
+// "Everything else", which is always in series. A k-of-n block survives while
+// at least `need` of its members work; a member is a single part or a block
+// inside it. A share `shortPct` of the failures of the parts in its scope (the
+// parts directly in it and in series blocks inside it) breaks it at once, the
+// rest are tolerated; a redundant block inside counts as one member with its
+// own share. Redundant blocks have no constant failure rate, so the board is
+// evaluated over the mission time T: survival R(T), the mission-average rate
+// −ln R(T)/T, and the mean time to failure ∫R(t)dt. Survival is carried as
+// ln R so deeply nested redundancy does not round to zero. Pure functions.
 //
-//   R_group(T) = exp(−c·Σλ_i·T) × P(at most n − need members failed by T)
-//
-// with c = shortPct/100 and member i failing benignly with probability
-// 1 − exp(−(1 − c)·λ_i·T). The board's mission-average failure rate is
-// −ln R_board(T) / T. Pure functions, no DOM.
+// Saved form (board.structure): { kind: 'block', id, name, mode: 'series' |
+// 'kofn', need, shortPct, inferred, proposed, nets, expanded, children } with
+// leaves { kind: 'leaf', refs: 'C1–C8' }. Leaves are resolved to the parts
+// list by designator each time the structure is built.
 
-import { expandRefs } from './netlist.js';
+import { expandRefs, compressRefs } from './netlist.js';
 
+export const ROOT = 'board';
+export const REST = 'rest';
 const HOURS_PER_YEAR = 8760;
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 
-// Probability that at most `allowed` of the members fail, member i failing
-// with probability p[i] (Poisson-binomial, by dynamic programming).
-export function atMostFailing(p, allowed) {
+// ---------------------------------------------------------------------------
+// Probability helpers
+
+// Distribution of the number of failed members, member i failing with p[i].
+function failureCounts(p) {
   let dist = [1];
   for (const pi of p) {
     const next = new Array(dist.length + 1).fill(0);
@@ -31,94 +38,26 @@ export function atMostFailing(p, allowed) {
     });
     dist = next;
   }
-  return dist.slice(0, allowed + 1).reduce((s, d) => s + d, 0);
+  return dist;
 }
 
-// Survival of one redundant group at time t (hours); rates in FIT.
+// Probability that at most `allowed` members fail.
+export function atMostFailing(p, allowed) {
+  return failureCounts(p).slice(0, allowed + 1).reduce((s, d) => s + d, 0);
+}
+
+// Probability that more than `allowed` fail, summed directly so tiny values keep their digits.
+function moreThan(p, allowed) {
+  return failureCounts(p).slice(allowed + 1).reduce((s, d) => s + d, 0);
+}
+
+// Survival of one flat k-of-n group of parts at time t (hours); rates in FIT.
 export function groupSurvival(fits, need, shortPct, t) {
   const c = shortPct / 100;
   const perHour = fits.map((f) => f * 1e-9);
   const critical = c * perHour.reduce((s, l) => s + l, 0);
-  const p = perHour.map((l) => 1 - Math.exp(-(1 - c) * l * t));
+  const p = perHour.map((l) => -Math.expm1(-(1 - c) * l * t));
   return Math.exp(-critical * t) * atMostFailing(p, fits.length - need);
-}
-
-// Check a group's inputs. Returns the problems that stop it counting as redundant.
-export function groupProblems(group, members) {
-  const problems = [];
-  if (members.unknown.length) problems.push(`Not in the parts list: ${members.unknown.join(', ')}.`);
-  if (members.duplicate.length) problems.push(`Also in another group: ${members.duplicate.join(', ')}.`);
-  if (group.mode !== 'redundant') return problems;
-  const n = members.refs.length;
-  if (n < 2) problems.push('A redundant group needs at least two parts.');
-  if (!isNum(group.need)) problems.push('Missing: how many parts must keep working.');
-  else if (!Number.isInteger(group.need) || group.need < 1 || group.need > n) problems.push(`The number that must keep working must be a whole number from 1 to ${n}.`);
-  if (!isNum(group.shortPct)) problems.push('Missing: share of failures that break the group anyway.');
-  else if (group.shortPct < 0 || group.shortPct > 100) problems.push('The share of failures must be between 0 and 100%.');
-  if (members.incomplete.length) problems.push(`Members still need input: ${members.incomplete.join(', ')}.`);
-  return problems;
-}
-
-// items: [{ comp, result }] from computeBoard; groups: board groups; years: mission length.
-export function computeStructure(items, groups, years) {
-  const T = (isNum(years) ? years : 0) * HOURS_PER_YEAR;
-
-  // Each reference's per-piece rate, from lines whose reference list matches their quantity.
-  const byRef = new Map();
-  for (const { comp, result } of items) {
-    const refs = expandRefs(comp.ref);
-    if (refs.length !== result.qty) continue;
-    for (const ref of refs) byRef.set(ref, { comp, result });
-  }
-
-  const claimed = new Set();
-  const evaluated = groups.map((group) => {
-    const refs = [];
-    const unknown = [];
-    const duplicate = [];
-    const incomplete = [];
-    for (const ref of expandRefs(group.refs ?? '')) {
-      if (!byRef.has(ref)) unknown.push(ref);
-      else if (claimed.has(ref)) duplicate.push(ref);
-      else {
-        refs.push(ref);
-        if (!byRef.get(ref).result.complete) incomplete.push(ref);
-      }
-    }
-    refs.forEach((r) => claimed.add(r));
-    const members = { refs, unknown, duplicate, incomplete };
-    const problems = groupProblems(group, members);
-    if (group.mode === 'redundant' && !problems.length && T <= 0) problems.push('Set the mission length to evaluate redundancy.');
-    const fits = refs.map((r) => byRef.get(r).result.fit);
-    // Like the board total, a series subtotal leaves out members still missing input.
-    const sum = refs.reduce((s, r) => s + (byRef.get(r).result.complete ? byRef.get(r).result.fit : 0), 0);
-    const redundant = group.mode === 'redundant' && problems.length === 0;
-    const R = redundant ? groupSurvival(fits, group.need, group.shortPct, T) : Math.exp(-sum * 1e-9 * T);
-    const fit = redundant ? (R > 0 ? (-Math.log(R) / T) * 1e9 : Infinity) : sum;
-    return { group, refs, fits, sum, redundant, R, fit, problems };
-  });
-
-  // Series part of the board: every complete line, minus members of redundant groups.
-  const inRedundant = new Set(evaluated.filter((g) => g.redundant).flatMap((g) => g.refs));
-  let seriesFit = 0;
-  for (const { comp, result } of items) {
-    if (!result.complete) continue;
-    const refs = expandRefs(comp.ref);
-    const removed = refs.length === result.qty ? refs.filter((r) => inRedundant.has(r)).length : 0;
-    seriesFit += result.fit * (result.qty - removed);
-  }
-
-  const active = evaluated.filter((g) => g.redundant);
-  const boardFit = seriesFit + active.reduce((s, g) => s + g.fit, 0);
-  const survival = (t) => Math.exp(-seriesFit * 1e-9 * t) * active.reduce((s, g) => s * groupSurvival(g.fits, g.group.need, g.group.shortPct, t), 1);
-  return {
-    groups: evaluated,
-    seriesFit,
-    boardFit,
-    redundancy: active.length > 0,
-    survival,
-    mttfHours: active.length ? meanTimeToFailure(survival) : (seriesFit > 0 ? 1e9 / seriesFit : Infinity),
-  };
 }
 
 // ∫ R(t) dt from 0 to ∞, by Simpson's rule up to where R has decayed.
@@ -131,4 +70,474 @@ export function meanTimeToFailure(R) {
   let s = R(0) + R(tMax);
   for (let i = 1; i < n; i++) s += (i % 2 ? 4 : 2) * R(i * h);
   return (s * h) / 3;
+}
+
+// ---------------------------------------------------------------------------
+// Building the runtime tree from the saved form and the parts list
+
+let idSeq = 0;
+const newBlockId = (nodes) => {
+  let id;
+  do id = `b${Date.now().toString(36)}${(idSeq++).toString(36)}`; while (nodes.has(id));
+  return id;
+};
+
+// items: [{ comp, result }] from computeBoard; describe(comp) labels a line.
+export function buildStructure(saved, items, describe = (comp) => comp.ref) {
+  const lines = new Map();
+  const byRef = new Map();
+  for (const { comp, result } of items) {
+    const refs = expandRefs(comp.ref);
+    const whole = refs.length !== result.qty;
+    const line = { id: comp.id, refs: whole ? [comp.ref] : refs, whole, qty: result.qty, fit: result.complete ? result.fit : null, label: describe(comp), comp, result };
+    lines.set(comp.id, line);
+    for (const r of line.refs) if (!byRef.has(r)) byRef.set(r, comp.id);
+  }
+
+  const rt = { nodes: new Map(), lines, parent: new Map(), buildProblems: new Map() };
+  const claimed = new Set();
+
+  const addLeaves = (block, refsText) => {
+    const text = String(refsText ?? '').trim();
+    const wanted = byRef.has(text) && lines.get(byRef.get(text)).whole ? [text] : expandRefs(text);
+    const perLine = new Map();
+    const unknown = [];
+    const twice = [];
+    for (const r of wanted) {
+      if (!byRef.has(r)) unknown.push(r);
+      else if (claimed.has(r)) twice.push(r);
+      else {
+        claimed.add(r);
+        const lineId = byRef.get(r);
+        perLine.set(lineId, [...(perLine.get(lineId) ?? []), r]);
+      }
+    }
+    for (const [lineId, refs] of perLine) addLeaf(block, lineId, refs);
+    if (unknown.length) addLeaf(block, null, unknown);
+    if (twice.length) {
+      const list = rt.buildProblems.get(block.id) ?? [];
+      list.push(`Also placed elsewhere, so left out here: ${compressRefs(twice)}.`);
+      rt.buildProblems.set(block.id, list);
+    }
+  };
+  const addLeaf = (block, lineId, refs) => {
+    let id = `${block.id}|${compressRefs(refs)}`;
+    while (rt.nodes.has(id)) id += "'";
+    rt.nodes.set(id, { id, kind: 'leaf', lineId, refs });
+    block.children.push(id);
+  };
+  const addBlock = (b, forcedId) => {
+    const id = forcedId ?? (typeof b.id === 'string' && b.id && !rt.nodes.has(b.id) && b.id !== REST ? b.id : newBlockId(rt.nodes));
+    const node = {
+      id, kind: 'block',
+      name: typeof b.name === 'string' ? b.name : '',
+      mode: b.mode === 'kofn' ? 'kofn' : 'series',
+      need: isNum(b.need) ? b.need : null,
+      shortPct: isNum(b.shortPct) ? b.shortPct : null,
+      inferred: typeof b.inferred?.shortPct === 'string' ? { shortPct: b.inferred.shortPct } : {},
+      proposed: typeof b.proposed === 'string' ? b.proposed : null,
+      nets: Array.isArray(b.nets) ? b.nets.map(String) : [],
+      expanded: b.expanded !== false,
+      children: [],
+    };
+    rt.nodes.set(id, node);
+    for (const c of Array.isArray(b.children) ? b.children : []) {
+      if (c?.kind === 'leaf') addLeaves(node, c.refs);
+      else if (c && typeof c === 'object') node.children.push(addBlock(c));
+    }
+    return id;
+  };
+
+  const root = saved && typeof saved === 'object' ? saved : {};
+  addBlock({ ...root, name: 'Board', mode: 'series' }, ROOT);
+  const board = rt.nodes.get(ROOT);
+  board.fixed = true;
+
+  // Everything not placed: one leaf per line, always in series.
+  const rest = { id: REST, kind: 'block', name: 'Everything else', mode: 'series', need: null, shortPct: null, inferred: {}, proposed: null, nets: [], expanded: root.restExpanded === true, children: [], fixed: true };
+  rt.nodes.set(REST, rest);
+  for (const line of lines.values()) {
+    const refs = line.refs.filter((r) => !claimed.has(r));
+    if (refs.length) addLeaf(rest, line.id, refs);
+  }
+  board.children.unshift(REST);
+  reindex(rt);
+  return rt;
+}
+
+export function serializeStructure(rt) {
+  const ser = (id) => {
+    const n = rt.nodes.get(id);
+    if (n.kind === 'leaf') return { kind: 'leaf', refs: n.lineId && rt.lines.get(n.lineId)?.whole ? n.refs[0] : compressRefs(n.refs) };
+    return {
+      kind: 'block', id: n.id, name: n.name, mode: n.mode, need: n.need, shortPct: n.shortPct,
+      ...(n.inferred?.shortPct ? { inferred: { shortPct: n.inferred.shortPct } } : {}),
+      ...(n.proposed ? { proposed: n.proposed } : {}),
+      ...(n.nets?.length ? { nets: n.nets } : {}),
+      ...(n.expanded === false ? { expanded: false } : {}),
+      children: n.children.filter((c) => c !== REST).map(ser),
+    };
+  };
+  const out = ser(ROOT);
+  delete out.name;
+  delete out.mode;
+  delete out.need;
+  delete out.shortPct;
+  if (rt.nodes.get(REST)?.expanded) out.restExpanded = true;
+  return out;
+}
+
+// Version-1 boards kept a flat list of groups under the board.
+export function migrateGroups(groups) {
+  return {
+    kind: 'block',
+    id: ROOT,
+    children: (Array.isArray(groups) ? groups : []).map((g) => ({
+      kind: 'block',
+      name: `${g.refs ?? ''} ${g.mode === 'redundant' ? 'in parallel' : 'group'}`.trim(),
+      mode: g.mode === 'redundant' ? 'kofn' : 'series',
+      need: isNum(g.need) ? g.need : null,
+      shortPct: isNum(g.shortPct) ? g.shortPct : null,
+      ...(typeof g.inferred?.shortPct === 'string' ? { inferred: { shortPct: g.inferred.shortPct } } : {}),
+      ...(typeof g.proposed === 'string' ? { proposed: g.proposed } : {}),
+      ...(Array.isArray(g.nets) ? { nets: g.nets } : {}),
+      children: [{ kind: 'leaf', refs: g.refs ?? '' }],
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tree helpers
+
+export function reindex(rt) {
+  rt.parent = new Map();
+  for (const n of rt.nodes.values()) if (n.kind === 'block') for (const c of n.children) rt.parent.set(c, n.id);
+}
+export const isAncestor = (rt, a, b) => {
+  for (let p = rt.parent.get(b); p; p = rt.parent.get(p)) if (p === a) return true;
+  return false;
+};
+export const topLevel = (rt, ids) => {
+  const s = [...ids].filter((id) => rt.nodes.has(id));
+  return s.filter((id) => !s.some((o) => o !== id && isAncestor(rt, o, id)));
+};
+const leafPieces = (rt, n) => (n.lineId && rt.lines.get(n.lineId)?.whole ? rt.lines.get(n.lineId).qty : n.refs.length);
+export const pieces = (rt, id) => {
+  const n = rt.nodes.get(id);
+  return n.kind === 'leaf' ? leafPieces(rt, n) : n.children.reduce((s, c) => s + pieces(rt, c), 0);
+};
+// Members of a k-of-n block: each part in a leaf, and each block, counts once.
+export const members = (rt, id) => rt.nodes.get(id).children.reduce((s, c) => s + (rt.nodes.get(c).kind === 'leaf' ? leafPieces(rt, rt.nodes.get(c)) : 1), 0);
+export const label = (rt, id) => {
+  const n = rt.nodes.get(id);
+  if (n.kind === 'leaf') return n.lineId && rt.lines.get(n.lineId)?.whole ? n.refs[0] : compressRefs(n.refs);
+  return n.name || (n.mode === 'kofn' ? 'Redundant block' : 'Series block');
+};
+
+// ---------------------------------------------------------------------------
+// Evaluation
+
+function blockProblems(rt, n, T) {
+  const p = [...(rt.buildProblems.get(n.id) ?? [])];
+  const unknown = n.children.map((c) => rt.nodes.get(c)).filter((c) => c.kind === 'leaf' && !c.lineId).flatMap((c) => c.refs);
+  if (unknown.length) p.push(`Not in the parts list: ${compressRefs(unknown)}.`);
+  if (!n.fixed && !n.children.length) p.push('Empty block.');
+  if (n.mode !== 'kofn') return p;
+  const m = members(rt, n.id);
+  if (m < 2) p.push('A redundant block needs at least two members.');
+  if (n.need == null) p.push('Missing: how many must keep working.');
+  else if (!Number.isInteger(n.need) || n.need < 1 || n.need > m) p.push(`Must keep working has to be a whole number from 1 to ${m}.`);
+  if (n.shortPct == null) p.push('Missing: share of failures that break it anyway.');
+  else if (n.shortPct < 0 || n.shortPct > 100) p.push('The share of failures must be between 0 and 100%.');
+  const missing = [];
+  const walk = (id) => {
+    const c = rt.nodes.get(id);
+    if (c.kind === 'leaf') { if (c.lineId && rt.lines.get(c.lineId).fit == null) missing.push(...c.refs); } else c.children.forEach(walk);
+  };
+  walk(n.id);
+  if (missing.length) p.push(`Members still need input: ${compressRefs(missing)}.`);
+  if (T <= 0) p.push('Set the mission length to evaluate redundancy.');
+  return p;
+}
+
+export function evaluateStructure(rt, years) {
+  reindex(rt);
+  const T = (isNum(years) ? years : 0) * HOURS_PER_YEAR;
+  const prob = new Map();
+  const red = new Set();
+  for (const n of rt.nodes.values()) {
+    if (n.kind !== 'block') continue;
+    const p = blockProblems(rt, n, T);
+    prob.set(n.id, p);
+    if (n.mode === 'kofn' && !p.length) red.add(n.id);
+  }
+  const lam = (n) => (n.lineId && rt.lines.get(n.lineId).fit != null ? rt.lines.get(n.lineId).fit * 1e-9 : 0);
+  const scopeRate = (id) => rt.nodes.get(id).children.reduce((s, c) => {
+    const k = rt.nodes.get(c);
+    return s + (k.kind === 'leaf' ? lam(k) * leafPieces(rt, k) : red.has(c) ? 0 : scopeRate(c));
+  }, 0);
+
+  // ln R(t) of a node; s scales the constant rates (1 − c inside a redundant block).
+  const lnR = (id, t, s = 1) => {
+    const n = rt.nodes.get(id);
+    if (n.kind === 'leaf') return -s * lam(n) * leafPieces(rt, n) * t;
+    if (!red.has(id)) return n.children.reduce((sum, c) => sum + lnR(c, t, s), 0);
+    const c = n.shortPct / 100;
+    const q = [];
+    for (const cid of n.children) {
+      const k = rt.nodes.get(cid);
+      if (k.kind === 'leaf') {
+        const qi = -Math.expm1(-(1 - c) * lam(k) * t);
+        for (let i = 0; i < leafPieces(rt, k); i++) q.push(qi);
+      } else q.push(-Math.expm1(lnR(cid, t, 1 - c)));
+    }
+    return -c * scopeRate(id) * t + Math.log1p(-moreThan(q, q.length - n.need));
+  };
+
+  const guessedLine = (line) => Object.keys(line.comp.inferred ?? {}).length > 0;
+  const stats = new Map();
+  const walk = (id, inRed) => {
+    const n = rt.nodes.get(id);
+    let st;
+    if (n.kind === 'leaf') {
+      const line = n.lineId ? rt.lines.get(n.lineId) : null;
+      const sfit = line && line.fit != null ? line.fit * leafPieces(rt, n) : 0;
+      st = { fit: sfit, sfit, missing: line && line.fit == null ? 1 : 0, unknown: line ? 0 : 1, guessed: line && line.fit != null && guessedLine(line) ? 1 : 0, red: false, pieces: leafPieces(rt, n) };
+    } else {
+      const kids = n.children.map((c) => walk(c, inRed || red.has(id)));
+      const sum = (k) => kids.reduce((s, x) => s + x[k], 0);
+      const hasRed = red.has(id) || kids.some((k) => k.red);
+      const sfit = sum('sfit');
+      st = {
+        fit: hasRed && T > 0 ? (-lnR(id, T) / T) * 1e9 : sfit,
+        sfit,
+        missing: sum('missing'),
+        unknown: sum('unknown'),
+        guessed: sum('guessed') + (n.mode === 'kofn' && n.inferred?.shortPct ? 1 : 0),
+        red: hasRed,
+        pieces: sum('pieces'),
+      };
+    }
+    st.inRed = inRed;
+    stats.set(id, st);
+    return st;
+  };
+  const board = walk(ROOT, false);
+  for (const st of stats.values()) st.share = !st.inRed && board.fit > 0 ? st.fit / board.fit : 0;
+  const survival = (t) => Math.exp(lnR(ROOT, t));
+  return {
+    T, stats, prob, red, board, survival,
+    redundancy: red.size > 0,
+    mttfHours: red.size ? meanTimeToFailure(survival) : (board.sfit > 0 ? 1e9 / board.sfit : Infinity),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Editing. Each operation changes rt in place; the caller serializes it and
+// builds it again, which puts unplaced parts back in "Everything else".
+
+const detach = (rt, id) => {
+  const p = rt.parent.get(id);
+  if (p) {
+    const c = rt.nodes.get(p).children;
+    c.splice(c.indexOf(id), 1);
+  }
+  rt.parent.delete(id);
+};
+
+// Put a leaf into a block, merging it with a leaf of the same line already there.
+const mergeInto = (rt, target, leafId) => {
+  const t = rt.nodes.get(target);
+  const n = rt.nodes.get(leafId);
+  const twin = t.children.map((c) => rt.nodes.get(c)).find((c) => c.kind === 'leaf' && c.lineId && c.lineId === n.lineId && c.id !== leafId && !rt.lines.get(c.lineId).whole);
+  if (twin) {
+    twin.refs = [...new Set([...twin.refs, ...n.refs])];
+    rt.nodes.delete(leafId);
+    return twin.id;
+  }
+  t.children.push(leafId);
+  return leafId;
+};
+
+// Remove blocks left empty by an edit.
+export function cleanup(rt) {
+  let again = true;
+  while (again) {
+    again = false;
+    reindex(rt);
+    for (const n of [...rt.nodes.values()]) {
+      if (n.kind === 'block' && !n.fixed && !n.children.length) {
+        detach(rt, n.id);
+        rt.nodes.delete(n.id);
+        again = true;
+      }
+    }
+  }
+}
+
+// Group items into a new block placed in the deepest block that holds them all.
+export function groupNodes(rt, ids, mode) {
+  reindex(rt);
+  const list = topLevel(rt, ids).filter((id) => !rt.nodes.get(id).fixed);
+  if (!list.length) return null;
+  const chain = (id) => {
+    const c = [];
+    for (let p = rt.parent.get(id); p; p = rt.parent.get(p)) c.unshift(p);
+    return c;
+  };
+  const chains = list.map(chain);
+  let lca = ROOT;
+  for (let i = 0; chains.every((c) => c[i] && c[i] === chains[0][i]); i++) lca = chains[0][i];
+  const host = lca === REST ? ROOT : lca;
+  const hc = rt.nodes.get(host).children;
+  const at = hc.findIndex((c) => c === list[0] || isAncestor(rt, c, list[0]));
+  const allLeaves = list.every((id) => rt.nodes.get(id).kind === 'leaf');
+  const name = allLeaves
+    ? `${compressRefs(list.flatMap((id) => rt.nodes.get(id).refs))} ${mode === 'kofn' ? 'in parallel' : 'in series'}`
+    : mode === 'kofn' ? 'Redundant block' : 'Series block';
+  const id = newBlockId(rt.nodes);
+  rt.nodes.set(id, { id, kind: 'block', name, mode, need: null, shortPct: null, inferred: {}, proposed: null, nets: [], expanded: true, children: [] });
+  if (at >= 0 && host !== REST) hc.splice(at, 0, id); else rt.nodes.get(ROOT).children.push(id);
+  for (const m of list) {
+    detach(rt, m);
+    rt.nodes.get(id).children.push(m);
+  }
+  cleanup(rt);
+  return id;
+}
+
+// Dissolve blocks: their contents take their place; leaves at the top level become unplaced.
+export function ungroupNodes(rt, ids) {
+  reindex(rt);
+  const list = topLevel(rt, ids).filter((id) => rt.nodes.get(id)?.kind === 'block' && !rt.nodes.get(id).fixed);
+  const freed = [];
+  for (const id of list) {
+    const n = rt.nodes.get(id);
+    const p = rt.parent.get(id);
+    const host = rt.nodes.get(p);
+    const at = host.children.indexOf(id);
+    const kids = [...n.children];
+    if (p === ROOT) {
+      const blocks = kids.filter((c) => rt.nodes.get(c).kind === 'block');
+      host.children.splice(at, 1, ...blocks);
+      freed.push(...blocks);
+      for (const c of kids) if (rt.nodes.get(c).kind === 'leaf') freed.push(mergeInto(rt, REST, c));
+    } else {
+      host.children.splice(at, 1, ...kids);
+      freed.push(...kids);
+    }
+    rt.nodes.delete(id);
+  }
+  cleanup(rt);
+  return [...new Set(freed)].filter((c) => rt.nodes.has(c));
+}
+
+// Move items into a block. Leaves dropped on the board go to "Everything else".
+export function moveNodes(rt, ids, target) {
+  reindex(rt);
+  if (!rt.nodes.get(target) || rt.nodes.get(target).kind !== 'block') return 0;
+  const list = topLevel(rt, ids).filter((id) => !rt.nodes.get(id).fixed && id !== target && !isAncestor(rt, id, target));
+  let moved = 0;
+  for (const id of list) {
+    const n = rt.nodes.get(id);
+    let t = target;
+    if (t === ROOT && n.kind === 'leaf') t = REST;
+    if (t === REST && n.kind === 'block') t = ROOT;
+    if (rt.parent.get(id) === t) continue;
+    detach(rt, id);
+    if (n.kind === 'leaf') mergeInto(rt, t, id); else rt.nodes.get(t).children.push(id);
+    reindex(rt);
+    moved++;
+  }
+  cleanup(rt);
+  if (moved) rt.nodes.get(target).expanded = true;
+  return moved;
+}
+
+// Split leaves into one leaf per part, so parts can be placed separately.
+export function splitLeaves(rt, ids) {
+  reindex(rt);
+  const made = [];
+  for (const id of ids) {
+    const n = rt.nodes.get(id);
+    if (n?.kind !== 'leaf' || n.refs.length < 2 || (n.lineId && rt.lines.get(n.lineId).whole)) continue;
+    const p = rt.nodes.get(rt.parent.get(id));
+    const singles = n.refs.map((r, i) => {
+      const sid = `${p.id}|${r}|${i}`;
+      rt.nodes.set(sid, { id: sid, kind: 'leaf', lineId: n.lineId, refs: [r] });
+      return sid;
+    });
+    p.children.splice(p.children.indexOf(id), 1, ...singles);
+    rt.nodes.delete(id);
+    p.expanded = true;
+    made.push(...singles);
+  }
+  return made;
+}
+
+export function reorderNode(rt, id, dir) {
+  reindex(rt);
+  const p = rt.parent.get(id);
+  if (!p) return false;
+  const c = rt.nodes.get(p).children;
+  const i = c.indexOf(id);
+  const j = i + dir;
+  if (j < 0 || j >= c.length || c[j] === REST || id === REST) return false;
+  [c[i], c[j]] = [c[j], c[i]];
+  return true;
+}
+
+// Leaves matching a reference list ("C1–C8, Q1") or, failing that, a part
+// description. With references, leaves are split so that exactly those parts
+// are selected. Returns the selected leaf ids, the number of parts and any
+// references that are not on the board.
+export function selectRefs(rt, query) {
+  reindex(rt);
+  const q = String(query ?? '').trim();
+  if (!q) return { ids: [], count: 0, unknown: [] };
+  const leaves = [...rt.nodes.values()].filter((n) => n.kind === 'leaf' && n.lineId);
+  const want = new Set(expandRefs(q).map((r) => r.toUpperCase()));
+  const hits = leaves.filter((n) => n.refs.some((r) => want.has(r.toUpperCase())));
+  if (!hits.length) {
+    const lq = q.toLowerCase();
+    const byText = leaves.filter((n) => rt.lines.get(n.lineId).label.toLowerCase().includes(lq));
+    return { ids: byText.map((n) => n.id), count: byText.reduce((s, n) => s + leafPieces(rt, n), 0), unknown: [] };
+  }
+  const known = new Set(leaves.flatMap((n) => n.refs.map((r) => r.toUpperCase())));
+  const picked = [];
+  for (const n of hits) {
+    const hit = n.refs.filter((r) => want.has(r.toUpperCase()));
+    if (hit.length === n.refs.length || rt.lines.get(n.lineId).whole) { picked.push(n.id); continue; }
+    n.refs = n.refs.filter((r) => !hit.includes(r));
+    const p = rt.nodes.get(rt.parent.get(n.id));
+    const id = `${p.id}|${compressRefs(hit)}|sel`;
+    rt.nodes.set(id, { id, kind: 'leaf', lineId: n.lineId, refs: hit });
+    p.children.splice(p.children.indexOf(n.id) + 1, 0, id);
+    picked.push(id);
+  }
+  reindex(rt);
+  return { ids: picked, count: picked.reduce((s, id) => s + leafPieces(rt, rt.nodes.get(id)), 0), unknown: [...want].filter((r) => !known.has(r)) };
+}
+
+// Keep only known keys and types from a saved structure read from storage or a file.
+export function sanitizeStructure(raw) {
+  const clean = (n, depth) => {
+    if (!n || typeof n !== 'object' || depth > 32) return null;
+    if (n.kind === 'leaf') return { kind: 'leaf', refs: String(n.refs ?? '').slice(0, 2000) };
+    return {
+      kind: 'block',
+      ...(typeof n.id === 'string' && n.id ? { id: n.id.slice(0, 80) } : {}),
+      name: typeof n.name === 'string' ? n.name.slice(0, 200) : '',
+      mode: n.mode === 'kofn' ? 'kofn' : 'series',
+      need: isNum(n.need) ? n.need : null,
+      shortPct: isNum(n.shortPct) ? n.shortPct : null,
+      ...(typeof n.inferred?.shortPct === 'string' ? { inferred: { shortPct: n.inferred.shortPct.slice(0, 300) } } : {}),
+      ...(typeof n.proposed === 'string' ? { proposed: n.proposed.slice(0, 300) } : {}),
+      ...(Array.isArray(n.nets) ? { nets: n.nets.slice(0, 50).map((x) => String(x).slice(0, 80)) } : {}),
+      ...(n.expanded === false ? { expanded: false } : {}),
+      children: (Array.isArray(n.children) ? n.children.slice(0, 5000) : []).map((c) => clean(c, depth + 1)).filter(Boolean),
+    };
+  };
+  const root = clean(raw, 0) ?? { kind: 'block', children: [] };
+  return { kind: 'block', id: ROOT, children: root.children, ...(raw?.restExpanded === true ? { restExpanded: true } : {}) };
 }

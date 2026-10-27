@@ -4,8 +4,9 @@ import {
 import { ENVIRONMENTS } from './tables217f.js';
 import { MISSION_PROFILES } from './tables.js';
 import { netlistToParts, expandRefs } from './netlist.js';
-import { computeStructure } from './structure.js';
-import { failureModesFor, suggestedShortShare } from './failuremodes.js';
+import { ROOT, sanitizeStructure, migrateGroups, members as structureMembers, label as structureLabel } from './structure.js';
+import { mountStructure, refreshStructure, currentStructure } from './structure-ui.js';
+import { failureModesFor } from './failuremodes.js';
 import { esc } from './html.js';
 
 const STORAGE_KEY = 'iec62380.board.v1';
@@ -52,7 +53,7 @@ function presetProfile(id, env217f = 'GB') {
 }
 
 function emptyBoard() {
-  return { format: FORMAT, version: 1, title: 'Untitled board', years: 10, profile: presetProfile('geo-permanent'), parts: [], groups: [] };
+  return { format: FORMAT, version: 2, title: 'Untitled board', years: 10, profile: presetProfile('geo-permanent'), parts: [], structure: { kind: 'block', id: ROOT, children: [] } };
 }
 
 function exampleBoard() {
@@ -107,19 +108,11 @@ function sanitize(raw) {
     addRise: Boolean(ph?.addRise),
   }));
   const preset = MISSION_PROFILES.rows.some((r) => r.id === raw.profile.preset) ? raw.profile.preset : null;
-  const groups = (Array.isArray(raw.groups) ? raw.groups : []).map((g) => ({
-    id: newId(),
-    refs: str(g?.refs),
-    nets: Array.isArray(g?.nets) ? g.nets.map(str) : [],
-    mode: g?.mode === 'redundant' ? 'redundant' : 'series',
-    need: isNum(g?.need) ? g.need : null,
-    shortPct: isNum(g?.shortPct) ? g.shortPct : null,
-    proposed: typeof g?.proposed === 'string' ? g.proposed : null,
-    inferred: typeof g?.inferred?.shortPct === 'string' ? { shortPct: g.inferred.shortPct } : {},
-  }));
+  // Version 1 kept a flat list of groups; version 2 a nested structure.
+  const structure = sanitizeStructure(raw.structure ?? migrateGroups(raw.groups));
   return {
     board: {
-      format: FORMAT, version: 1,
+      format: FORMAT, version: 2,
       title: str(raw.title) || 'Untitled board',
       years: isNum(raw.years) ? raw.years : 10,
       profile: {
@@ -127,7 +120,7 @@ function sanitize(raw) {
         env217f: ENVIRONMENTS.some((e) => e.id === raw.profile.env217f) ? raw.profile.env217f : 'GB',
       },
       parts,
-      groups,
+      structure,
     },
     skipped,
   };
@@ -135,7 +128,7 @@ function sanitize(raw) {
 
 function exportable(board) {
   return {
-    format: FORMAT, version: 1, title: board.title, years: board.years,
+    format: FORMAT, version: 2, title: board.title, years: board.years,
     profile: board.profile,
     parts: board.parts.map(({ ref, qty, model, params, inferred, confirmed, source }) => ({
       ref, qty, model, params,
@@ -143,7 +136,7 @@ function exportable(board) {
       ...(Object.keys(confirmed ?? {}).length ? { confirmed } : {}),
       ...(source ? { source } : {}),
     })),
-    groups: (board.groups ?? []).map(({ id, inferred, ...g }) => ({ ...g, ...(inferred?.shortPct ? { inferred } : {}) })),
+    structure: board.structure,
   };
 }
 
@@ -173,8 +166,7 @@ let state = load() ?? exampleBoard();
 const findPart = (id) => state.parts.find((p) => p.id === id);
 const guessCount = (part) => Object.keys(part.inferred ?? {}).length;
 const canSplit = (part) => part.qty > 1 && expandRefs(part.ref).length === part.qty;
-const findGroup = (id) => state.groups.find((g) => g.id === id);
-const newGroup = (extra = {}) => ({ id: newId(), refs: '', nets: [], mode: 'series', need: null, shortPct: null, proposed: null, inferred: {}, ...extra });
+const currentBlock = (id) => currentStructure().rt?.nodes.get(id);
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -335,54 +327,12 @@ function rerenderPart(part, focusKey) {
   if (focusKey) $(`[data-id="${part.id}"][data-key="${focusKey}"]`)?.focus();
 }
 
-function groupHTML(g) {
-  const d = (key) => `data-bind="group" data-gid="${g.id}" data-key="${key}"`;
-  const redundant = g.mode === 'redundant';
-  return `
-    <article class="group" data-group="${g.id}">
-      <div class="group-fields">
-        <div class="field wide" data-gfield="refs"><label for="${g.id}-refs">Parts in the group <span class="unit">(references)</span></label>
-          <input id="${g.id}-refs" type="text" value="${esc(g.refs)}" placeholder="e.g. C1–C8" autocomplete="off" ${d('refs')}></div>
-        <div class="field"><label for="${g.id}-mode">How failures count</label>
-          <select id="${g.id}-mode" ${d('mode')}>${optionsHTML([
-            { value: 'series', label: 'Series: any failure fails the board' },
-            { value: 'redundant', label: 'Redundant: some may fail' },
-          ], g.mode)}</select></div>
-        ${redundant ? `
-        <div class="field" data-gfield="need"><label for="${g.id}-need">Must keep working<span class="state-tag"></span></label>
-          <input id="${g.id}-need" type="number" min="1" step="1" inputmode="numeric" value="${esc(g.need ?? '')}" ${d('need')}>
-          <p class="help" data-gout="of"></p></div>
-        <div class="field" data-gfield="shortPct"><label for="${g.id}-short">Failures that break it anyway <span class="unit">(%)</span><span class="state-tag"></span></label>
-          <input id="${g.id}-short" type="number" min="0" max="100" step="any" inputmode="decimal" value="${esc(g.shortPct ?? '')}" ${d('shortPct')}>
-          ${g.inferred?.shortPct ? `<p class="guess" data-gguess="shortPct">Guessed ${esc(g.inferred.shortPct)}. <button type="button" class="link" data-act="confirm-group-guess" data-gid="${g.id}">Confirm</button></p>` : ''}
-          <p class="help">For example shorts. 100% makes the group the same as series.</p></div>` : ''}
-        <div class="group-result" data-gout="result"></div>
-        <button type="button" class="icon" data-act="del-group" data-gid="${g.id}" title="Remove group">✕</button>
-      </div>
-      ${g.proposed ? `<p class="guess" data-gout="proposed">Proposed by the netlist import: ${esc(g.proposed)}.</p>` : ''}
-      ${g.nets?.length && !g.proposed ? `<p class="source-line">Nets: ${esc(g.nets.join(', '))}</p>` : ''}
-      <ul class="part-errors" data-gout="problems"></ul>
-    </article>`;
-}
-
-function renderGroups() {
-  $('#groups').innerHTML = state.groups.map(groupHTML).join('');
-}
-
-function rerenderGroup(g, focusKey) {
-  const el = $(`[data-group="${g.id}"]`);
-  if (!el) return;
-  el.outerHTML = groupHTML(g);
-  if (focusKey) $(`[data-gid="${g.id}"][data-key="${focusKey}"]`)?.focus();
-}
-
 function renderAll() {
   renderBoardBar();
   renderPresets();
   renderPhases();
   renderAddModel();
   renderParts();
-  renderGroups();
   update();
 }
 
@@ -436,20 +386,19 @@ function update() {
   });
 
   const years = isNum(state.years) ? state.years : 0;
-  const structure = computeStructure(board.items, state.groups, years);
-  updateGroups(structure);
-  // With redundant groups the board figures are averages over the mission.
+  const structure = refreshStructure(board.items, years);
+  // With redundant blocks the board figures are averages over the mission.
   const redundancy = structure.redundancy;
-  const total = redundancy ? structure.boardFit : board.total;
+  const total = redundancy ? structure.board.fit : board.total;
   const R = redundancy ? structure.survival(years * 8760) : reliability(total, years);
   const mtbf = redundancy ? structure.mttfHours : mtbfHours(total);
   const pieces = board.items.reduce((s, it) => s + it.result.qty, 0);
   const warn = [];
   if (problems.length) warn.push('The mission profile has problems (see above).');
   if (board.incomplete) warn.push(`${plural(board.incomplete, 'part line needs', 'part lines need')} more input; the total leaves ${board.incomplete > 1 ? 'them' : 'it'} out.`);
-  const guessedGroups = state.groups.filter((g) => g.mode === 'redundant' && g.inferred?.shortPct).length;
+  const guessedGroups = [...structure.red].filter((id) => currentBlock(id)?.inferred?.shortPct).length;
   if (guessedLines) warn.push(`${plural(guessedLines, 'line uses', 'lines use')} guessed values; check and confirm them.`);
-  if (guessedGroups) warn.push(`${plural(guessedGroups, 'redundant group uses', 'redundant groups use')} a guessed share of failures; check and confirm ${guessedGroups > 1 ? 'them' : 'it'}.`);
+  if (guessedGroups) warn.push(`${plural(guessedGroups, 'redundant block uses', 'redundant blocks use')} a guessed share of failures; check and confirm ${guessedGroups > 1 ? 'them' : 'it'}.`);
   // While lines are left out, the total is only a lower bound, so MTBF and
   // survival are upper bounds; say so and show fewer digits.
   const partial = board.incomplete > 0;
@@ -463,7 +412,7 @@ function update() {
     <div class="tile bounded"><div class="label">Survival over ${fmt(years)} years</div><div class="value">${le}${pct(R)}</div><div class="sub">${ge}${fmt2(1000 * (1 - R))} failures per 1000 boards</div></div>
     </div>${warn.length ? `<p class="warn">${warn.map(esc).join(' ')}</p>` : ''}
     <p class="scope">${redundancy
-    ? 'Parts in redundant groups count as set under Reliability structure; every other part counts in series.'
+    ? 'Parts in redundant blocks count as set under Reliability structure; every other part counts in series.'
     : 'The total counts a failure of any listed part as a board failure, so parts wired in parallel still add up unless you group them under Reliability structure.'} Solder joints are part of each component's package term; the bare printed circuit board and anything not in the list are not included.</p>`;
 
   const sum = board.total;
@@ -478,41 +427,6 @@ function update() {
       + (redundancy ? `<tr><td colspan="4">Sum of part rates (all in series)</td><td class="num">${fmt(sum)}</td><td class="num">100%</td></tr>` : '')
       + `<tr><td><strong>${redundancy ? `Board, with redundancy (average over ${fmt(years)} years)` : 'Board'}</strong></td><td class="opt"></td><td></td><td class="opt"></td><td class="num"><strong>${fmt(total)}</strong></td><td class="num">${redundancy ? '' : '100%'}</td></tr>`
     : '<tr><td colspan="6">No parts yet.</td></tr>';
-}
-
-// Group results, problems and the summary tree.
-function updateGroups(structure) {
-  structure.groups.forEach(({ group, refs, redundant, fit, sum, problems }) => {
-    const el = $(`[data-group="${group.id}"]`);
-    if (!el) return;
-    const out = (k) => $(`[data-gout="${k}"]`, el);
-    out('result').innerHTML = redundant
-      ? `<div class="each">${fmt(fit)} FIT</div><div class="total">average over the mission (${fmt(sum)} FIT if in series)</div>`
-      : `<div class="each">${fmt(sum)} FIT</div><div class="total">in series${group.mode === 'redundant' ? ' until the problems below are fixed' : ''}</div>`;
-    out('problems').innerHTML = problems.map((p) => `<li>${esc(p)}</li>`).join('');
-    if (out('of')) out('of').textContent = `of ${refs.length} in the group`;
-    for (const wrap of el.querySelectorAll('[data-gfield]')) {
-      const key = wrap.dataset.gfield;
-      const missing = group.mode === 'redundant' && (key === 'need' || key === 'shortPct') && group[key] == null;
-      const guessed = Boolean(group.inferred?.[key]) && !missing;
-      wrap.classList.toggle('missing', missing);
-      wrap.classList.toggle('inferred', guessed);
-      const tag = wrap.querySelector('.state-tag');
-      if (tag) tag.textContent = missing ? 'Missing' : guessed ? 'Guessed' : '';
-      const note = wrap.querySelector('[data-gguess]');
-      if (note) note.hidden = !guessed;
-      wrap.querySelector('input')?.setAttribute('aria-invalid', String(missing));
-    }
-  });
-  const label = (g) => `${esc(g.group.refs || '(empty group)')}${g.redundant ? `: ${g.group.need} of ${g.refs.length} must work, ${fmt(g.group.shortPct)}% break it anyway` : ': in series'}`;
-  const inGroups = structure.groups.filter((g) => !g.redundant).reduce((s, g) => s + g.sum, 0);
-  $('#structure-tree').innerHTML = state.groups.length
-    ? `<ul class="tree"><li><span>Board</span><b>${fmt(structure.boardFit)} FIT</b>
-        <ul>
-          <li><span>All other parts, in series</span><b>${fmt(structure.seriesFit - inGroups)} FIT</b></li>
-          ${structure.groups.map((g) => `<li class="${g.redundant ? 'redundant' : ''}"><span>${label(g)}</span><b>${fmt(g.redundant ? g.fit : g.sum)} FIT</b></li>`).join('')}
-        </ul></li></ul>`
-    : '<p class="empty">No groups: every part counts in series.</p>';
 }
 
 // ---------------------------------------------------------------------------
@@ -553,13 +467,22 @@ function boardCSV() {
     ]);
   }
   rows.push(['Board', '', '', '', '', board.total, '100', '', board.incomplete ? `Lower bound: ${board.incomplete} lines left out` : '', '', '']);
-  const structure = computeStructure(board.items, state.groups, state.years);
-  for (const g of structure.groups) {
-    rows.push([`Group ${g.group.refs}`, g.redundant ? 'Redundant group' : 'Group, in series',
-      g.redundant ? `${g.group.need} of ${g.refs.length} must work; ${g.group.shortPct}% of failures break it anyway` : '',
-      g.refs.length, '', g.redundant ? g.fit : g.sum, '', '', g.problems.join(' '), '', '']);
-  }
-  if (structure.redundancy) rows.push([`Board with redundancy, average over ${state.years} years`, '', '', '', '', structure.boardFit, '', '', '', '', '']);
+  // Blocks of the reliability structure, depth first, with their mission-average rates.
+  const { rt, ev } = currentStructure();
+  const blockRows = (id, depth) => {
+    const n = rt.nodes.get(id);
+    if (n.kind !== 'block') return;
+    if (!n.fixed) {
+      const st = ev.stats.get(id);
+      const red = ev.red.has(id);
+      rows.push([`${'  '.repeat(depth)}${structureLabel(rt, id)}`, red ? 'Redundant block' : n.mode === 'kofn' ? 'Redundant block, counted in series' : 'Series block',
+        red ? `${n.need} of ${structureMembers(rt, id)} must work; ${n.shortPct}% of failures break it anyway` : '',
+        st.pieces, '', st.fit, '', '', ev.prob.get(id).join(' '), n.inferred?.shortPct ? 'Share of failures' : '', '']);
+    }
+    n.children.forEach((c) => blockRows(c, depth + (n.fixed ? 0 : 1)));
+  };
+  blockRows(ROOT, 0);
+  if (ev.redundancy) rows.push([`Board with redundancy, average over ${state.years} years`, '', '', '', '', ev.board.fit, '', '', '', '', '']);
   return rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
 }
 
@@ -596,30 +519,6 @@ function nextRef(model) {
   return `${prefix}${max + 1}`;
 }
 
-// Pre-fill a redundant group's critical share with the members' short-circuit
-// probability from MIL-HDBK-338B, marked as a guess.
-function suggestShortShare(g) {
-  const board = computeBoard({ profile: state.profile, components: state.parts });
-  const byRef = new Map();
-  for (const { comp, result } of board.items) {
-    const refs = expandRefs(comp.ref);
-    if (refs.length === result.qty) refs.forEach((r) => byRef.set(r, { comp, result }));
-  }
-  const members = expandRefs(g.refs).map((r) => byRef.get(r)).filter(Boolean)
-    .map(({ comp, result }) => ({ model: comp.model, params: { ...MODELS[comp.model].defaults, ...comp.params }, fit: result.complete ? result.fit : 0 }));
-  const s = suggestedShortShare(members);
-  if (!s) return;
-  g.shortPct = s.pct;
-  g.inferred = { shortPct: `from MIL-HDBK-338B Table 7.8-1: shorts are ${s.pct}% of failures of ${s.devices.map((d) => d.toLowerCase()).join(' and ')}` };
-}
-
-// Once the user edits a proposed group, it is theirs; the proposal note goes.
-function clearProposal(g) {
-  if (!g.proposed) return;
-  g.proposed = null;
-  $(`[data-group="${g.id}"] [data-gout="proposed"]`)?.remove();
-}
-
 // An edited value is the user's own, no longer a guess, confirmed or not.
 function clearGuess(part, key) {
   if (part.inferred?.[key]) delete part.inferred[key];
@@ -637,11 +536,6 @@ document.addEventListener('input', (e) => {
     const ph = state.profile.phases[Number(el.dataset.i)];
     ph[el.dataset.key] = el.dataset.key === 'name' ? el.value : numOrNull(el.value);
     if (el.dataset.key !== 'name') markCustomProfile();
-  } else if (bind === 'group') {
-    const g = findGroup(el.dataset.gid);
-    g[el.dataset.key] = el.dataset.key === 'refs' ? el.value : numOrNull(el.value);
-    if (g.inferred?.[el.dataset.key]) delete g.inferred[el.dataset.key];
-    clearProposal(g);
   } else if (bind === 'part') {
     const part = findPart(el.dataset.id);
     const key = el.dataset.key;
@@ -683,12 +577,6 @@ document.addEventListener('change', (e) => {
     part.confirmed = {};
     rerenderPart(part, null);
     $(`#${part.id}-model`)?.focus();
-  } else if (bind === 'group' && el.tagName === 'SELECT') {
-    const g = findGroup(el.dataset.gid);
-    g.mode = el.value;
-    clearProposal(g);
-    if (g.mode === 'redundant' && g.shortPct == null) suggestShortShare(g);
-    rerenderGroup(g, 'mode');
   } else if (bind === 'part' && el.tagName === 'SELECT') {
     const part = findPart(el.dataset.id);
     part.params[el.dataset.key] = el.value || null;
@@ -775,23 +663,6 @@ document.addEventListener('click', (e) => {
       state.parts.splice(state.parts.indexOf(part), 1);
       renderParts();
       break;
-    case 'add-group': {
-      const g = newGroup();
-      state.groups.push(g);
-      renderGroups();
-      $(`#${g.id}-refs`)?.focus();
-      break;
-    }
-    case 'confirm-group-guess': {
-      const g = findGroup(btn.dataset.gid);
-      g.inferred = {};
-      rerenderGroup(g);
-      break;
-    }
-    case 'del-group':
-      state.groups.splice(state.groups.indexOf(findGroup(btn.dataset.gid)), 1);
-      renderGroups();
-      break;
     default: return;
   }
   save();
@@ -828,7 +699,10 @@ $('#netlist-file').addEventListener('change', async (e) => {
   }
   if (state.parts.length && !confirm(`Replace the current parts with the ${result.lines.length} lines from “${file.name}”? The mission profile is kept.`)) return;
   state.parts = result.lines.map((l) => makePart(l.model, l.ref, l.qty, l.params, { inferred: { ...l.inferred }, source: l.source }));
-  state.groups = result.groups.map((g) => newGroup(g));
+  state.structure = {
+    kind: 'block', id: ROOT,
+    children: result.groups.map((g) => ({ kind: 'block', name: `${g.refs} in parallel`, mode: 'series', proposed: g.proposed, nets: g.nets, children: [{ kind: 'leaf', refs: g.refs }] })),
+  };
   if (['Untitled board', 'Example board', ''].includes(state.title)) state.title = file.name.replace(/\.[^.]+$/, '');
   renderAll();
   save();
@@ -837,8 +711,25 @@ $('#netlist-file').addEventListener('change', async (e) => {
   showReport(`Read ${plural(result.components, 'component')} from “${esc(file.name)}” (${esc(result.format)}, ${plural(result.nets, 'net')}) into ${plural(result.lines.length, 'line')}.
     ${result.skippedCount ? `Skipped ${result.skippedCount} mechanical items (${esc(result.skipped)}).` : ''}
     <strong>${plural(board.incomplete, 'line needs', 'lines need')} input</strong> (red, “Missing”) and ${plural(guessed, 'line has', 'lines have')} guessed values (amber, “Guessed”).
-    ${result.groups.length ? `Proposed ${plural(result.groups.length, 'group')} of parts wired in parallel under Reliability structure; they count in series until you mark them redundant.` : ''}
+    ${result.groups.length ? `Proposed ${plural(result.groups.length, 'block')} of parts wired in parallel under Reliability structure; they count in series until you mark them redundant.` : ''}
     Tick “Only parts that need attention” to work through them.`);
 });
 
+mountStructure($('#structure'), {
+  getSaved: () => state.structure,
+  commit: (saved) => { state.structure = saved; save(); update(); },
+  describe: (comp) => {
+    const model = MODELS[comp.model];
+    return model.describe({ ...model.defaults, ...comp.params });
+  },
+  modelOf: (comp) => ({ model: comp.model, params: { ...MODELS[comp.model].defaults, ...comp.params } }),
+  openPart: (id) => {
+    const part = findPart(id);
+    if (!part) return;
+    part.open = true;
+    rerenderPart(part);
+    $(`#${part.id}-ref`)?.scrollIntoView({ block: 'center' });
+    $(`#${part.id}-ref`)?.focus();
+  },
+});
 renderAll();

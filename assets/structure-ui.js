@@ -1,0 +1,944 @@
+// The reliability structure editor: a tree and a zoomable block diagram that
+// edit the same nested structure, plus a side panel for the selection.
+// Engine and editing operations live in structure.js; this module only draws
+// and handles input. Every structural edit is saved through ctx.commit, which
+// rebuilds the structure from the saved form and calls refresh() again.
+
+import {
+  ROOT, REST, buildStructure, serializeStructure, evaluateStructure, reindex, isAncestor, topLevel, members, label,
+  groupNodes, ungroupNodes, moveNodes, splitLeaves, reorderNode, selectRefs,
+} from './structure.js';
+import { compressRefs } from './netlist.js';
+import { suggestedShortShare } from './failuremodes.js';
+import { esc } from './html.js';
+
+const $ = (s, el = document) => el.querySelector(s);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const plural = (n, a, b = `${a}s`) => `${n} ${n === 1 ? a : b}`;
+const numOrNull = (s) => (s === '' || s == null || !Number.isFinite(Number(s)) ? null : Number(s));
+const fmt = (v) => (!Number.isFinite(v) ? '∞' : v === 0 ? '0' : v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v >= 0.01 ? v.toFixed(2) : v.toExponential(1));
+
+// ctx: { getSaved(), commit(saved), describe(comp), modelOf(comp) -> { model, params }, openPart(lineId) }
+let ctx;
+let el = {};
+let rt = null;
+let ev = null;
+let lastItems = [];
+let lastYears = 0;
+let selection = new Set();
+let focusId = ROOT;
+let anchor = null;
+let visible = [];
+let match = new Set();
+let inspectorKey = '';
+let pendingSelection = null;
+
+// ---------------------------------------------------------------------------
+// Refresh and commit
+
+export function refreshStructure(items, years) {
+  lastItems = items;
+  lastYears = years;
+  rt = buildStructure(ctx.getSaved(), items, ctx.describe);
+  ev = evaluateStructure(rt, years);
+  if (pendingSelection) {
+    selection = new Set(pendingSelection.filter((id) => rt.nodes.has(id)));
+    focusId = [...selection][0] ?? focusId;
+    pendingSelection = null;
+  }
+  selection = new Set([...selection].filter((id) => rt.nodes.has(id)));
+  if (!rt.nodes.has(focusId)) focusId = ROOT;
+  render();
+  return ev;
+}
+
+function commit(selectIds) {
+  pendingSelection = selectIds ?? [...selection];
+  ctx.commit(serializeStructure(rt));
+}
+
+const say = (msg) => { el.status.textContent = msg; };
+
+function render(fullInspector = false) {
+  renderTree();
+  renderDiagram();
+  renderMoveTo();
+  const key = [...selection].sort().join(',') + '|' + [...selection].map((id) => {
+    const n = rt.nodes.get(id);
+    return n ? `${n.kind}${n.mode ?? ''}${n.proposed ? 'p' : ''}` : '';
+  }).join(',');
+  if (fullInspector || key !== inspectorKey) {
+    inspectorKey = key;
+    renderInspector();
+  } else renderInspectorOut();
+}
+
+// ---------------------------------------------------------------------------
+// Editing
+
+function suggestShort(id) {
+  const n = rt.nodes.get(id);
+  const memberLines = [];
+  const walk = (nid) => {
+    const k = rt.nodes.get(nid);
+    if (k.kind === 'leaf') {
+      const line = k.lineId && rt.lines.get(k.lineId);
+      if (line) memberLines.push({ ...ctx.modelOf(line.comp), fit: line.fit ?? 0 });
+    } else if (!(k.mode === 'kofn' && k.id !== id)) k.children.forEach(walk);
+  };
+  walk(id);
+  const s = suggestedShortShare(memberLines);
+  if (!s) return;
+  n.shortPct = s.pct;
+  n.inferred = { shortPct: `from MIL-HDBK-338B Table 7.8-1: shorts are ${s.pct}% of failures of ${s.devices.map((d) => d.toLowerCase()).join(' and ')}` };
+}
+
+function group(mode) {
+  const ids = topLevel(rt, selection).filter((id) => !rt.nodes.get(id).fixed);
+  if (!ids.length) return say('Select parts or blocks first: click, Ctrl+click, Shift+click, Find, or lasso in the diagram.');
+  const id = groupNodes(rt, ids, mode);
+  if (mode === 'kofn') suggestShort(id);
+  commit([id]);
+  say(`Grouped ${plural(ids.length, 'item')} as ${mode === 'kofn' ? 'a redundant block. Now say how many must keep working.' : 'a series block.'}`);
+  if (mode === 'kofn') $('#st-need', el.inspector)?.focus();
+}
+
+function ungroup(only) {
+  const ids = (only ? [only] : topLevel(rt, selection)).filter((id) => rt.nodes.get(id)?.kind === 'block' && !rt.nodes.get(id).fixed);
+  if (!ids.length) return say('Select a block to ungroup.');
+  const freed = ungroupNodes(rt, ids);
+  commit(freed);
+  say(`Ungrouped ${plural(ids.length, 'block')}; the parts went back where the block was.`);
+}
+
+function move(ids, target) {
+  const moved = moveNodes(rt, ids, target);
+  if (!moved) return say('Nothing to move there.');
+  commit([target]);
+  say(`Moved ${plural(moved, 'item')} into ${label(rt, target)}.`);
+}
+
+function split() {
+  const made = splitLeaves(rt, [...selection]);
+  if (!made.length) return say('Select a line with more than one reference to split it.');
+  commit(made);
+  say(`Split into ${plural(made.length, 'single part')}. Drag or move the ones you need.`);
+}
+
+function reorder(dir) {
+  if (reorderNode(rt, focusId, dir)) commit([focusId]);
+}
+
+function indent() {
+  reindex(rt);
+  const p = rt.parent.get(focusId);
+  if (!p) return;
+  const c = rt.nodes.get(p).children;
+  const prev = c.slice(0, c.indexOf(focusId)).reverse().find((x) => rt.nodes.get(x).kind === 'block' && x !== REST);
+  if (prev) move(selection.has(focusId) ? [...selection] : [focusId], prev); else say('No block above to move into.');
+}
+
+function outdent() {
+  reindex(rt);
+  const p = rt.parent.get(focusId);
+  if (!p || p === ROOT) return say('Already at the top level.');
+  move(selection.has(focusId) ? [...selection] : [focusId], p === REST ? ROOT : rt.parent.get(p) ?? ROOT);
+}
+
+function selectMatches() {
+  const found = selectRefs(rt, el.find.value);
+  if (!found.ids.length) return say('No parts match.');
+  match = new Set();
+  commit(found.ids);
+  say(`Selected ${plural(found.count, 'part')}${found.unknown.length ? `; not on the board: ${found.unknown.join(', ')}` : ''}. Press P to group them as parallel, S as series.`);
+}
+
+// ---------------------------------------------------------------------------
+// Tree
+
+const lineOf = (n) => (n.kind === 'leaf' && n.lineId ? rt.lines.get(n.lineId) : null);
+const guessedLine = (line) => line && Object.keys(line.comp.inferred ?? {}).length > 0;
+
+function modeBadge(n) {
+  if (n.proposed) return '<span class="st-badge proposed">proposed</span>';
+  if (n.mode === 'kofn') return `<span class="st-badge kofn${ev.red.has(n.id) ? '' : ' bad'}" title="${esc(ev.prob.get(n.id).join(' ') || 'k of n must keep working')}">${n.need ?? '?'} of ${members(rt, n.id)}</span>`;
+  return '<span class="st-badge">series</span>';
+}
+
+function chips(n, st) {
+  if (n.kind === 'leaf') {
+    const line = lineOf(n);
+    if (!line) return '<span class="st-chips"><span class="st-chip miss">Not in parts list</span></span>';
+    return `<span class="st-chips">${line.fit == null ? '<span class="st-chip miss">Missing</span>' : guessedLine(line) ? '<span class="st-chip guess">Guessed</span>' : ''}</span>`;
+  }
+  return `<span class="st-chips">${st.missing ? `<span class="st-chip miss">${st.missing} missing</span>` : ''}${st.guessed ? `<span class="st-chip guess">${st.guessed} guessed</span>` : ''}</span>`;
+}
+
+function rowHTML(n, level) {
+  const st = ev.stats.get(n.id);
+  const isBlock = n.kind === 'block';
+  const kids = isBlock && n.children.length > 0;
+  const sel = selection.has(n.id);
+  const cls = ['st-row', isBlock ? 'blockrow' : 'leafrow', n.proposed ? 'proposed' : '', sel ? 'sel' : '', st.inRed ? 'inred' : '', match.has(n.id) ? 'match' : ''].join(' ');
+  const line = lineOf(n);
+  const name = isBlock
+    ? `<span class="st-nm">${esc(n.id === REST ? `Everything else, in series (${st.pieces})` : n.id === ROOT ? 'Board' : label(rt, n.id))}</span>`
+    : `<span class="st-nm"><b>${esc(label(rt, n.id))}</b> <span class="muted">${esc(line?.label ?? '')}</span></span>`;
+  const fitText = !isBlock && (st.missing || st.unknown) ? '<span class="bad">—</span>' : fmt(st.fit);
+  const title = isBlock && st.red ? ` title="${fmt(st.sfit)} FIT if everything in it were in series"` : '';
+  return `<li role="treeitem" id="st-t-${esc(n.id)}" data-id="${esc(n.id)}" aria-level="${level}" aria-selected="${sel}"${kids ? ` aria-expanded="${n.expanded}"` : ''} tabindex="${n.id === focusId ? 0 : -1}">
+    <div class="${cls}" style="--lvl:${level - 1}">
+      <span class="st-handle${n.fixed ? ' off' : ''}" aria-hidden="true">${n.fixed ? '' : '⠿'}</span>
+      <span class="st-twisty" aria-hidden="true">${kids ? (n.expanded ? '▾' : '▸') : ''}</span>
+      <span class="st-main">${isBlock ? (n.fixed ? '<span class="st-badge">series</span>' : modeBadge(n)) : `<span class="st-qty">×${st.pieces}</span>`}${name}${chips(n, st)}</span>
+      <span class="st-fit"${title}>${fitText}</span>
+      <span class="st-bar" aria-hidden="true">${!st.inRed && st.share > 0 ? `<i style="width:${Math.max(3, st.share * 100).toFixed(1)}%"></i>` : ''}</span>
+    </div>`;
+}
+
+function renderTree() {
+  const hadFocus = el.tree.contains(document.activeElement);
+  const out = [];
+  visible = [];
+  const walk = (id, level) => {
+    const n = rt.nodes.get(id);
+    visible.push(id);
+    out.push(rowHTML(n, level));
+    if (n.kind === 'block' && n.expanded && n.children.length) {
+      out.push('<ul role="group">');
+      n.children.forEach((c) => walk(c, level + 1));
+      out.push('</ul>');
+    }
+    out.push('</li>');
+  };
+  walk(ROOT, 1);
+  if (!visible.includes(focusId)) {
+    let p = rt.parent.get(focusId);
+    while (p && !visible.includes(p)) p = rt.parent.get(p);
+    focusId = p ?? ROOT;
+  }
+  el.tree.innerHTML = out.join('');
+  const f = document.getElementById(`st-t-${focusId}`);
+  if (f) {
+    f.tabIndex = 0;
+    if (hadFocus) f.focus({ preventScroll: false });
+  }
+}
+
+function setExpanded(id, on) {
+  const n = rt.nodes.get(id);
+  if (n.kind !== 'block' || n.expanded === on) return;
+  n.expanded = on;
+  commit();
+}
+
+function setFocus(id, extend) {
+  focusId = id;
+  if (extend) selection.add(id);
+  else if (selection.size <= 1) { selection = new Set([id]); anchor = id; }
+  render();
+  document.getElementById(`st-t-${id}`)?.scrollIntoView?.({ block: 'nearest' });
+}
+
+function select(id, e = {}) {
+  if (e.shiftKey && anchor && visible.includes(anchor) && visible.includes(id)) {
+    const [a, b] = [visible.indexOf(anchor), visible.indexOf(id)].sort((x, y) => x - y);
+    visible.slice(a, b + 1).forEach((v) => selection.add(v));
+  } else if (e.ctrlKey || e.metaKey) {
+    if (selection.has(id)) selection.delete(id); else selection.add(id);
+    anchor = id;
+  } else {
+    selection = new Set([id]);
+    anchor = id;
+  }
+  focusId = id;
+  render();
+}
+
+// ---------------------------------------------------------------------------
+// Drag (tree handles, diagram boxes and block headers), with pointer events
+
+function markDrop(id, on) {
+  if (!id) return;
+  document.querySelectorAll(`#st-tree [data-id="${CSS.escape(id)}"] > .st-row, #st-rbd [data-id="${CSS.escape(id)}"]`).forEach((x) => x.classList.toggle('drop', on));
+}
+
+function dropTargetAt(cx, cy, ids) {
+  const hit = document.elementFromPoint?.(cx, cy);
+  if (!hit) return null;
+  let id = null;
+  if (hit.closest('#st-rbd')) {
+    const r = el.svg.getBoundingClientRect();
+    const [lx, ly] = toLayout([cx - r.left, cy - r.top]);
+    id = deepestBlockAt(lx, ly, ids) ?? ROOT;
+  } else {
+    const row = hit.closest('#st-tree [data-id]');
+    if (!row) return null;
+    id = row.dataset.id;
+    if (rt.nodes.get(id).kind === 'leaf') id = rt.parent.get(id);
+  }
+  if (!id || ids.some((d) => d === id || isAncestor(rt, d, id))) return null;
+  return id;
+}
+
+function beginNodePointer(e, id, fromDiagram) {
+  e.preventDefault();
+  reindex(rt);
+  const start = [e.clientX, e.clientY];
+  let dragging = false;
+  let target = null;
+  const ids = selection.has(id) ? topLevel(rt, selection).filter((x) => !rt.nodes.get(x).fixed) : [id];
+  const onMove = (ev2) => {
+    if (!dragging) {
+      if (Math.hypot(ev2.clientX - start[0], ev2.clientY - start[1]) < 6 || rt.nodes.get(id).fixed) return;
+      dragging = true;
+      el.ghost.hidden = false;
+      document.body.classList.add('st-dragging');
+      const parts = ids.reduce((s, x) => s + ev.stats.get(x).pieces, 0);
+      el.ghost.textContent = ids.length === 1 ? `${label(rt, ids[0])} (${plural(parts, 'part')})` : `${ids.length} items, ${plural(parts, 'part')}`;
+    }
+    el.ghost.style.transform = `translate(${ev2.clientX + 14}px, ${ev2.clientY + 10}px)`;
+    const t = dropTargetAt(ev2.clientX, ev2.clientY, ids);
+    if (t !== target) {
+      markDrop(target, false);
+      target = t;
+      markDrop(target, true);
+      say(target ? `Drop into ${target === ROOT ? 'the board' : label(rt, target)}` : 'Not a place to drop');
+    }
+  };
+  const onUp = (ev2) => {
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onUp);
+    el.ghost.hidden = true;
+    document.body.classList.remove('st-dragging');
+    markDrop(target, false);
+    if (dragging) { if (target) move(ids, target); else say('Move cancelled.'); } else if (ev2.type === 'pointerup') select(id, fromDiagram ? { ctrlKey: ev2.ctrlKey || ev2.metaKey || ev2.shiftKey } : ev2);
+  };
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+  window.addEventListener('pointercancel', onUp);
+}
+
+// ---------------------------------------------------------------------------
+// Diagram layout: series left to right, k-of-n stacked between a split and a
+// voting join; big series blocks (order does not matter in series) wrap into a grid.
+
+const LW = 132, LH = 42, CW = 176, CH = 52, GX = 26, GY = 12, PAD = 12, HEAD = 24, RAIL = 18, RG = 44;
+let view = { k: 1, x: 20, y: 20 };
+let fitted = false;
+let lassoMode = false;
+const geo = new Map();
+const wrapWidth = () => Math.max(400, (el.svg.clientWidth || 640) / 0.8);
+
+function lay(id) {
+  const n = rt.nodes.get(id);
+  const g = { grid: null };
+  geo.set(id, g);
+  if (n.kind === 'leaf') { Object.assign(g, { w: LW, h: LH, port: LH / 2 }); return g; }
+  g.collapsed = id !== ROOT && (!n.expanded || !n.children.length);
+  if (g.collapsed) { Object.assign(g, { w: CW, h: CH, port: CH / 2 }); return g; }
+  const kids = n.children.map((c) => lay(c));
+  const head = id === ROOT ? 0 : HEAD;
+  g.par = id !== ROOT && n.mode === 'kofn';
+  if (id === ROOT) {
+    const target = Math.max(wrapWidth(), ...kids.map((k) => k.w));
+    const rows = [];
+    let cur = [];
+    let w = 0;
+    n.children.forEach((c, i) => {
+      const k = kids[i];
+      if (cur.length && w + GX + k.w > target) { rows.push(cur); cur = []; w = 0; }
+      w += (cur.length ? GX : 0) + k.w;
+      cur.push(c);
+    });
+    rows.push(cur);
+    g.rows = rows.map((r) => {
+      const gs = r.map((c) => geo.get(c));
+      return { ids: r, w: gs.reduce((s, k) => s + k.w, 0) + GX * (r.length - 1), above: Math.max(...gs.map((k) => k.port)), below: Math.max(...gs.map((k) => k.h - k.port)) };
+    });
+    g.w = PAD * 2 + GX * 2 + Math.max(...g.rows.map((r) => r.w));
+    g.h = PAD * 2 + g.rows.reduce((s, r) => s + r.above + r.below, 0) + RG * (g.rows.length - 1);
+    g.port = PAD + g.rows[0].above;
+  } else if (g.par) {
+    const inner = kids.reduce((s, k) => s + k.h, 0) + GY * (kids.length - 1);
+    Object.assign(g, { w: PAD * 2 + RAIL * 2 + Math.max(...kids.map((k) => k.w)), h: head + PAD * 2 + inner, port: head + PAD + inner / 2 });
+  } else if (kids.length > 8) {
+    const cols = Math.ceil(Math.sqrt(kids.length * 2.5));
+    const rows = Math.ceil(kids.length / cols);
+    const cw = Math.max(...kids.map((k) => k.w));
+    const ch = Math.max(...kids.map((k) => k.h));
+    g.grid = { cols, cw, ch };
+    Object.assign(g, { w: PAD * 2 + cols * cw + (cols - 1) * 10, h: head + PAD * 2 + rows * ch + (rows - 1) * GY });
+    g.port = g.h / 2;
+  } else {
+    const above = Math.max(...kids.map((k) => k.port));
+    const below = Math.max(...kids.map((k) => k.h - k.port));
+    Object.assign(g, { w: PAD * 2 + kids.reduce((s, k) => s + k.w, 0) + GX * (kids.length - 1), h: head + PAD * 2 + above + below, port: head + PAD + above });
+  }
+  return g;
+}
+
+function place(id, x, y) {
+  const n = rt.nodes.get(id);
+  const g = geo.get(id);
+  Object.assign(g, { x, y, shown: true });
+  if (n.kind === 'leaf' || g.collapsed) return;
+  const head = id === ROOT ? 0 : HEAD;
+  if (id === ROOT) {
+    let ry = y + PAD;
+    for (const row of g.rows) {
+      row.py = ry + row.above;
+      row.x0 = x + PAD + GX;
+      let cx = row.x0;
+      for (const c of row.ids) { const k = geo.get(c); place(c, cx, row.py - k.port); cx += k.w + GX; }
+      row.x1 = cx - GX;
+      ry += row.above + row.below + RG;
+    }
+  } else if (g.par) {
+    let cy = y + head + PAD;
+    for (const c of n.children) { place(c, x + PAD + RAIL, cy); cy += geo.get(c).h + GY; }
+  } else if (g.grid) {
+    const { cols, cw, ch } = g.grid;
+    n.children.forEach((c, i) => place(c, x + PAD + (i % cols) * (cw + 10), y + head + PAD + Math.floor(i / cols) * (ch + GY)));
+  } else {
+    let cx = x + PAD;
+    const py = y + g.port;
+    for (const c of n.children) { const k = geo.get(c); place(c, cx, py - k.port); cx += k.w + GX; }
+  }
+}
+
+function headText(n, g, st) {
+  const name = n.id === REST ? 'Everything else' : label(rt, n.id);
+  const max = Math.floor((g.w - 20) / 6.6);
+  const badge = n.proposed ? 'proposed' : n.mode === 'kofn' ? `${n.need ?? '?'} of ${members(rt, n.id)} must work` : 'series';
+  const full = `${name} · ${badge} · ${fmt(st.fit)} FIT`;
+  if (full.length <= max) return [name, ` · ${badge} · ${fmt(st.fit)} FIT`, full];
+  if (`${name} · ${fmt(st.fit)} FIT`.length <= max) return [name, ` · ${fmt(st.fit)} FIT`, full];
+  return [name.length > max ? `${name.slice(0, Math.max(3, max - 1))}…` : name, '', full];
+}
+
+function draw(id, L, inRed) {
+  const n = rt.nodes.get(id);
+  const g = geo.get(id);
+  const st = ev.stats.get(id);
+  const sel = selection.has(id) ? ' sel' : '';
+  const m = match.has(id) ? ' match' : '';
+  const did = esc(id);
+  if (n.kind === 'leaf' || g.collapsed) {
+    const leafy = n.kind === 'leaf';
+    const line = leafy ? lineOf(n) : null;
+    const miss = leafy && (!line || line.fit == null);
+    const title = leafy ? label(rt, id) : n.id === REST ? 'Everything else' : label(rt, id);
+    const sub = leafy ? (!line ? 'Not in parts list' : miss ? 'Missing input' : `${st.pieces > 1 ? `×${st.pieces} · ` : ''}${fmt(st.fit)} FIT`)
+      : `${n.proposed ? 'proposed' : n.mode === 'kofn' ? `${n.need ?? '?'} of ${members(rt, id)}` : 'series'} · ${st.pieces} parts · ${fmt(st.fit)} FIT`;
+    L.boxes.push(`<g class="st-box${leafy ? ' leaf' : ' collapsed'}${miss ? ' missing' : ''}${n.proposed ? ' proposed' : ''}${sel}${m}" data-id="${did}" data-drag="1" transform="translate(${g.x} ${g.y})">`
+      + (leafy && st.pieces > 1 ? `<rect class="stack" x="4" y="-4" width="${g.w}" height="${g.h}" rx="5"/>` : '')
+      + `<rect class="face" width="${g.w}" height="${g.h}" rx="${leafy ? 5 : 8}"/>`
+      + `<text class="t1" x="8" y="${leafy ? 17 : 20}">${esc(title.length > 20 ? `${title.slice(0, 19)}…` : title)}</text>`
+      + `<text class="sub" x="8" y="${leafy ? 33 : 38}">${esc(sub)}</text>`
+      + (leafy && guessedLine(line) && !miss ? `<circle class="gdot" cx="${g.w - 9}" cy="9" r="4"><title>Guessed values</title></circle>` : '')
+      + (!inRed && st.share > 0 ? `<rect class="share" x="0" y="${g.h - 3}" width="${Math.max(2, g.w * st.share).toFixed(1)}" height="3"/>` : '')
+      + `<title>${esc(title)}: ${esc(sub)}${line ? ` (${esc(line.label)})` : ''}</title></g>`);
+    return;
+  }
+  const py = g.y + g.port;
+  const red = ev.red.has(id);
+  if (id !== ROOT) {
+    const [nm, rest, full] = headText(n, g, st);
+    L.frames.push(`<rect class="frame${g.par ? ' par' : ''}${n.proposed ? ' proposed' : ''}${n.mode === 'kofn' && !red ? ' invalid' : ''}${sel}" data-id="${did}" x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="8"/>`
+      + `<rect class="hband" data-id="${did}"${n.fixed ? '' : ' data-drag="1"'} x="${g.x}" y="${g.y}" width="${g.w}" height="${HEAD}"><title>${esc(full)}. ${n.fixed ? '' : 'Drag to move. '}Double-click to zoom.</title></rect>`);
+    L.labels.push(`<text class="head" x="${g.x + 10}" y="${g.y + 16}">${esc(nm)}<tspan class="m">${esc(rest)}</tspan></text>`);
+  }
+  const kids = n.children.map((c) => geo.get(c));
+  if (id === ROOT) {
+    const left = g.x + PAD;
+    const right = g.x + g.w - PAD;
+    g.rows.forEach((row, i) => {
+      const rk = row.ids.map((c) => geo.get(c));
+      for (let j = 0; j + 1 < rk.length; j++) L.wires.push(`M${rk[j].x + rk[j].w} ${row.py}H${rk[j + 1].x}`);
+      if (i === 0) L.wires.push(`M${left} ${row.py}H${row.x0}`);
+      else {
+        const prev = g.rows[i - 1];
+        const gy = prev.py + prev.below + RG / 2;
+        L.wires.push(`M${prev.x1} ${prev.py}H${right}V${gy}H${left}V${row.py}H${row.x0}`);
+      }
+      if (i === g.rows.length - 1) L.wires.push(`M${row.x1} ${row.py}H${right}`);
+    });
+    L.labels.push(`<circle class="term" cx="${left}" cy="${g.rows[0].py}" r="4"/><circle class="term" cx="${right}" cy="${g.rows[g.rows.length - 1].py}" r="4"/>`);
+  } else if (g.par) {
+    const sx = g.x + PAD;
+    const jx = g.x + g.w - PAD;
+    L.wires.push(`M${g.x} ${py}H${sx}M${jx} ${py}H${g.x + g.w}`);
+    for (const k of kids) { const ky = k.y + k.port; L.wires.push(`M${sx} ${py}V${ky}H${k.x}M${k.x + k.w} ${ky}H${jx}V${py}`); }
+    L.labels.push(`<g class="vote${red ? '' : ' bad'}"><circle cx="${jx}" cy="${py}" r="12"/><text x="${jx}" y="${py}">${n.need ?? '?'}/${members(rt, id)}</text><title>${esc(red ? `${n.need} of ${members(rt, id)} must keep working; ${n.shortPct}% of failures break it anyway` : ev.prob.get(id).join(' '))}</title></g>`);
+  } else if (g.grid) {
+    L.wires.push(`M${g.x - 1} ${py}H${g.x + PAD / 2}M${g.x + g.w - PAD / 2} ${py}H${g.x + g.w + 1}`);
+  } else {
+    const first = kids[0];
+    const last = kids[kids.length - 1];
+    L.wires.push(`M${g.x} ${py}H${first.x}M${last.x + last.w} ${py}H${g.x + g.w}`);
+    for (let i = 0; i + 1 < kids.length; i++) L.wires.push(`M${kids[i].x + kids[i].w} ${py}H${kids[i + 1].x}`);
+  }
+  n.children.forEach((c) => draw(c, L, inRed || red));
+}
+
+function renderDiagram() {
+  geo.clear();
+  lay(ROOT);
+  place(ROOT, 0, 0);
+  const L = { frames: [], wires: [], boxes: [], labels: [] };
+  draw(ROOT, L, false);
+  el.vp.innerHTML = `${L.frames.join('')}<path class="wire" d="${L.wires.join('')}"/>${L.boxes.join('')}${L.labels.join('')}`;
+  applyView();
+  if (!fitted) fit(false);
+}
+
+function deepestBlockAt(lx, ly, exclude = []) {
+  let best = null;
+  const walk = (id) => {
+    const n = rt.nodes.get(id);
+    const g = geo.get(id);
+    if (n.kind !== 'block' || exclude.includes(id) || !g?.shown) return;
+    if (lx < g.x || ly < g.y || lx > g.x + g.w || ly > g.y + g.h) return;
+    best = id;
+    if (!g.collapsed) n.children.forEach(walk);
+  };
+  walk(ROOT);
+  return best;
+}
+
+function nodeAt(lx, ly) {
+  let best = null;
+  const walk = (id) => {
+    const n = rt.nodes.get(id);
+    const g = geo.get(id);
+    if (!g?.shown || lx < g.x || ly < g.y || lx > g.x + g.w || ly > g.y + g.h) return;
+    best = id;
+    if (n.kind === 'block' && !g.collapsed) n.children.forEach(walk);
+  };
+  walk(ROOT);
+  return best;
+}
+
+// Pan and zoom
+function applyView() {
+  el.vp.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`);
+  el.svg.classList.toggle('lod', view.k < 0.55);
+  el.zoomlvl.textContent = `${Math.round(view.k * 100)}%`;
+}
+const svgPoint = (e) => { const r = el.svg.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+const toLayout = ([px, py]) => [(px - view.x) / view.k, (py - view.y) / view.k];
+function zoomAt(px, py, f) {
+  const k = clamp(view.k * f, 0.06, 4);
+  const r = k / view.k;
+  view = { k, x: px - (px - view.x) * r, y: py - (py - view.y) * r };
+  applyView();
+}
+let anim = 0;
+function animateTo(to) {
+  const from = { ...view };
+  const t0 = performance.now();
+  const dur = matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 260;
+  const id = ++anim;
+  const step = (now) => {
+    if (id !== anim) return;
+    const u = dur ? Math.min(1, (now - t0) / dur) : 1;
+    const e = 1 - (1 - u) ** 3;
+    view = { k: from.k + (to.k - from.k) * e, x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e };
+    applyView();
+    if (u < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+function frameBox(x, y, w, h, animate) {
+  const r = el.svg.getBoundingClientRect();
+  if (!r.width || !r.height) return false;
+  const k = clamp(Math.min((r.width - 40) / w, (r.height - 40) / h), 0.06, 1.6);
+  const to = { k, x: (r.width - w * k) / 2 - x * k, y: (r.height - h * k) / 2 - y * k };
+  if (animate) animateTo(to); else { view = to; applyView(); }
+  return true;
+}
+function fit(animate) {
+  const g = geo.get(ROOT);
+  if (g) fitted = frameBox(g.x - 8, g.y - 8, g.w + 16, g.h + 16, animate) || fitted;
+}
+function zoomTo(id) {
+  for (let p = rt.parent.get(id); p; p = rt.parent.get(p)) rt.nodes.get(p).expanded = true;
+  if (rt.nodes.get(id).kind === 'block') rt.nodes.get(id).expanded = true;
+  renderTree();
+  renderDiagram();
+  const g = geo.get(id);
+  if (!g?.shown) return;
+  if (getComputedStyle(el.diagramPane).display === 'none') showTab('diagram');
+  frameBox(g.x - 12, g.y - 12, g.w + 24, g.h + 24, true);
+}
+
+// ---------------------------------------------------------------------------
+// Side panel
+
+function renderInspector() {
+  const ids = [...selection].filter((id) => rt.nodes.has(id));
+  if (!ids.length || (ids.length === 1 && ids[0] === ROOT)) {
+    el.inspector.innerHTML = `<h3>Board</h3><div id="st-insp-out"></div>
+      <ul class="st-howto">
+        <li><b>Select</b>: click a row or box; Ctrl/⌘+click adds; Shift+click a range; Shift+drag (or Lasso) on the diagram boxes a set.</li>
+        <li><b>Find</b>: type references such as <i>C1–C8, Q1</i> and press Enter to select exactly those parts.</li>
+        <li><b>Group</b>: <kbd>P</kbd> parallel (k of n), <kbd>S</kbd> series, <kbd>U</kbd> ungroup, <kbd>L</kbd> split a line, <kbd>M</kbd> move to a block.</li>
+        <li><b>Move</b>: drag a row by ⠿, or a box or block header in the diagram, onto any block. In the tree, Alt+→ moves into the block above, Alt+← moves out, Alt+↑/↓ reorders.</li>
+        <li><b>Zoom</b>: wheel or pinch; drag the background to pan; double-click a block to zoom to it; <kbd>0</kbd> fits.</li>
+      </ul>`;
+    return renderInspectorOut();
+  }
+  if (ids.length > 1) {
+    const parts = topLevel(rt, ids).reduce((s, id) => s + ev.stats.get(id).pieces, 0);
+    el.inspector.innerHTML = `<h3>${ids.length} selected</h3><p class="muted">${plural(parts, 'part')}. Group them, or drag them onto a block.</p>
+      <div class="st-btns"><button type="button" class="primary" data-st="group-kofn">Group as parallel</button><button type="button" data-st="group-series">Group as series</button></div><div id="st-insp-out"></div>`;
+    return renderInspectorOut();
+  }
+  const n = rt.nodes.get(ids[0]);
+  if (n.kind === 'leaf') {
+    const line = lineOf(n);
+    el.inspector.innerHTML = `<h3>${esc(label(rt, n.id))}</h3>
+      <p class="muted">${line ? `${esc(line.label)}; part line ${esc(line.comp.ref)}.` : 'Not in the parts list.'}</p>
+      ${line && line.fit == null ? `<p class="st-note miss">Missing input under Parts: ${esc(line.result.errors.join(' '))} Left out of every total until it is filled in.</p>` : ''}
+      ${guessedLine(line) ? '<p class="st-note guess">Has guessed values; check or confirm them under Parts.</p>' : ''}
+      <div id="st-insp-out"></div>
+      <div class="st-btns">${n.refs.length > 1 && !(line?.whole) ? '<button type="button" data-st="split">Split into single parts</button>' : ''}${line ? '<button type="button" data-st="open-part">Edit the part</button>' : ''}<button type="button" data-st="zoom">Show in diagram</button></div>`;
+    return renderInspectorOut();
+  }
+  const m = members(rt, n.id);
+  const allLeaves = n.children.every((c) => rt.nodes.get(c).kind === 'leaf');
+  el.inspector.innerHTML = `<h3>${n.fixed ? esc(n.id === REST ? 'Everything else' : 'Board') : 'Block'}</h3>
+    ${n.proposed ? `<div class="st-proposal"><p><b>Proposed by the netlist import:</b> ${esc(n.proposed)}. It counts in series until you accept it.</p>
+      <div class="st-btns"><button type="button" class="primary" data-st="accept">Mark redundant</button><button type="button" data-st="dismiss">Dismiss</button></div></div>` : ''}
+    ${n.fixed ? `<p class="muted">${n.id === REST ? 'Every part not placed in a block. Always in series.' : 'The board: its top level is always in series.'}</p>` : `
+    <div class="st-field"><label for="st-name">Name</label><input id="st-name" data-k="name" type="text" value="${esc(n.name)}" autocomplete="off"></div>
+    <div class="st-field"><label for="st-mode">How failures count</label><select id="st-mode" data-k="mode">
+      <option value="series"${n.mode === 'series' ? ' selected' : ''}>Series: any failure fails it</option>
+      <option value="kofn"${n.mode === 'kofn' ? ' selected' : ''}>Redundant: some may fail</option></select></div>`}
+    ${n.mode === 'kofn' ? `
+    <div class="st-field${n.need == null ? ' missing' : ''}" data-f="need"><label for="st-need">Must keep working <span class="st-tag">${n.need == null ? 'Missing' : ''}</span></label>
+      <div class="st-kn"><button type="button" data-st="need-" aria-label="One fewer">−</button><input id="st-need" data-k="need" type="number" min="1" max="${m}" step="1" inputmode="numeric" value="${n.need ?? ''}"><button type="button" data-st="need+" aria-label="One more">+</button><span class="muted">of ${m} ${allLeaves ? 'parts' : 'members'}</span></div></div>
+    <div class="st-field${n.shortPct == null ? ' missing' : n.inferred?.shortPct ? ' inferred' : ''}" data-f="shortPct"><label for="st-short">Failures that break it anyway (%) <span class="st-tag">${n.shortPct == null ? 'Missing' : n.inferred?.shortPct ? 'Guessed' : ''}</span></label>
+      <input id="st-short" data-k="shortPct" type="number" min="0" max="100" step="any" inputmode="decimal" value="${n.shortPct ?? ''}">
+      ${n.inferred?.shortPct ? `<p class="st-note guess" data-guess="1">Guessed ${esc(n.inferred.shortPct)}. <button type="button" class="link" data-st="confirm">Confirm</button></p>` : ''}
+      <p class="help">For example shorts. Counts for the parts directly in this block and in series blocks inside it; a redundant block inside counts as one member.</p></div>` : ''}
+    ${n.nets?.length ? `<p class="muted">Nets: ${esc(n.nets.join(', '))}</p>` : ''}
+    <div id="st-insp-out"></div>
+    <div class="st-btns">${n.fixed ? '' : '<button type="button" data-st="ungroup">Ungroup</button>'}<button type="button" data-st="zoom">Show in diagram</button></div>`;
+  renderInspectorOut();
+}
+
+function renderInspectorOut() {
+  const out = $('#st-insp-out', el.inspector);
+  if (!out) return;
+  const ids = [...selection].filter((id) => rt.nodes.has(id));
+  const id = ids.length === 1 ? ids[0] : ids.length ? null : ROOT;
+  if (!id) { out.innerHTML = ''; return; }
+  const n = rt.nodes.get(id);
+  const st = ev.stats.get(id);
+  const rows = [[st.red ? 'Mission-average rate' : 'Failure rate', `${fmt(st.fit)} FIT`]];
+  if (st.red) rows.push(['If all in series', `${fmt(st.sfit)} FIT`], ['Redundancy saves', `${fmt(st.sfit - st.fit)} FIT`]);
+  if (id !== ROOT) rows.push(['Share of board', st.inRed ? 'inside a redundant block' : `${(st.share * 100).toFixed(1)}%`]);
+  if (n.kind === 'block') rows.push(['Parts', String(st.pieces)]);
+  const prob = n.kind === 'block' ? ev.prob.get(id) : [];
+  const proposals = [...rt.nodes.values()].filter((x) => x.proposed).length;
+  out.innerHTML = `<dl class="st-nums">${rows.map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join('')}</dl>
+    ${st.inRed && id !== ROOT ? '<p class="help">Shown on its own: inside a redundant block it does not add straight to the board total.</p>' : ''}
+    ${prob.length ? `<ul class="st-problems">${prob.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>${n.mode === 'kofn' ? '<p class="help">Counts in series until these are fixed.</p>' : ''}` : ''}
+    ${id === ROOT && st.missing ? `<p class="help">${plural(st.missing, 'line')} with missing input ${st.missing === 1 ? 'is' : 'are'} left out, so the total is a lower bound.</p>` : ''}
+    ${id === ROOT && proposals ? `<p class="help">${plural(proposals, 'proposal')} from the netlist to review.</p>` : ''}`;
+}
+
+function renderMoveTo() {
+  reindex(rt);
+  const sel = topLevel(rt, selection);
+  const opts = ['<option value="">Move to… (M)</option>'];
+  const walk = (id, depth) => {
+    const n = rt.nodes.get(id);
+    if (n.kind !== 'block' || sel.some((s) => s === id || isAncestor(rt, s, id))) return;
+    opts.push(`<option value="${esc(id)}">${'  '.repeat(depth)}${esc(id === ROOT ? 'Board (top level)' : id === REST ? 'Everything else' : label(rt, id))}</option>`);
+    n.children.forEach((c) => walk(c, depth + 1));
+  };
+  walk(ROOT, 0);
+  el.moveto.innerHTML = opts.join('');
+  el.moveto.disabled = !sel.length || sel.every((s) => rt.nodes.get(s).fixed);
+}
+
+function showTab(tab) {
+  el.panes.dataset.tab = tab;
+  el.section.querySelectorAll('[role="tab"]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+  if (tab === 'diagram') requestAnimationFrame(() => { if (!fitted) fit(false); });
+}
+
+// ---------------------------------------------------------------------------
+// Wiring
+
+export function mountStructure(section, context) {
+  ctx = context;
+  el = {
+    section,
+    tree: $('#st-tree', section),
+    svg: $('#st-rbd', section),
+    vp: $('#st-vp', section),
+    lasso: $('#st-lasso', section),
+    zoomlvl: $('#st-zoomlvl', section),
+    inspector: $('#st-inspector', section),
+    status: $('#st-status', section),
+    moveto: $('#st-moveto', section),
+    find: $('#st-find', section),
+    panes: $('#st-panes', section),
+    diagramPane: $('.st-diagram-pane', section),
+    ghost: $('#st-ghost'),
+  };
+
+  el.tree.addEventListener('click', (e) => {
+    const li = e.target.closest('[data-id]');
+    if (!li || e.target.closest('.st-handle')) return;
+    const id = li.dataset.id;
+    const n = rt.nodes.get(id);
+    if (e.target.closest('.st-twisty') && n.kind === 'block') { focusId = id; setExpanded(id, !n.expanded); return; }
+    select(id, e);
+  });
+  el.tree.addEventListener('dblclick', (e) => {
+    const li = e.target.closest('[data-id]');
+    if (!li || e.target.closest('.st-twisty, .st-handle')) return;
+    if (rt.nodes.get(li.dataset.id).kind === 'block') zoomTo(li.dataset.id);
+  });
+  el.tree.addEventListener('pointerdown', (e) => {
+    const h = e.target.closest('.st-handle:not(.off)');
+    if (h && e.button === 0) beginNodePointer(e, h.closest('[data-id]').dataset.id, false);
+  });
+  el.tree.addEventListener('keydown', (e) => {
+    const i = visible.indexOf(focusId);
+    const n = rt.nodes.get(focusId);
+    if (e.altKey && e.key === 'ArrowLeft') outdent();
+    else if (e.altKey && e.key === 'ArrowRight') indent();
+    else if (e.altKey && e.key === 'ArrowUp') reorder(-1);
+    else if (e.altKey && e.key === 'ArrowDown') reorder(1);
+    else {
+      switch (e.key) {
+        case 'ArrowDown': if (i < visible.length - 1) setFocus(visible[i + 1], e.shiftKey); break;
+        case 'ArrowUp': if (i > 0) setFocus(visible[i - 1], e.shiftKey); break;
+        case 'Home': setFocus(visible[0]); break;
+        case 'End': setFocus(visible[visible.length - 1]); break;
+        case 'ArrowRight': if (n.kind === 'block' && n.children.length) { if (!n.expanded) setExpanded(focusId, true); else setFocus(visible[i + 1]); } break;
+        case 'ArrowLeft': if (n.kind === 'block' && n.expanded && n.children.length) setExpanded(focusId, false); else if (rt.parent.get(focusId)) setFocus(rt.parent.get(focusId)); break;
+        case ' ': if (selection.has(focusId)) selection.delete(focusId); else selection.add(focusId); anchor = focusId; render(); break;
+        case 'Enter': selection = new Set([focusId]); anchor = focusId; render(); break;
+        default: return;
+      }
+    }
+    e.preventDefault();
+  });
+
+  // Diagram: pan, pinch, lasso, drag, zoom.
+  if (typeof ResizeObserver !== 'undefined') {
+    let lastW = 0;
+    new ResizeObserver(() => {
+      const w = el.svg.clientWidth;
+      if (w && Math.abs(w - lastW) > 40 && rt) { lastW = w; renderDiagram(); fitted = false; }
+      if (!fitted && rt) fit(false);
+    }).observe(el.svg);
+  }
+  el.svg.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(...svgPoint(e), Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015))); }, { passive: false });
+  const pointers = new Map();
+  let gesture = null;
+  el.svg.addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest('[data-drag]');
+    if (handle && e.button === 0 && pointers.size === 0) { beginNodePointer(e, handle.dataset.id, true); return; }
+    el.svg.setPointerCapture?.(e.pointerId);
+    pointers.set(e.pointerId, svgPoint(e));
+    const pts = [...pointers.values()];
+    if (pts.length === 2) {
+      const [a, b] = pts;
+      gesture = { type: 'pinch', d: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], v0: { ...view } };
+      return;
+    }
+    if (pts.length > 2) return;
+    const p = svgPoint(e);
+    gesture = lassoMode || e.shiftKey ? { type: 'lasso', p0: p, p1: p, add: e.shiftKey || e.ctrlKey || e.metaKey } : { type: 'pan', p0: p, v0: { ...view }, moved: false };
+  });
+  el.svg.addEventListener('pointermove', (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, svgPoint(e));
+    if (!gesture) return;
+    const p = svgPoint(e);
+    if (gesture.type === 'pinch' && pointers.size >= 2) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const k = clamp(gesture.v0.k * d / gesture.d, 0.06, 4);
+      const r = k / gesture.v0.k;
+      view = { k, x: mid[0] - (gesture.mid[0] - gesture.v0.x) * r, y: mid[1] - (gesture.mid[1] - gesture.v0.y) * r };
+      applyView();
+    } else if (gesture.type === 'pan') {
+      const dx = p[0] - gesture.p0[0];
+      const dy = p[1] - gesture.p0[1];
+      if (Math.hypot(dx, dy) > 3) gesture.moved = true;
+      view = { ...gesture.v0, x: gesture.v0.x + dx, y: gesture.v0.y + dy };
+      applyView();
+    } else if (gesture.type === 'lasso') {
+      gesture.p1 = p;
+      const [x0, y0] = gesture.p0;
+      el.lasso.style.display = '';
+      el.lasso.setAttribute('x', Math.min(x0, p[0]));
+      el.lasso.setAttribute('y', Math.min(y0, p[1]));
+      el.lasso.setAttribute('width', Math.abs(p[0] - x0));
+      el.lasso.setAttribute('height', Math.abs(p[1] - y0));
+    }
+  });
+  const finishLasso = (g) => {
+    el.lasso.style.display = 'none';
+    const [ax, ay] = toLayout(g.p0);
+    const [bx, by] = toLayout(g.p1);
+    const [x0, x1, y0, y1] = [Math.min(ax, bx), Math.max(ax, bx), Math.min(ay, by), Math.max(ay, by)];
+    const hits = [];
+    const walk = (id) => {
+      const n = rt.nodes.get(id);
+      const gg = geo.get(id);
+      if (!gg?.shown) return;
+      if (!n.fixed && gg.x >= x0 && gg.y >= y0 && gg.x + gg.w <= x1 && gg.y + gg.h <= y1) { hits.push(id); return; }
+      if (n.kind === 'block' && !gg.collapsed) n.children.forEach(walk);
+    };
+    walk(ROOT);
+    if (!g.add) selection = new Set();
+    hits.forEach((h) => selection.add(h));
+    focusId = hits[0] ?? focusId;
+    anchor = focusId;
+    render();
+    say(hits.length ? `Lasso selected ${plural(hits.length, 'item')}. P groups them as parallel, S as series.` : 'Nothing fully inside the lasso.');
+  };
+  const endPointer = (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.delete(e.pointerId);
+    const g = gesture;
+    if (pointers.size === 0) gesture = null; else if (g?.type === 'pinch') { gesture = null; return; }
+    if (!g || e.type === 'pointercancel') return;
+    if (g.type === 'pan' && !g.moved) {
+      const hit = deepestBlockAt(...toLayout(svgPoint(e)));
+      if (hit && hit !== ROOT) select(hit, { ctrlKey: e.ctrlKey || e.metaKey }); else { selection = new Set(); render(); }
+    } else if (g.type === 'lasso') finishLasso(g);
+  };
+  el.svg.addEventListener('pointerup', endPointer);
+  el.svg.addEventListener('pointercancel', endPointer);
+  el.svg.addEventListener('dblclick', (e) => {
+    const id = nodeAt(...toLayout(svgPoint(e)));
+    if (!id || id === ROOT) return fit(true);
+    zoomTo(rt.nodes.get(id).kind === 'block' ? id : rt.parent.get(id));
+  });
+  el.svg.addEventListener('keydown', (e) => {
+    const r = el.svg.getBoundingClientRect();
+    const c = [r.width / 2, r.height / 2];
+    const pan = { ArrowLeft: [60, 0], ArrowRight: [-60, 0], ArrowUp: [0, 60], ArrowDown: [0, -60] }[e.key];
+    if (e.key === '+' || e.key === '=') zoomAt(...c, 1.25);
+    else if (e.key === '-' || e.key === '_') zoomAt(...c, 0.8);
+    else if (e.key === '0') fit(true);
+    else if (pan) { view = { ...view, x: view.x + pan[0], y: view.y + pan[1] }; applyView(); }
+    else if (e.key === 'Enter' && selection.size) zoomTo([...selection][0]);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  // Side panel fields: typing updates the block without redrawing the panel.
+  el.inspector.addEventListener('input', (e) => {
+    const k = e.target.dataset.k;
+    if (!k || k === 'mode') return;
+    const n = rt.nodes.get([...selection][0]);
+    if (k === 'name') n.name = e.target.value;
+    else {
+      n[k] = numOrNull(e.target.value);
+      if (k === 'shortPct' && n.inferred?.shortPct) { n.inferred = {}; $('[data-guess]', el.inspector)?.remove(); }
+      const f = e.target.closest('.st-field');
+      f.classList.toggle('missing', n[k] == null);
+      f.classList.remove('inferred');
+      $('.st-tag', f).textContent = n[k] == null ? 'Missing' : '';
+    }
+    commit();
+  });
+  el.inspector.addEventListener('change', (e) => {
+    if (e.target.dataset.k !== 'mode') return;
+    const n = rt.nodes.get([...selection][0]);
+    n.mode = e.target.value;
+    n.proposed = null;
+    if (n.mode === 'kofn' && n.shortPct == null) suggestShort(n.id);
+    inspectorKey = '';
+    commit();
+    $('#st-mode', el.inspector)?.focus();
+  });
+
+  section.addEventListener('click', (e) => {
+    const tab = e.target.closest('[role="tab"]');
+    if (tab) return showTab(tab.dataset.tab);
+    const btn = e.target.closest('[data-st]');
+    if (!btn) return;
+    const n = rt.nodes.get([...selection][0]);
+    const r = el.svg.getBoundingClientRect();
+    switch (btn.dataset.st) {
+      case 'group-kofn': return group('kofn');
+      case 'group-series': return group('series');
+      case 'ungroup': return ungroup();
+      case 'split': return split();
+      case 'accept':
+        n.proposed = null; n.mode = 'kofn'; n.need = null;
+        suggestShort(n.id);
+        inspectorKey = '';
+        commit();
+        say('Marked redundant. Say how many must keep working.');
+        return $('#st-need', el.inspector)?.focus();
+      case 'dismiss': return ungroup(n.id);
+      case 'confirm': n.inferred = {}; inspectorKey = ''; commit(); return say('Confirmed.');
+      case 'need-': case 'need+':
+        n.need = clamp((n.need ?? members(rt, n.id)) + (btn.dataset.st === 'need+' ? 1 : -1), 1, members(rt, n.id));
+        inspectorKey = '';
+        commit();
+        return $('#st-need', el.inspector)?.focus();
+      case 'open-part': return ctx.openPart(rt.lines.get(n.lineId)?.comp.id);
+      case 'zoom': return zoomTo(n.kind === 'leaf' ? rt.parent.get(n.id) : n.id);
+      case 'fit': return fit(true);
+      case 'zin': return zoomAt(r.width / 2, r.height / 2, 1.25);
+      case 'zout': return zoomAt(r.width / 2, r.height / 2, 0.8);
+      case 'lasso':
+        lassoMode = !lassoMode;
+        btn.setAttribute('aria-pressed', String(lassoMode));
+        return say(lassoMode ? 'Lasso on: drag on the diagram background to select.' : 'Lasso off: dragging the background pans.');
+      case 'select-matches': return selectMatches();
+      default:
+    }
+  });
+  // Shortcuts work while focus is inside the structure editor, outside text fields.
+  section.addEventListener('keydown', (e) => {
+    if (e.target.closest('input, select, textarea') || e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === 'p') group('kofn');
+    else if (k === 's') group('series');
+    else if (k === 'u') ungroup();
+    else if (k === 'l') split();
+    else if (k === 'm') { if (!el.moveto.disabled) el.moveto.focus(); }
+    else if (e.key === 'Escape') { selection = new Set(); render(); }
+    else return;
+    e.preventDefault();
+  });
+  el.moveto.addEventListener('change', (e) => { const t = e.target.value; if (t) move([...selection], t); });
+  el.find.addEventListener('input', (e) => {
+    const q = e.target.value.trim();
+    match = new Set();
+    if (q) {
+      const want = new Set(q.split(',').map((s) => s.trim().toUpperCase()));
+      for (const n of rt.nodes.values()) {
+        if (n.kind !== 'leaf' || !n.lineId) continue;
+        const line = rt.lines.get(n.lineId);
+        if (n.refs.some((r) => want.has(r.toUpperCase())) || line.label.toLowerCase().includes(q.toLowerCase()) || compressRefs(n.refs).toUpperCase().includes(q.toUpperCase())) match.add(n.id);
+      }
+    }
+    renderTree();
+    renderDiagram();
+  });
+  el.find.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); selectMatches(); } });
+  say('Try: type C1–C3 in Find and press Enter, then P. Or drag a ⠿ handle onto a block.');
+}
+
+// For tests and the page: the current evaluation.
+export const currentStructure = () => ({ rt, ev });

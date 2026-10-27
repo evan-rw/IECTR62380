@@ -104,14 +104,50 @@
       <div id="parts" class="parts"></div>
     </section>
 
-    <section class="panel" aria-labelledby="structure-heading">
-      <div class="panel-head">
-        <h2 id="structure-heading">Reliability structure</h2>
-        <button type="button" data-act="add-group">Add group</button>
+    <section class="panel" id="structure" aria-labelledby="structure-heading">
+      <h2 id="structure-heading">Reliability structure</h2>
+      <p class="hint">Every part starts in “Everything else, in series”: any failure fails the board. Put parts that back each other up into a parallel block, such as capacitors on a rail, then say how many must keep working and what share of their failures breaks the block anyway (a shorted capacitor takes the whole rail down). Blocks nest, so two series power paths can sit inside a 1-of-2 block. The tree and the diagram edit the same structure. Netlist import proposes blocks of parts wired to the same nets; they count in series until you accept them. A redundant block has no constant failure rate, so the board figures become averages over the mission length.</p>
+      <div class="st-toolbar" role="toolbar" aria-label="Grouping">
+        <button type="button" data-st="group-kofn" aria-keyshortcuts="P">Group as parallel <kbd>P</kbd></button>
+        <button type="button" data-st="group-series" aria-keyshortcuts="S">Group as series <kbd>S</kbd></button>
+        <button type="button" data-st="ungroup" aria-keyshortcuts="U">Ungroup <kbd>U</kbd></button>
+        <button type="button" data-st="split" aria-keyshortcuts="L">Split line <kbd>L</kbd></button>
+        <label class="visually-hidden" for="st-moveto">Move the selection to a block</label>
+        <select id="st-moveto" aria-keyshortcuts="M"></select>
       </div>
-      <p class="hint">By default every part is in series: any failure fails the board. Put parts that back each other up into a group, such as capacitors in parallel on a rail, and mark it redundant. Then say how many must keep working, and what share of their failures breaks the group anyway (a shorted capacitor takes the whole rail down). Netlist import proposes groups of parts wired to the same nets; they count in series until you mark them redundant. A redundant group has no constant failure rate, so the board figures become averages over the mission length.</p>
-      <div id="structure-tree"></div>
-      <div id="groups" class="groups"></div>
+      <p id="st-status" class="st-status" role="status"></p>
+      <div class="st-tabs" role="tablist" aria-label="View">
+        <button type="button" role="tab" data-tab="tree" aria-selected="true">Tree</button>
+        <button type="button" role="tab" data-tab="diagram" aria-selected="false">Diagram</button>
+      </div>
+      <div class="st-panes" id="st-panes" data-tab="tree">
+        <div class="st-side">
+          <section class="st-pane st-tree-pane" aria-label="Structure tree">
+            <div class="st-pane-head">
+              <label class="visually-hidden" for="st-find">Find parts</label>
+              <input id="st-find" class="st-grow" type="search" placeholder="Find: C1–C8, Q1 or “tantalum”, then Enter" autocomplete="off">
+              <button type="button" data-st="select-matches">Select</button>
+            </div>
+            <div class="st-tree-scroll"><ul id="st-tree" role="tree" aria-label="Reliability structure" aria-multiselectable="true"></ul></div>
+          </section>
+          <aside class="st-pane st-inspector" id="st-inspector" aria-label="Selected item"></aside>
+        </div>
+        <section class="st-pane st-diagram-pane" aria-label="Block diagram">
+          <div class="st-pane-head">
+            <button type="button" data-st="zout" aria-label="Zoom out">−</button>
+            <span id="st-zoomlvl">100%</span>
+            <button type="button" data-st="zin" aria-label="Zoom in">+</button>
+            <button type="button" data-st="fit">Fit <kbd>0</kbd></button>
+            <button type="button" data-st="lasso" aria-pressed="false" title="Drag on the background to select a box of items (or hold Shift)">Lasso</button>
+            <span class="st-grow"></span>
+            <span class="st-pane-tip">Wheel or pinch to zoom · drag the background to pan · double-click a block</span>
+          </div>
+          <svg id="st-rbd" tabindex="0" role="img" aria-label="Reliability block diagram of the board. Edit with the structure tree; with this focused, plus and minus zoom, arrows pan, 0 fits.">
+            <g id="st-vp"></g>
+            <rect id="st-lasso" class="lasso" style="display:none"></rect>
+          </svg>
+        </section>
+      </div>
     </section>
 
     <section class="panel" aria-labelledby="results-heading">
@@ -140,5 +176,6 @@
       <p>Not affiliated with the IEC. IEC TR 62380:2004 was withdrawn in favour of IEC 61709:2017 but is still referenced by ISO 26262-11:2018. Your work is saved in this browser only; use Export JSON to keep a copy. <a href="https://github.com/evan-rw/IECTR62380">Source code</a> (AGPL-3.0) · <a href="sources.html">Data sources and licences</a>.</p>
     </div>
   </footer>
+  <div id="st-ghost" class="st-ghost" hidden></div>
 </body>
 </html>
