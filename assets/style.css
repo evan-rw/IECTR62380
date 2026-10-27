@@ -348,6 +348,34 @@ table.results td:nth-child(2) { color: var(--text-2); }
 table.results .bad { color: var(--error); font-weight: bold; }
 table.results tr:last-child td { background: var(--face); font-weight: bold; border-top: 2px solid var(--shadow); }
 
+/* Pixel-art accents (assets/art, drawn by tools/pixel_art.py). Decorative only:
+   empty pseudo-elements and backgrounds, so screen readers and text are untouched. */
+
+.site-nav a::before,
+#results tr.top > td:first-child::after,
+[data-act="confirm-guesses"]::before,
+.st-ghost::before,
+.st-row.drop .st-nm::before {
+  content: ""; display: inline-block; width: 16px; height: 16px; vertical-align: middle;
+  margin: -3px 4px -3px 0;
+  background: center / 16px 16px no-repeat; image-rendering: pixelated;
+}
+/* Page menu: the way out is a blue portal, the page you are on a cyan one. */
+.site-nav a::before { background-image: url(art/portal-blue.svg); }
+.site-nav a[aria-current="page"]::before { background-image: url(art/portal-cyan.svg); }
+/* The part adding the most to the total. */
+#results tr.top > td:first-child::after { margin: -3px 0 -3px 5px; background-image: url(art/flame.svg); }
+/* Confirming locks the guessed values in. */
+[data-act="confirm-guesses"]::before { background-image: url(art/key.svg); }
+/* Drag and drop in the structure tree: leave by one portal, arrive by the other. */
+.st-ghost::before { background-image: url(art/portal-blue.svg); }
+.st-row.drop .st-nm::before { background-image: url(art/portal-cyan.svg); }
+/* An empty board: parts arrive from the schematic. */
+.parts .empty {
+  display: flex; align-items: center; min-height: 64px; padding-left: 76px;
+  background: url(art/portal-floor.svg) left center / 64px 64px no-repeat; image-rendering: pixelated;
+}
+
 /* Sources page */
 
 .source-table td { vertical-align: top; }

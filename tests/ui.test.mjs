@@ -67,6 +67,8 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.equal(total(), '49 FIT');
   assert.equal(boardTotal(), 48.7);
   assert.equal(warn(), '');
+  // The largest contributor carries the flame accent.
+  assert.deepEqual($$('#results tr.top').map((tr) => tr.cells[0].textContent), ['U3']);
   assert.match($('.notice').textContent, /not taken from the standard.*not suitable as evidence for an ISO 26262 or IEC 61508 safety case/s);
   assert.match($('#summary .scope').textContent, /parts wired in parallel still add up/);
   // The data sources now live on their own page.
