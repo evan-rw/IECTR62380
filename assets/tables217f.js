@@ -353,7 +353,62 @@ export const CAPACITORS_217F = {
   piE: [1.0, 10, 20, 7.0, 15, 12, 15, 25, 30, 40, 0.50, 20, 50, 570],
 };
 
+export const RESISTORS_217F = {
+  id: 'mil-resistor',
+  title: 'Resistors',
+  ref: 'MIL-HDBK-217F Notice 2, section 9.1',
+  status: 'handbook',
+  sources: ['mil217fN2'],
+  note: 'One model for every resistor style, from the Notice 2 pages, which replace sections 9.0–9.17 of the 1991 edition. Each style names the π_T and π_S columns it uses; power-film resistors (RD) and thermistors (RTH) have no temperature factor, networks (RZ) and thermistors no stress factor. The page\'s π_P row printed as 0.13 W is 1/8 W. Commercial parts take π_Q = 10, so these rates are typically far above the IEC TR 62380 resistor rates.',
+  // Styles in the page's order. t, s: the π_T and π_S columns (null: the factor is 1).
+  // fm: the MIL-HDBK-338B failure-mode row.
+  styles: [
+    { id: 'RC', spec: '11', group: 'Composition', desc: 'Composition, insulated', lb: 0.0017, t: 1, s: 2, fm: 'Resistor, Composition' },
+    { id: 'RCR', spec: '39008', group: 'Composition', desc: 'Composition, insulated, established reliability', lb: 0.0017, t: 1, s: 2, fm: 'Resistor, Composition' },
+    { id: 'RL', spec: '22684', group: 'Film', desc: 'Film, insulated', lb: 0.0037, t: 2, s: 1, fm: 'Resistor, Film' },
+    { id: 'RLR', spec: '39017', group: 'Film', desc: 'Film, insulated, established reliability', lb: 0.0037, t: 2, s: 1, fm: 'Resistor, Film' },
+    { id: 'RNR', name: 'RN (R, C or N)', spec: '55182', group: 'Film', desc: 'Film, established reliability', lb: 0.0037, t: 2, s: 1, fm: 'Resistor, Film' },
+    { id: 'RM', spec: '55342', group: 'Film', desc: 'Film chip, established reliability', lb: 0.0037, t: 2, s: 1, fm: 'Resistor, Film' },
+    { id: 'RN', spec: '10509', group: 'Film', desc: 'Film, high stability', lb: 0.0037, t: 2, s: 1, fm: 'Resistor, Film' },
+    { id: 'RD', spec: '11804', group: 'Film', desc: 'Film, power type', lb: 0.0037, t: null, s: 1, fm: 'Resistor, Film' },
+    { id: 'RZ', spec: '83401', group: 'Film', desc: 'Network, film (one package)', lb: 0.0019, t: 1, s: null, fm: 'Resistor, Network' },
+    { id: 'RB', spec: '93', group: 'Wirewound', desc: 'Wirewound, accurate', lb: 0.0024, t: 2, s: 1, fm: 'Resistor, Wirewound' },
+    { id: 'RBR', spec: '39005', group: 'Wirewound', desc: 'Wirewound, accurate, established reliability', lb: 0.0024, t: 2, s: 1, fm: 'Resistor, Wirewound' },
+    { id: 'RW', spec: '26', group: 'Wirewound', desc: 'Wirewound, power type', lb: 0.0024, t: 2, s: 2, fm: 'Resistor, Wirewound' },
+    { id: 'RWR', spec: '39007', group: 'Wirewound', desc: 'Wirewound, power type, established reliability', lb: 0.0024, t: 2, s: 2, fm: 'Resistor, Wirewound' },
+    { id: 'RE', spec: '18546', group: 'Wirewound', desc: 'Wirewound, power type, chassis mounted', lb: 0.0024, t: 2, s: 2, fm: 'Resistor, Wirewound' },
+    { id: 'RER', spec: '39009', group: 'Wirewound', desc: 'Wirewound, power type, chassis mounted, established reliability', lb: 0.0024, t: 2, s: 2, fm: 'Resistor, Wirewound' },
+    { id: 'RTH', spec: '23648', group: 'Thermistor', desc: 'Thermistor, insulated', lb: 0.0019, t: null, s: null, fm: null },
+    { id: 'RT', spec: '27208', group: 'Variable', desc: 'Variable wirewound, lead-screw', lb: 0.0024, t: 2, s: 1, fm: 'Resistor, Variable' },
+    { id: 'RTR', spec: '39015', group: 'Variable', desc: 'Variable wirewound, lead-screw, established reliability', lb: 0.0024, t: 2, s: 1, fm: 'Resistor, Variable' },
+    { id: 'RR', spec: '12934', group: 'Variable', desc: 'Variable wirewound, precision', lb: 0.0024, t: 2, s: 1, fm: 'Resistor, Variable' },
+    { id: 'RA', spec: '19', group: 'Variable', desc: 'Variable wirewound, low operating temperature', lb: 0.0024, t: 1, s: 1, fm: 'Resistor, Variable' },
+    { id: 'RK', spec: '39002', group: 'Variable', desc: 'Variable wirewound, semi-precision', lb: 0.0024, t: 1, s: 1, fm: 'Resistor, Variable' },
+    { id: 'RP', spec: '22', group: 'Variable', desc: 'Wirewound, power type', lb: 0.0024, t: 2, s: 1, fm: 'Resistor, Variable' },
+    { id: 'RJ', spec: '22097', group: 'Variable', desc: 'Variable non-wirewound (cermet trimmer)', lb: 0.0037, t: 2, s: 1, fm: 'Resistor, Variable' },
+    { id: 'RJR', spec: '39035', group: 'Variable', desc: 'Variable non-wirewound, established reliability', lb: 0.0037, t: 2, s: 1, fm: 'Resistor, Variable' },
+    { id: 'RV', spec: '94', group: 'Variable', desc: 'Variable composition', lb: 0.0037, t: 2, s: 1, fm: 'Resistor, Variable' },
+    { id: 'RQ', spec: '39023', group: 'Variable', desc: 'Variable non-wirewound, precision', lb: 0.0037, t: 1, s: 1, fm: 'Resistor, Variable' },
+    { id: 'RVC', spec: '23285', group: 'Variable', desc: 'Variable non-wirewound', lb: 0.0037, t: 1, s: 1, fm: 'Resistor, Variable' },
+  ],
+  // π_T = exp(−Ea/k·[1/(T+273) − 1/298]); T is the resistor's case temperature.
+  ea: { 1: 0.2, 2: 0.08 },
+  // π_P = P^0.39, P the dissipated power in watts.
+  powerExponent: 0.39,
+  // π_S = a·e^(b·S), S = dissipated power / rated power.
+  stress: { 1: [0.71, 1.1], 2: [0.54, 2.04] },
+  quality: [
+    { id: 'S', label: 'S (established reliability)', piQ: 0.03 },
+    { id: 'R', label: 'R (established reliability)', piQ: 0.1 },
+    { id: 'P', label: 'P (established reliability)', piQ: 0.3 },
+    { id: 'M', label: 'M (established reliability)', piQ: 1.0 },
+    { id: 'non-er', label: 'Non-established reliability (most two-letter styles)', piQ: 3.0 },
+    { id: 'commercial', label: 'Commercial or unknown screening', piQ: 10 },
+  ],
+  piE: [1.0, 4.0, 16, 12, 42, 18, 23, 31, 43, 63, 0.50, 37, 87, 1728],
+};
+
 export const TABLES_217F = [
   RELAY_MECHANICAL, RELAY_SOLID_STATE, SWITCHES, CONNECTORS, SOCKETS, PTH_BOARDS,
-  CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS, CAPACITORS_217F,
+  CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS, CAPACITORS_217F, RESISTORS_217F,
 ];

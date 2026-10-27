@@ -102,4 +102,13 @@ test('new parts of every 217F type start with their unknowns missing', () => {
   assert.deepEqual(cap('CSR'), ['cr']);
   assert.deepEqual(cap('CWR'), ['cr']);
   assert.deepEqual(cap('CFR'), []);
+  assert.deepEqual(missing('mil-resistor'), ['style', 'power']);
+  // Rated power only where π_S applies; case temperature rise only where π_T does.
+  const res = (style) => computeComponent({ model: 'mil-resistor', qty: 1, params: { style, power: 0.1 } }, profile());
+  assert.deepEqual(res('RM').missing, ['rated']);
+  assert.deepEqual(res('RZ').missing, []);
+  assert.deepEqual(res('RTH').missing, []);
+  const shown = (style) => MODELS['mil-resistor'].fields.filter((f) => !f.show || f.show({ style })).map((f) => f.key);
+  assert.deepEqual(shown('RD'), ['style', 'power', 'rated', 'quality']);
+  assert.deepEqual(shown('RTH'), ['style', 'power', 'quality']);
 });

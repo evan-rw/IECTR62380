@@ -210,3 +210,15 @@ test('film, mica and trimmer capacitors go to the MIL-HDBK-217F capacitor model'
   const values = { '100nF': 0.1, '4u7': 4.7, '10 pF': 0.00001, '2.2µF/50V': 2.2, '1n5': 0.0015, '47UF 25V': 47, '0,47u': 0.47, C0G: null, '': null };
   for (const [v, uF] of Object.entries(values)) assert.equal(parseCapacitance(v), uF, v);
 });
+
+test('wirewound resistors, potentiometers and thermistors go to the MIL-HDBK-217F resistor model', () => {
+  const c = (designator, value, footprint = '') => classifyComponent({ designator, footprint, value, description: '' });
+  const ww = c('R9', '0R1 5W wirewound', 'R_Axial_Power_L25.0mm');
+  assert.equal(ww.model, 'mil-resistor');
+  assert.deepEqual(ww.params, { style: 'RW', power: null });
+  assert.equal(c('RV1', '10k', 'Potentiometer_Bourns_3296W_Vertical').params.style, 'RJ');
+  assert.equal(c('TH1', '10k NTC').params.style, 'RTH');
+  assert.equal(c('RT1', 'PTC polyfuse').model, 'fixed', 'a resettable fuse is not a thermistor');
+  assert.equal(c('RV2', 'S14K275 varistor').model, 'fixed', 'varistors are not modelled');
+  assert.equal(c('R1', '10k', 'R_0603_1608Metric').model, 'resistor', 'chip resistors stay on the 62380 model');
+});

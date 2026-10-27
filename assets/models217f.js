@@ -9,7 +9,7 @@
 
 import {
   ENVIRONMENTS, LOAD_TYPES, RELAY_MECHANICAL, RELAY_SOLID_STATE, SWITCHES, CONNECTORS, SOCKETS,
-  PTH_BOARDS, CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS, CAPACITORS_217F,
+  PTH_BOARDS, CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS, CAPACITORS_217F, RESISTORS_217F,
 } from './tables217f.js';
 
 const BOLTZMANN_EV = 8.617e-5;
@@ -415,6 +415,62 @@ export const MODELS_217F = {
         ['π_C', fmtE(piC), `C^${cExp}, C = ${fmtE(C)} µF`],
         ['π_V', fmtE(piV), `(S/${a})^${n} + 1, S = ${fmtE(S)}`],
         ['π_SR', fmtE(piSR), st?.sr ? `CR = ${fmtE(cr)} Ω/V` : 'not used for this style'],
+        ['π_Q', fmtE(piQ), ''],
+      ], { tempLabel: 'T', operatingLabel: 'π_T' });
+    },
+  },
+  'mil-resistor': {
+    label: 'Resistor, any style (MIL-HDBK-217F)',
+    group: 'MIL-HDBK-217F',
+    clause: RESISTORS_217F.ref,
+    status: status(RESISTORS_217F),
+    defaults: { style: null, power: null, rated: null, quality: 'commercial', rise: 0 },
+    fields: [
+      {
+        key: 'style', label: 'Style', type: 'select', required: true, wide: true,
+        options: RESISTORS_217F.styles.map((r) => ({ value: r.id, label: `${r.name ?? r.id}: ${r.desc} (MIL-R-${r.spec})`, group: r.group })),
+        help: 'Closest commercial equivalents: thick or thin film chip RM; metal film RN; power wirewound RW; cermet trimmer RJ; NTC or PTC thermistor RTH.',
+      },
+      { key: 'power', label: 'Dissipated power P', unit: 'W', type: 'number', min: 0, step: 'any', required: true },
+      {
+        key: 'rated', label: 'Rated power', unit: 'W', type: 'number', min: 0, step: 'any', required: true,
+        show: (p) => find(RESISTORS_217F.styles, p.style)?.s != null,
+      },
+      { ...qualityField(RESISTORS_217F), help: 'Commercial parts take π_Q = 10.' },
+      {
+        key: 'rise', label: 'Case temperature rise above board ambient', unit: '°C', type: 'number', min: 0, step: 'any', required: true,
+        show: (p) => find(RESISTORS_217F.styles, p.style)?.t != null,
+        help: 'The handbook allows 0 for low-power resistors that are not power types.',
+      },
+    ],
+    describe: (p) => {
+      const st = find(RESISTORS_217F.styles, p.style);
+      return st ? `${st.desc} (${st.name ?? st.id})` : 'Resistor';
+    },
+    compute(p, prof) {
+      const t = RESISTORS_217F;
+      const env = environment(t, prof);
+      const st = find(t.styles, p.style);
+      const lb = st?.lb ?? 0;
+      // The page's π_P table starts at 0.001 W; below that the power law would reach 0.
+      const P = Math.max(0.001, p.power || 0);
+      const piP = P ** t.powerExponent;
+      const S = p.rated > 0 ? (p.power || 0) / p.rated : 0;
+      const [a, b] = st?.s ? t.stress[st.s] : [1, 0];
+      const piS = a * Math.exp(b * S);
+      const piQ = find(t.quality, p.quality)?.piQ ?? 1;
+      const ea = st?.t ? t.ea[st.t] : 0;
+      const rise = st?.t ? p.rise || 0 : 0;
+      const piT = (temp) => (st?.t ? Math.exp((-ea / BOLTZMANN_EV) * (1 / (temp + 273) - 1 / 298)) : 1);
+      const w = weighted(prof, (temp) => {
+        const f = piT(temp);
+        return { lambda: lb * f * piP * piS * piQ * (env.piE ?? 0), factor: f };
+      }, (ph) => ph.tac + rise);
+      return result(t, env, w, [
+        ['λ_b', fmtE(lb), st ? `style ${st.name ?? st.id}` : ''],
+        ['π_T', st?.t ? `exp(−${ea}/k·[1/(T+273) − 1/298])` : '1', st?.t ? `column ${st.t}, per phase, below` : 'no temperature factor for this style'],
+        ['π_P', fmtE(piP), `P^0.39, P = ${fmtE(P)} W${(p.power || 0) < 0.001 ? ' (the table starts at 0.001 W)' : ''}`],
+        ['π_S', fmtE(piS), st?.s ? `${a}·e^(${b}·S), S = ${fmtE(S)}` : 'no stress factor for this style'],
         ['π_Q', fmtE(piQ), ''],
       ], { tempLabel: 'T', operatingLabel: 'π_T' });
     },

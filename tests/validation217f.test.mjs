@@ -1,7 +1,7 @@
 // Validation of the MIL-HDBK-217F models against the handbook's printed tables.
 //
 // Every expected value here was read a second time from the scanned pages
-// (Notice 2 pages 10-1 to 10-6, 13-1, 13-2, 13-3, 14-1, 14-2, 15-1, 15-2, 15-3,
+// (Notice 2 pages 9-1 to 9-3, 10-1 to 10-6, 13-1, 13-2, 13-3, 14-1, 14-2, 15-1, 15-2, 15-3,
 // 16-1; 1991 pages 6-19, 19-1, 20-1, 22-1), independently of assets/tables217f.js. Each
 // check runs the full model (computeComponent), so it covers the table, the
 // formula and the FIT conversion together.
@@ -320,4 +320,60 @@ test('10.1 capacitors (Notice 2, pages 10-1 to 10-6)', () => {
   // Unrounded, the same inputs give 0.0473 per 10⁶ h: 3.5 % below the page's .049.
   assert.ok(Math.abs(ex.fit / 1000 - 0.049) / 0.049 < 0.05, `example λ_p ${ex.fit / 1000}`);
   assert.equal((200 + Math.SQRT2 * 50) / 400 > 0.67 && (200 + Math.SQRT2 * 50) / 400 < 0.68, true, 'S as the page computes it');
+});
+
+test('9.1 resistors (Notice 2, pages 9-1 to 9-3)', () => {
+  // At 25 °C, 1 W dissipated, quality M, G_B: λ_p = λ_b × π_S(S).
+  const p = { power: 1, rated: Infinity, quality: 'M', rise: 0 };
+  const res = (style, extra = {}, prof = profile(25)) => fit('mil-resistor', { ...p, style, ...extra }, prof);
+  // Style, λ_b, and its π_T and π_S columns as printed on page 9-1 (null: "N/A, π = 1").
+  const styles = [
+    ['RC', 0.0017, 1, 2], ['RCR', 0.0017, 1, 2], ['RL', 0.0037, 2, 1], ['RLR', 0.0037, 2, 1], ['RNR', 0.0037, 2, 1],
+    ['RM', 0.0037, 2, 1], ['RN', 0.0037, 2, 1], ['RD', 0.0037, null, 1], ['RZ', 0.0019, 1, null],
+    ['RB', 0.0024, 2, 1], ['RBR', 0.0024, 2, 1], ['RW', 0.0024, 2, 2], ['RWR', 0.0024, 2, 2], ['RE', 0.0024, 2, 2], ['RER', 0.0024, 2, 2],
+    ['RTH', 0.0019, null, null], ['RT', 0.0024, 2, 1], ['RTR', 0.0024, 2, 1], ['RR', 0.0024, 2, 1], ['RA', 0.0024, 1, 1],
+    ['RK', 0.0024, 1, 1], ['RP', 0.0024, 2, 1], ['RJ', 0.0037, 2, 1], ['RJR', 0.0037, 2, 1], ['RV', 0.0037, 2, 1],
+    ['RQ', 0.0037, 1, 1], ['RVC', 0.0037, 1, 1],
+  ];
+  // Temperature factor π_T (page 9-2), T = 20 … 150 °C.
+  const piT = {
+    1: ['.88', '1.1', '1.5', '1.8', '2.3', '2.8', '3.4', '4.0', '4.8', '5.6', '6.6', '7.6', '8.7', '10'],
+    2: ['.95', '1.1', '1.2', '1.3', '1.4', '1.5', '1.6', '1.7', '1.9', '2.0', '2.1', '2.3', '2.4', '2.5'],
+  };
+  // Power stress factor π_S (page 9-3), S = 0.1 … 0.9.
+  const piS = {
+    1: ['.79', '.88', '.99', '1.1', '1.2', '1.4', '1.5', '1.7', '1.9'],
+    2: ['.66', '.81', '1.0', '1.2', '1.5', '1.8', '2.3', '2.8', '3.4'],
+  };
+  for (const [style, lb, t, sCol] of styles) {
+    // With an unlimited rating S = 0, and π_S is the column's constant (or 1).
+    const piS0 = sCol ? { 1: 0.71, 2: 0.54 }[sCol] : 1;
+    exactly(res(style) / piS0, lb * 1000, `resistor λ_b(${style})`);
+    piT[t ?? 1].forEach((printed, i) => {
+      const T = 20 + 10 * i;
+      const got = run('mil-resistor', { ...p, style }, profile(T)).operating[0].piT;
+      if (t) matchesPrinted(got, printed, `resistor π_T(${style}, column ${t}, ${T} °C)`);
+      else exactly(got, 1, `resistor π_T(${style}) is 1`);
+    });
+    piS[sCol ?? 1].forEach((printed, i) => {
+      const S = (i + 1) / 10;
+      const got = res(style, { rated: 1 / S }) / (res(style) / piS0);
+      if (sCol) matchesPrinted(got, printed, `resistor π_S(${style}, column ${sCol}, S = ${S})`);
+      else exactly(got, 1, `resistor π_S(${style}) is 1`);
+    });
+  }
+  // Power factor π_P = P^0.39 (page 9-2).
+  const piP = [
+    [0.001, '.068'], [0.01, '.17'], [0.25, '.58'], [0.5, '.76'], [0.75, '.89'], [1.0, '1.0'], [2.0, '1.3'], [3.0, '1.5'],
+    [4.0, '1.7'], [5.0, '1.9'], [10, '2.5'], [25, '3.5'], [50, '4.6'], [100, '6.0'], [150, '7.1'],
+  ];
+  const pi = (P) => res('RZ', { power: P }) / res('RZ');
+  for (const [P, printed] of piP) matchesPrinted(pi(P), printed, `resistor π_P(${P} W)`);
+  // The row printed ".13" W with π_P ".44" is 1/8 W: 0.125^0.39 = 0.444, while 0.13^0.39 = 0.451.
+  matchesPrinted(pi(0.125), '.44', 'resistor π_P(1/8 W)');
+  // Below the table's 0.001 W the power is taken as 0.001 W.
+  exactly(pi(0) / pi(0.001), 1, 'resistor π_P below 0.001 W');
+  const quality = { S: 0.03, R: 0.1, P: 0.3, M: 1.0, 'non-er': 3.0, commercial: 10 };
+  for (const [q, v] of Object.entries(quality)) exactly(res('RM', { quality: q }) / res('RM'), v, `resistor π_Q(${q})`);
+  checkEnvironments('mil-resistor', { ...p, style: 'RM' }, [1.0, 4.0, 16, 12, 42, 18, 23, 31, 43, 63, 0.50, 37, 87, 1728]);
 });

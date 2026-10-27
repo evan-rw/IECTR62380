@@ -306,6 +306,12 @@ export function classifyComponent(c) {
   // Film, mica and trimmer capacitors have no IEC TR 62380 model here: use the 217F one.
   const capStyle = model === 'capacitor' ? firstMatch(`${text} ${fp}`, CAP_217F_RULES) : null;
   if (capStyle) model = 'mil-capacitor';
+  // Wirewound resistors, potentiometers and thermistors: the 217F resistor model.
+  let resStyle = null;
+  if (model === 'resistor' && /WIREWOUND|\bWW\b|R-WW|\bWIRE\b/.test(`${text} ${fp}`)) resStyle = 'RW';
+  else if (['RV', 'VR', 'POT'].includes(prefix) && /POT|TRIM|\bR-?POT|CERMET/.test(`${prefix} ${text} ${fp}`)) resStyle = 'RJ';
+  else if (['RT', 'TH', 'NTC', 'PTC'].includes(prefix) && !/FUSE|POLY/.test(text)) resStyle = 'RTH';
+  if (resStyle) model = 'mil-resistor';
   const params = {};
   let inferred = {};
   const why = (what) => `from ${what}`;
@@ -335,6 +341,9 @@ export function classifyComponent(c) {
       params.type = `${tech}-${power ? 'p' : 'lp'}`;
       inferred.type = `${why(`“${c.value || c.description}”`)}${power ? ' and a power package' : ''}`;
     }
+  } else if (model === 'mil-resistor') {
+    Object.assign(params, { style: resStyle, power: null });
+    inferred.style = why(`“${[c.designator, c.value, c.footprint].filter(Boolean).join(' ')}”`);
   } else if (model === 'mil-capacitor') {
     Object.assign(params, { style: capStyle, capacitance: null, stress: null });
     inferred.style = why(`“${[c.value, c.description, c.footprint].filter(Boolean).join(' ')}”`);
@@ -472,7 +481,7 @@ export function netlistToParts(text) {
   const lines = [...groups.values()].map((g) => ({
     ref: compressRefs(g.refs), qty: g.refs.length, model: g.model, params: g.params, inferred: g.inferred, source: g.source,
   }));
-  const order = ['ic', 'transistor', 'diode', 'capacitor', 'mil-capacitor', 'resistor', 'inductor', 'mil-opto', 'mil-relay', 'mil-ssr',
+  const order = ['ic', 'transistor', 'diode', 'capacitor', 'mil-capacitor', 'resistor', 'mil-resistor', 'inductor', 'mil-opto', 'mil-relay', 'mil-ssr',
     'mil-switch', 'mil-connector', 'mil-socket', 'mil-crystal', 'mil-fuse', 'mil-lamp', 'mil-pwb', 'fixed'];
   lines.sort((a, b) => order.indexOf(a.model) - order.indexOf(b.model) || a.ref.localeCompare(b.ref, 'en', { numeric: true }));
   return {

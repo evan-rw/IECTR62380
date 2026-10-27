@@ -102,6 +102,7 @@ const COMPLETE = {
   'mil-lamp': { voltage: 5, utilization: 0.5, application: 'dc' },
   'mil-opto': { type: 'led', power: 0.02, rja: 500 },
   'mil-capacitor': { style: 'CSR', capacitance: 10, stress: 0.5, cr: 0.5 },
+  'mil-resistor': { style: 'RW', power: 1, rated: 5 },
   vendor: { fit: 10, tref: 55, ea: 0.7, power: 0.1, rja: 50 },
 };
 

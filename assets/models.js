@@ -573,11 +573,10 @@ export const clauseOf = (m) => (m.group === 'MIL-HDBK-217F' ? m.clause : `Clause
 export const PENDING_FAMILIES = [
   'Hybrid circuits, and surface-mount boards (62380 clause 6; 217F section 16.2)',
   'Laser diodes, passive optics (62380 clause 9)',
-  'Aluminium solid and polymer capacitors, NTC thermistors (62380 clauses 10.6, 10.7, 10.9; film, paper, mica, glass and variable capacitors use the MIL-HDBK-217F capacitor model)',
-  'Carbon composition, high-dissipation film and wirewound resistors, cermet potentiometers (62380 clauses 11.2–11.5, 11.7)',
+  'Aluminium solid and polymer capacitors (62380 clauses 10.6, 10.7; film, paper, mica, glass and variable capacitors, composition, power, wirewound and variable resistors, and thermistors use the MIL-HDBK-217F capacitor and resistor models)',
   'Microwave passives, SAW filters (62380 clause 13)',
   'Keyboards, displays (62380 clauses 15, 17)',
-  'PTC thermistors, varistors, arrestors (62380 clause 18)',
+  'Varistors, arrestors (62380 clause 18)',
   'Batteries, fans, thermoelectric coolers, disk drives, converters (62380 clause 19)',
 ];
 

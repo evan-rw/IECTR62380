@@ -5,7 +5,7 @@
 // layer; each device's probabilities sum to 1 within ±0.02, and page 7-194
 // was compared against a rendering of the scan.
 
-import { CAPACITORS_217F } from './tables217f.js';
+import { CAPACITORS_217F, RESISTORS_217F } from './tables217f.js';
 
 export const FAILURE_MODE_SOURCE = {
   label: 'MIL-HDBK-338B, Electronic Reliability Design Handbook, Table 7.8-1 (from RAC FMD-91), public release',
@@ -137,6 +137,7 @@ export function deviceTypeFor(model, p = {}) {
     case 'mil-lamp': return 'Lamp/Light';
     case 'mil-opto': return p.type ? (/led$/.test(p.type) ? 'Optoelectronic LED' : 'Optoelectronic Sensor') : null;
     case 'mil-capacitor': return CAPACITORS_217F.styles.find((r) => r.id === p.style)?.fm ?? null;
+    case 'mil-resistor': return RESISTORS_217F.styles.find((r) => r.id === p.style)?.fm ?? null;
     default: return null;
   }
 }
