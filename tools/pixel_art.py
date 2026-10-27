@@ -58,6 +58,35 @@ KEY = {
 }
 
 
+# One side-view boot, toe to the right; BOOTS stamps two of them, the back one higher.
+BOOT = [
+    '.KKKK..',
+    'KHHHK..',
+    'KLLLK..',
+    'KHBBK..',
+    'KHBBK..',
+    'KHBBK..',
+    'KHBBK..',
+    'KHBBKK.',
+    'KHBBBLK',
+    'KBBBBBK',
+    'KSSSSSK',
+    '.KKKKK.',
+]
+BOOT_COLOURS = {'K': '#241000', 'H': '#e09a48', 'L': '#f6d29a', 'B': '#9a5418', 'S': '#4a2a10'}
+
+
+def boots():
+    """16×16: a pair of boots, the back one set up and to the left."""
+    pixel = [[None] * 16 for _ in range(16)]
+    for x0, y0 in ((1, 1), (8, 4)):
+        for y, row in enumerate(BOOT):
+            for x, ch in enumerate(row):
+                if ch != '.':
+                    pixel[y0 + y][x0 + x] = BOOT_COLOURS[ch]
+    return pixel
+
+
 # Portal: concentric square rings, blue outside, then cyan, alternating to the centre.
 PORTAL_COLOURS = ('#0a3cff', '#00e4ff')
 
@@ -122,6 +151,7 @@ def main():
         'flame': from_grid(FLAME),
         'key': from_grid(KEY),
         'portal': portal(),
+        'boots': boots(),
         'portal-floor': portal_on_floor(),
     }
     for name, pixel in pieces.items():

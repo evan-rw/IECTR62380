@@ -368,6 +368,12 @@ table.results tr:last-child td { background: var(--face); font-weight: bold; bor
 [data-act="confirm-guesses"]::before { background-image: url(art/key.svg); }
 /* Drag and drop in the structure tree: a portal on the item and on where it lands. */
 .st-ghost::before, .st-row.drop .st-nm::before { background-image: url(art/portal.svg); }
+/* Mission profile: a walk through the year, with the boots where 1990s windows put their icon. */
+#profile-heading {
+  padding-left: 27px;
+  background: url(art/boots.svg) 6px center / 16px 16px no-repeat, linear-gradient(90deg, var(--title-a), var(--title-b));
+  image-rendering: pixelated;
+}
 /* An empty board: parts arrive from the schematic. */
 .parts .empty {
   display: flex; align-items: center; min-height: 64px; padding-left: 76px;
