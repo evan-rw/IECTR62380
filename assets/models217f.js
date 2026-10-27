@@ -9,7 +9,7 @@
 
 import {
   ENVIRONMENTS, LOAD_TYPES, RELAY_MECHANICAL, RELAY_SOLID_STATE, SWITCHES, CONNECTORS, SOCKETS,
-  PTH_BOARDS, CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS,
+  PTH_BOARDS, CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS, CAPACITORS_217F,
 } from './tables217f.js';
 
 const BOLTZMANN_EV = 8.617e-5;
@@ -360,6 +360,63 @@ export const MODELS_217F = {
         ['π_T', 'exp(−2790·[1/(T_j+273) − 1/298])', 'per phase, below'],
         ['π_Q', fmtE(piQ), ''],
       ], { tempLabel: 'T_j', operatingLabel: 'π_T' });
+    },
+  },
+  'mil-capacitor': {
+    label: 'Capacitor, any dielectric (MIL-HDBK-217F)',
+    group: 'MIL-HDBK-217F',
+    clause: CAPACITORS_217F.ref,
+    status: status(CAPACITORS_217F),
+    defaults: { style: null, capacitance: null, stress: null, cr: null, quality: 'commercial', rise: 0 },
+    fields: [
+      {
+        key: 'style', label: 'Style', type: 'select', required: true, wide: true,
+        options: CAPACITORS_217F.styles.map((r) => ({ value: r.id, label: `${r.name ?? r.id}: ${r.desc} (MIL-C-${r.spec})`, group: r.group })),
+        help: 'Closest commercial equivalents: film (MKT, MKP) CFR; multilayer ceramic chip CDR; tantalum chip CWR; aluminium electrolytic CE.',
+      },
+      { key: 'capacitance', label: 'Capacitance', unit: 'µF', type: 'number', min: 0, step: 'any', required: true },
+      { key: 'stress', label: 'Voltage stress S', type: 'number', min: 0, step: 'any', required: true, help: '(DC voltage + peak AC voltage) ÷ rated voltage; peak AC = √2 × rms.' },
+      {
+        key: 'cr', label: 'Circuit resistance CR', unit: 'Ω/V', type: 'number', min: 0, step: 'any', required: true,
+        show: (p) => Boolean(find(CAPACITORS_217F.styles, p.style)?.sr),
+        help: 'Effective resistance between the capacitor and the power supply ÷ voltage applied to the capacitor.',
+      },
+      { ...qualityField(CAPACITORS_217F), help: 'Commercial parts take π_Q = 10.' },
+      { key: 'rise', label: 'Temperature rise above board ambient', unit: '°C', type: 'number', min: 0, step: 'any', required: true },
+    ],
+    describe: (p) => {
+      const st = find(CAPACITORS_217F.styles, p.style);
+      return st ? `${st.desc} (${st.name ?? st.id})` : 'Capacitor';
+    },
+    compute(p, prof) {
+      const t = CAPACITORS_217F;
+      const env = environment(t, prof);
+      const st = find(t.styles, p.style);
+      const lb = st?.lb ?? 0;
+      const ea = t.ea[st?.t ?? 1];
+      const cExp = t.capExponent[st?.c ?? 1];
+      const C = p.capacitance > 0 ? p.capacitance : 1;
+      const piC = C ** cExp;
+      const [a, n] = t.voltage[st?.v ?? 1];
+      const S = Math.max(0, p.stress || 0);
+      const piV = (S / a) ** n + 1;
+      const cr = Math.max(0, p.cr || 0);
+      const piSR = st?.sr ? t.seriesResistance.find(([upTo]) => cr <= upTo)[1] : 1;
+      const piQ = find(t.quality, p.quality)?.piQ ?? 1;
+      const rise = p.rise || 0;
+      const piT = (temp) => Math.exp((-ea / BOLTZMANN_EV) * (1 / (temp + 273) - 1 / 298));
+      const w = weighted(prof, (temp) => {
+        const f = piT(temp);
+        return { lambda: lb * f * piC * piV * piSR * piQ * (env.piE ?? 0), factor: f };
+      }, (ph) => ph.tac + rise);
+      return result(t, env, w, [
+        ['λ_b', fmtE(lb), st ? `style ${st.name ?? st.id}` : ''],
+        ['π_T', `exp(−${ea}/k·[1/(T+273) − 1/298])`, `column ${st?.t ?? 1}, per phase, below`],
+        ['π_C', fmtE(piC), `C^${cExp}, C = ${fmtE(C)} µF`],
+        ['π_V', fmtE(piV), `(S/${a})^${n} + 1, S = ${fmtE(S)}`],
+        ['π_SR', fmtE(piSR), st?.sr ? `CR = ${fmtE(cr)} Ω/V` : 'not used for this style'],
+        ['π_Q', fmtE(piQ), ''],
+      ], { tempLabel: 'T', operatingLabel: 'π_T' });
     },
   },
 };

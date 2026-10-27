@@ -96,4 +96,10 @@ test('new parts of every 217F type start with their unknowns missing', () => {
   assert.deepEqual(missing('mil-crystal'), ['freq']);
   assert.deepEqual(missing('mil-fuse'), []);
   assert.deepEqual(missing('mil-opto'), ['type', 'power', 'rja']);
+  assert.deepEqual(missing('mil-capacitor'), ['style', 'capacitance', 'stress']);
+  // Circuit resistance is asked only for the two tantalum styles that use π_SR.
+  const cap = (style) => computeComponent({ model: 'mil-capacitor', qty: 1, params: { style, capacitance: 1, stress: 0.5 } }, profile()).missing;
+  assert.deepEqual(cap('CSR'), ['cr']);
+  assert.deepEqual(cap('CWR'), ['cr']);
+  assert.deepEqual(cap('CFR'), []);
 });

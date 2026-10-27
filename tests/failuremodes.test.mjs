@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { FAILURE_MODES, deviceTypeFor, failureModesFor, suggestedShortShare } from '../assets/failuremodes.js';
 import { MODELS } from '../assets/models.js';
 import { IC_FAMILIES, DIODES, TRANSISTORS, CAPACITORS, RESISTORS } from '../assets/tables.js';
-import { SWITCHES, OPTOELECTRONICS } from '../assets/tables217f.js';
+import { SWITCHES, OPTOELECTRONICS, CAPACITORS_217F } from '../assets/tables217f.js';
 
 test('every device\'s mode probabilities sum to 1', () => {
   assert.equal(FAILURE_MODES.size, 88);
@@ -31,7 +31,8 @@ test('every part type maps to a device row that exists', () => {
     ['resistor', { type: 'smd', elements: 8 }],
     ...SWITCHES.types.map((r) => ['mil-switch', { type: r.id }]),
     ...OPTOELECTRONICS.types.map((r) => ['mil-opto', { type: r.id }]),
-    ...Object.keys(MODELS).filter((m) => !['ic', 'diode', 'transistor', 'capacitor', 'resistor', 'mil-switch', 'mil-opto'].includes(m)).map((m) => [m, {}]),
+    ...CAPACITORS_217F.styles.map((r) => ['mil-capacitor', { style: r.id }]),
+    ...Object.keys(MODELS).filter((m) => !['ic', 'diode', 'transistor', 'capacitor', 'resistor', 'mil-switch', 'mil-opto', 'mil-capacitor'].includes(m)).map((m) => [m, {}]),
   ];
   for (const [model, p] of cases) {
     const device = deviceTypeFor(model, p);
@@ -42,6 +43,9 @@ test('every part type maps to a device row that exists', () => {
   assert.equal(deviceTypeFor('ic', { family: 'mos-digital', eos: 'computer' }), 'Microcircuit, Interface');
   assert.equal(deviceTypeFor('resistor', { type: 'smd', elements: 4 }), 'Resistor, Network');
   assert.equal(deviceTypeFor('mil-crystal', {}), null, 'the table has no crystal row');
+  assert.equal(deviceTypeFor('mil-capacitor', { style: 'CFR' }), 'Capacitor, Plastic');
+  assert.equal(deviceTypeFor('mil-capacitor', { style: 'CL' }), 'Capacitor, Tantalum, Electrolytic');
+  assert.equal(deviceTypeFor('mil-capacitor', { style: 'CV' }), null, 'the table has no ceramic trimmer row');
   assert.equal(deviceTypeFor('fixed', {}), null);
 });
 

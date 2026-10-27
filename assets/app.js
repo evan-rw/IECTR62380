@@ -14,7 +14,7 @@ const FORMAT = 'iec62380-board';
 const REF_PREFIX = {
   ic: 'U', diode: 'D', transistor: 'Q', capacitor: 'C', resistor: 'R', inductor: 'L', fixed: 'X',
   'mil-relay': 'K', 'mil-ssr': 'K', 'mil-switch': 'SW', 'mil-connector': 'J', 'mil-socket': 'XU',
-  'mil-pwb': 'PCB', 'mil-crystal': 'Y', 'mil-fuse': 'F', 'mil-lamp': 'DS', 'mil-opto': 'D', vendor: 'U',
+  'mil-pwb': 'PCB', 'mil-crystal': 'Y', 'mil-fuse': 'F', 'mil-lamp': 'DS', 'mil-opto': 'D', 'mil-capacitor': 'C', vendor: 'U',
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);

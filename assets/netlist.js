@@ -218,6 +218,22 @@ function guessDiscretePackage(footprint) {
   return { params: {}, inferred: {} };
 }
 
+// Capacitors routed to the MIL-HDBK-217F model, with the closest style.
+const CAP_217F_RULES = [
+  [/\bMK[TPS]|FILM|POLYPROP|POLYEST|POLYCARB|C-RECT|\bWIMA/, 'CFR'],
+  [/MICA/, 'CM'],
+  [/TRIM|VARIABLE/, 'CV'],
+];
+
+// Capacitance in µF from a value such as "100nF", "4u7", "10 pF" or "2.2µF/50V".
+export function parseCapacitance(value) {
+  const m = /(\d+(?:[.,]\d+)?)\s*([PNUΜµ])(\d*)/.exec(norm(value));
+  if (!m) return null;
+  const n = Number(`${m[1].replace(',', '.')}${m[3] ? (m[1].includes('.') || m[1].includes(',') ? m[3] : `.${m[3]}`) : ''}`);
+  const scale = { P: 1e-6, N: 1e-3, U: 1, Μ: 1, µ: 1 }[m[2]];
+  return Number.isFinite(n) && n > 0 ? +(n * scale).toPrecision(6) : null;
+}
+
 const CHIP_SIZE = /(?:^|[^0-9])(0201|0402|0603|0805|1206|1210|1812|2010|2512)(?![0-9])/;
 const CHIP_RATING = { '0201': 0.05, '0402': 0.063, '0603': 0.1, '0805': 0.125, '1206': 0.25, '1210': 0.5, '1812': 0.75, '2010': 0.75, '2512': 1 };
 
@@ -287,6 +303,9 @@ export function classifyComponent(c) {
   let model = PREFIX_MODEL[prefix] ?? 'fixed';
   const family = OTHER_FAMILY[prefix];
   if (model === 'diode' && firstMatch(text, DIODE_RULES) === 'led') model = 'mil-opto';
+  // Film, mica and trimmer capacitors have no IEC TR 62380 model here: use the 217F one.
+  const capStyle = model === 'capacitor' ? firstMatch(`${text} ${fp}`, CAP_217F_RULES) : null;
+  if (capStyle) model = 'mil-capacitor';
   const params = {};
   let inferred = {};
   const why = (what) => `from ${what}`;
@@ -316,6 +335,11 @@ export function classifyComponent(c) {
       params.type = `${tech}-${power ? 'p' : 'lp'}`;
       inferred.type = `${why(`“${c.value || c.description}”`)}${power ? ' and a power package' : ''}`;
     }
+  } else if (model === 'mil-capacitor') {
+    Object.assign(params, { style: capStyle, capacitance: null, stress: null });
+    inferred.style = why(`“${[c.value, c.description, c.footprint].filter(Boolean).join(' ')}”`);
+    const cap = parseCapacitance(c.value);
+    if (cap != null) { params.capacitance = cap; inferred.capacitance = why(`the value “${c.value}”`); }
   } else if (model === 'capacitor') {
     params.type = null;
     const both = `${text} ${fp}`;
@@ -448,7 +472,7 @@ export function netlistToParts(text) {
   const lines = [...groups.values()].map((g) => ({
     ref: compressRefs(g.refs), qty: g.refs.length, model: g.model, params: g.params, inferred: g.inferred, source: g.source,
   }));
-  const order = ['ic', 'transistor', 'diode', 'capacitor', 'resistor', 'inductor', 'mil-opto', 'mil-relay', 'mil-ssr',
+  const order = ['ic', 'transistor', 'diode', 'capacitor', 'mil-capacitor', 'resistor', 'inductor', 'mil-opto', 'mil-relay', 'mil-ssr',
     'mil-switch', 'mil-connector', 'mil-socket', 'mil-crystal', 'mil-fuse', 'mil-lamp', 'mil-pwb', 'fixed'];
   lines.sort((a, b) => order.indexOf(a.model) - order.indexOf(b.model) || a.ref.localeCompare(b.ref, 'en', { numeric: true }));
   return {

@@ -1,8 +1,8 @@
 // Validation of the MIL-HDBK-217F models against the handbook's printed tables.
 //
 // Every expected value here was read a second time from the scanned pages
-// (Notice 2 pages 13-1, 13-2, 13-3, 14-1, 14-2, 15-1, 15-2, 15-3, 16-1; 1991
-// pages 6-19, 19-1, 20-1, 22-1), independently of assets/tables217f.js. Each
+// (Notice 2 pages 10-1 to 10-6, 13-1, 13-2, 13-3, 14-1, 14-2, 15-1, 15-2, 15-3,
+// 16-1; 1991 pages 6-19, 19-1, 20-1, 22-1), independently of assets/tables217f.js. Each
 // check runs the full model (computeComponent), so it covers the table, the
 // formula and the FIT conversion together.
 //
@@ -23,10 +23,13 @@ const run = (model, params, prof = profile()) => {
 };
 const fit = (model, params, prof) => run(model, params, prof).fit;
 
-// A printed value such as '.021' or '10' covers ± half a unit in its last digit.
+// A printed value such as '.021' or '14' covers ± half a unit in its last digit;
+// '10.' is exact to the unit. A whole number ending in zeros, such as '130' or
+// '5900', is rounded to its last non-zero digit.
 function matchesPrinted(actual, printed, what) {
-  const decimals = printed.includes('.') ? printed.split('.')[1].length : 0;
-  const half = 0.5 * 10 ** -decimals;
+  let half;
+  if (printed.includes('.')) half = 0.5 * 10 ** -printed.split('.')[1].length;
+  else half = 0.5 * 10 ** (printed.length - printed.replace(/0+$/, '').length);
   assert.ok(Math.abs(actual - Number(printed)) <= half * (1 + 1e-9),
     `${what}: model ${actual.toPrecision(5)}, handbook prints ${printed}`);
 }
@@ -138,7 +141,7 @@ test('15.1 connectors (Notice 2, pages 15-1 and 15-2)', () => {
   const piT = ['.91', '1.1', '1.3', '1.5', '1.8', '2.0', '2.3', '2.7', '3.0', '3.4', '3.7', '4.1', '4.6', '5.0', '5.5', '6.0', '6.5', '7.0', '7.5', '8.1', '8.6', '9.2', '9.8', '10.'];
   piT.forEach((printed, i) => {
     const T = 20 + 10 * i;
-    matchesPrinted(run('mil-connector', p, profile(T)).operating[0].piT, printed.replace(/\.$/, ''), `connector π_T(${T} °C)`);
+    matchesPrinted(run('mil-connector', p, profile(T)).operating[0].piT, printed, `connector π_T(${T} °C)`);
   });
   // Default insert temperature rise ΔT (°C) by amperes per contact, for each printed gauge column.
   const amps = [2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40];
@@ -246,4 +249,75 @@ test('6.11 optoelectronics (page 6-19)', () => {
   const quality = { jantxv: 0.70, jantx: 1.0, jan: 2.4, lower: 5.5, plastic: 8.0 };
   for (const [q, v] of Object.entries(quality)) exactly(fit('mil-opto', { ...p, quality: q }) / fit('mil-opto', p), v, `opto π_Q(${q})`);
   checkEnvironments('mil-opto', p, [1.0, 2.0, 8.0, 5.0, 12, 4.0, 6.0, 6.0, 8.0, 17, 0.50, 9.0, 24, 450]);
+});
+
+test('10.1 capacitors (Notice 2, pages 10-1 to 10-6)', () => {
+  // At 25 °C, 1 µF, no voltage stress, quality M, G_B: λ_p = λ_b (× π_SR for CSR and CWR, here 1.0 at CR = 0.7).
+  const p = { capacitance: 1, stress: 0, cr: 0.7, quality: 'M', rise: 0 };
+  const cap = (style, extra = {}, prof = profile(25)) => fit('mil-capacitor', { ...p, style, ...extra }, prof);
+  // Style, λ_b, and the π_T, π_C and π_V columns it uses, as printed on pages 10-1 and 10-2.
+  const styles = [
+    ['CP', 0.00037, 1, 1, 1], ['CA', 0.00037, 1, 1, 1], ['CZ', 0.00037, 1, 1, 1], ['CQ', 0.00051, 1, 1, 1],
+    ['CH', 0.00037, 1, 1, 1], ['CHR', 0.00051, 1, 1, 1], ['CFR', 0.00051, 1, 1, 1], ['CRH', 0.00051, 1, 1, 1],
+    ['CM', 0.00076, 2, 1, 2], ['CMR', 0.00076, 2, 1, 2], ['CB', 0.00076, 2, 1, 2], ['CY', 0.00076, 2, 1, 2], ['CYR', 0.00076, 2, 1, 2],
+    ['CK', 0.00099, 2, 1, 3], ['CKR', 0.00099, 2, 1, 3], ['CC', 0.00099, 2, 1, 3], ['CDR', 0.0020, 2, 1, 3],
+    ['CSR', 0.00040, 1, 2, 4], ['CWR', 0.00005, 1, 2, 4], ['CL', 0.00040, 1, 2, 4], ['CLR', 0.00040, 1, 2, 4], ['CRL', 0.00040, 1, 2, 4],
+    ['CU', 0.00012, 2, 2, 1], ['CE', 0.00012, 2, 2, 1],
+    ['CV', 0.0079, 1, 1, 5], ['PC', 0.0060, 2, 1, 5], ['CT', 0.0000072, 2, 1, 5], ['CG', 0.0060, 1, 1, 5],
+  ];
+  // Temperature factor π_T (page 10-3), T = 20 … 150 °C.
+  const piT = {
+    1: ['.91', '1.1', '1.3', '1.6', '1.8', '2.2', '2.5', '2.8', '3.2', '3.7', '4.1', '4.6', '5.1', '5.6'],
+    2: ['.79', '1.3', '1.9', '2.9', '4.2', '6.0', '8.4', '11', '15', '21', '27', '35', '44', '56'],
+  };
+  // Capacitance factor π_C (page 10-3).
+  const capacitance = [0.000001, 0.00001, 0.0001, 0.001, 0.01, 0.05, 0.1, 0.5, 1, 3, 8, 18, 40, 200, 1000, 3000, 10000, 30000, 60000, 120000];
+  const piC = {
+    1: ['.29', '.35', '.44', '.54', '.66', '.76', '.81', '.94', '1.0', '1.1', '1.2', '1.3', '1.4', '1.6', '1.9', '2.1', '2.3', '2.5', '2.7', '2.9'],
+    2: ['.04', '.07', '.12', '.20', '.35', '.50', '.59', '.85', '1.0', '1.3', '1.6', '1.9', '2.3', '3.4', '4.9', '6.3', '8.3', '11', '13', '15'],
+  };
+  // Voltage stress factor π_V (page 10-4), S = 0.1 … 1.
+  const piV = {
+    1: ['1.0', '1.0', '1.0', '1.1', '1.4', '2.0', '3.2', '5.2', '8.6', '14'],
+    2: ['1.0', '1.0', '1.0', '1.0', '1.2', '2.0', '5.7', '19', '59', '166'],
+    3: ['1.0', '1.0', '1.1', '1.3', '1.6', '2.0', '2.6', '3.4', '4.4', '5.6'],
+    4: ['1.0', '1.0', '1.0', '1.0', '1.0', '2.0', '15', '130', '990', '5900'],
+    5: ['1.0', '1.1', '1.2', '1.5', '2.0', '2.7', '3.7', '5.1', '6.8', '9.0'],
+  };
+  for (const [style, lb, t, c, v] of styles) {
+    exactly(cap(style), lb * 1000, `capacitor λ_b(${style})`);
+    // The style's π_T column, checked at every printed temperature.
+    piT[t].forEach((printed, i) => {
+      const T = 20 + 10 * i;
+      matchesPrinted(run('mil-capacitor', { ...p, style }, profile(T)).operating[0].piT, printed, `capacitor π_T(${style}, column ${t}, ${T} °C)`);
+    });
+    capacitance.forEach((C, i) => matchesPrinted(cap(style, { capacitance: C }) / cap(style), piC[c][i], `capacitor π_C(${style}, column ${c}, ${C} µF)`));
+    piV[v].forEach((printed, i) => {
+      const S = (i + 1) / 10;
+      matchesPrinted(cap(style, { stress: S }) / cap(style), printed, `capacitor π_V(${style}, column ${v}, S = ${S})`);
+    });
+  }
+  // Series resistance factor π_SR (page 10-4), CSR and CWR only; bands include their upper limit.
+  for (const style of ['CSR', 'CWR']) {
+    for (const [cr, v] of [[0, 3.3], [0.1, 3.3], [0.15, 2.7], [0.2, 2.7], [0.3, 2.0], [0.4, 2.0], [0.5, 1.3], [0.6, 1.3], [0.7, 1.0], [0.8, 1.0], [0.9, 0.66], [5, 0.66]]) {
+      exactly(cap(style, { cr }) / cap(style), v, `capacitor π_SR(${style}, CR = ${cr})`);
+    }
+  }
+  exactly(cap('CL', { cr: 0 }) / cap('CL'), 1, 'π_SR is 1 for other styles');
+  // Quality factor π_Q (page 10-5), relative to M = 1.0.
+  const quality = { D: 0.001, C: 0.01, S: 0.03, R: 0.1, P: 0.3, M: 1.0, L: 1.5, 'non-er': 3.0, commercial: 10 };
+  for (const [q, v] of Object.entries(quality)) exactly(cap('CFR', { quality: q }) / cap('CFR'), v, `capacitor π_Q(${q})`);
+  checkEnvironments('mil-capacitor', { ...p, style: 'CFR' }, [1.0, 10, 20, 7.0, 15, 12, 15, 25, 30, 40, 0.50, 20, 50, 570]);
+
+  // Worked example (page 10-6): CQ09A1KE153K3, 0.015 µF, 400 V rated, 200 V DC + 50 V rms,
+  // 50 °C, ground fixed, non-established reliability. The page rounds S to .68 and
+  // each factor to two digits: π_T 1.6, π_C .69, π_V 2.9, giving λ_p = .049.
+  const ex = run('mil-capacitor', { style: 'CQ', capacitance: 0.015, stress: 0.68, quality: 'non-er', rise: 0 }, profile(50, 'GF'));
+  matchesPrinted(ex.operating[0].piT, '1.6', 'example π_T');
+  matchesPrinted(0.015 ** 0.09, '.69', 'example π_C');
+  matchesPrinted((0.68 / 0.6) ** 5 + 1, '2.9', 'example π_V');
+  matchesPrinted(0.00051 * 1.6 * 0.69 * 2.9 * 1 * 3.0 * 10, '.049', 'example λ_p from the printed factors');
+  // Unrounded, the same inputs give 0.0473 per 10⁶ h: 3.5 % below the page's .049.
+  assert.ok(Math.abs(ex.fit / 1000 - 0.049) / 0.049 < 0.05, `example λ_p ${ex.fit / 1000}`);
+  assert.equal((200 + Math.SQRT2 * 50) / 400 > 0.67 && (200 + Math.SQRT2 * 50) / 400 < 0.68, true, 'S as the page computes it');
 });

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseProtel, classifyComponent, compressRefs, expandRefs, netlistToParts } from '../assets/netlist.js';
+import { parseProtel, classifyComponent, compressRefs, expandRefs, netlistToParts, parseCapacitance } from '../assets/netlist.js';
 import { computeComponent, normaliseProfile } from '../assets/models.js';
 
 // Protel 2.0 component block in the layout gEDA/Lepton and Altium write:
@@ -194,4 +194,19 @@ test('relays, fuses, switches and optocouplers map to the MIL-HDBK-217F models',
   assert.equal(c('J3', 'RJ45', 'RJ45_Amphenol').params.type, 'telephone');
   assert.equal(c('Y2', '32.768kHz').params.freq, 0.032768);
   assert.equal(c('X1', '16MHz').model, 'fixed', 'X is ambiguous between connector and crystal');
+});
+
+test('film, mica and trimmer capacitors go to the MIL-HDBK-217F capacitor model', () => {
+  const c = (designator, value, footprint = '') => classifyComponent({ designator, footprint, value, description: '' });
+  const film = c('C5', '100nF', 'Capacitor_THT:C_Rect_L7.2mm_W2.5mm_P5.00mm_FKS2_FKP2_MKS2_MKP2');
+  assert.equal(film.model, 'mil-capacitor');
+  assert.deepEqual(film.params, { style: 'CFR', capacitance: 0.1, stress: null });
+  assert.match(film.inferred.style, /C_Rect/);
+  assert.match(film.inferred.capacitance, /the value “100nF”/);
+  assert.equal(c('C6', '220p MICA').params.style, 'CM');
+  assert.equal(c('C7', '5p', 'Capacitor_SMD:C_Trimmer_Murata_TZB4-A').params.style, 'CV');
+  assert.equal(c('C8', '100nF', 'C_0603_1608Metric').model, 'capacitor', 'chip ceramics stay on the 62380 model');
+  // Capacitance values in the usual spellings.
+  const values = { '100nF': 0.1, '4u7': 4.7, '10 pF': 0.00001, '2.2µF/50V': 2.2, '1n5': 0.0015, '47UF 25V': 47, '0,47u': 0.47, C0G: null, '': null };
+  for (const [v, uF] of Object.entries(values)) assert.equal(parseCapacitance(v), uF, v);
 });

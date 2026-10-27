@@ -292,7 +292,68 @@ export const OPTOELECTRONICS = {
   piE: [1.0, 2.0, 8.0, 5.0, 12, 4.0, 6.0, 6.0, 8.0, 17, 0.50, 9.0, 24, 450],
 };
 
+export const CAPACITORS_217F = {
+  id: 'mil-capacitor',
+  title: 'Capacitors',
+  ref: 'MIL-HDBK-217F Notice 2, section 10.1',
+  status: 'handbook',
+  sources: ['mil217fN2'],
+  note: 'One model for every capacitor style, from the Notice 2 pages, which replace sections 10.1–10.20 of the 1991 edition. Each style names the columns of the π_T, π_C and π_V tables it uses; the tables are the printed values of the formulas used here. π_T applies up to the capacitor\'s temperature rating. Commercial parts take π_Q = 10, so these rates are typically well above the IEC TR 62380 capacitor rates.',
+  // Styles in the page's order. t, c, v: the π_T, π_C and π_V columns; sr: uses the π_SR table.
+  // fm: the MIL-HDBK-338B failure-mode row.
+  styles: [
+    { id: 'CP', spec: '25', group: 'Paper and plastic film', desc: 'Paper, DC, hermetic metal case', lb: 0.00037, t: 1, c: 1, v: 1, fm: 'Capacitor, Paper' },
+    { id: 'CA', spec: '12889', group: 'Paper and plastic film', desc: 'Paper, RFI bypass, AC and DC, hermetic metal case', lb: 0.00037, t: 1, c: 1, v: 1, fm: 'Capacitor, Paper' },
+    { id: 'CZ', name: 'CZ, CZR', spec: '11693', group: 'Paper and plastic film', desc: 'Feed-through, RFI, AC and DC, hermetic metal case', lb: 0.00037, t: 1, c: 1, v: 1, fm: 'Capacitor, Paper' },
+    { id: 'CQ', name: 'CQ, CQR', spec: '19978', group: 'Paper and plastic film', desc: 'Plastic or paper-plastic, hermetic case', lb: 0.00051, t: 1, c: 1, v: 1, fm: 'Capacitor, Plastic' },
+    { id: 'CH', spec: '18312', group: 'Paper and plastic film', desc: 'Metallised paper or plastic film, DC, hermetic metal case', lb: 0.00037, t: 1, c: 1, v: 1, fm: 'Capacitor, Plastic' },
+    { id: 'CHR', spec: '39022', group: 'Paper and plastic film', desc: 'Metallised paper or plastic film, established reliability', lb: 0.00051, t: 1, c: 1, v: 1, fm: 'Capacitor, Plastic' },
+    { id: 'CFR', spec: '55514', group: 'Paper and plastic film', desc: 'Plastic or metallised plastic film, DC, non-metal case', lb: 0.00051, t: 1, c: 1, v: 1, fm: 'Capacitor, Plastic' },
+    { id: 'CRH', spec: '83421', group: 'Paper and plastic film', desc: 'Supermetallised plastic film, hermetic metal case', lb: 0.00051, t: 1, c: 1, v: 1, fm: 'Capacitor, Plastic' },
+    { id: 'CM', spec: '5', group: 'Mica and glass', desc: 'Mica', lb: 0.00076, t: 2, c: 1, v: 2, fm: 'Capacitor, Mica/Glass' },
+    { id: 'CMR', spec: '39001', group: 'Mica and glass', desc: 'Mica, established reliability', lb: 0.00076, t: 2, c: 1, v: 2, fm: 'Capacitor, Mica/Glass' },
+    { id: 'CB', spec: '10950', group: 'Mica and glass', desc: 'Mica, button style', lb: 0.00076, t: 2, c: 1, v: 2, fm: 'Capacitor, Mica/Glass' },
+    { id: 'CY', spec: '11272', group: 'Mica and glass', desc: 'Glass', lb: 0.00076, t: 2, c: 1, v: 2, fm: 'Capacitor, Mica/Glass' },
+    { id: 'CYR', spec: '23269', group: 'Mica and glass', desc: 'Glass, established reliability', lb: 0.00076, t: 2, c: 1, v: 2, fm: 'Capacitor, Mica/Glass' },
+    { id: 'CK', spec: '11015', group: 'Ceramic', desc: 'Ceramic, general purpose', lb: 0.00099, t: 2, c: 1, v: 3, fm: 'Capacitor, Ceramic' },
+    { id: 'CKR', spec: '39014', group: 'Ceramic', desc: 'Ceramic, general purpose, established reliability', lb: 0.00099, t: 2, c: 1, v: 3, fm: 'Capacitor, Ceramic' },
+    { id: 'CC', name: 'CC, CCR', spec: '20', group: 'Ceramic', desc: 'Ceramic, temperature compensating', lb: 0.00099, t: 2, c: 1, v: 3, fm: 'Capacitor, Ceramic' },
+    { id: 'CDR', spec: '55681', group: 'Ceramic', desc: 'Ceramic chip, multilayer, established reliability', lb: 0.0020, t: 2, c: 1, v: 3, fm: 'Capacitor, Ceramic' },
+    { id: 'CSR', spec: '39003', group: 'Tantalum', desc: 'Tantalum, solid electrolyte, established reliability', lb: 0.00040, t: 1, c: 2, v: 4, sr: true, fm: 'Capacitor, Tantalum' },
+    { id: 'CWR', spec: '55365', group: 'Tantalum', desc: 'Tantalum chip, established reliability', lb: 0.00005, t: 1, c: 2, v: 4, sr: true, fm: 'Capacitor, Tantalum' },
+    { id: 'CL', spec: '3965', group: 'Tantalum', desc: 'Tantalum, non-solid electrolyte', lb: 0.00040, t: 1, c: 2, v: 4, fm: 'Capacitor, Tantalum, Electrolytic' },
+    { id: 'CLR', spec: '39006', group: 'Tantalum', desc: 'Tantalum, non-solid electrolyte, established reliability', lb: 0.00040, t: 1, c: 2, v: 4, fm: 'Capacitor, Tantalum, Electrolytic' },
+    { id: 'CRL', spec: '83500', group: 'Tantalum', desc: 'Tantalum cathode, non-solid electrolyte', lb: 0.00040, t: 1, c: 2, v: 4, fm: 'Capacitor, Tantalum, Electrolytic' },
+    { id: 'CU', name: 'CU, CUR', spec: '39018', group: 'Aluminium', desc: 'Aluminium oxide electrolytic', lb: 0.00012, t: 2, c: 2, v: 1, fm: 'Capacitor, Aluminum, Electrolytic' },
+    { id: 'CE', spec: '62', group: 'Aluminium', desc: 'Aluminium electrolytic, dry electrolyte, polarised, DC', lb: 0.00012, t: 2, c: 2, v: 1, fm: 'Capacitor, Aluminum, Electrolytic' },
+    { id: 'CV', spec: '81', group: 'Variable', desc: 'Variable ceramic (trimmer)', lb: 0.0079, t: 1, c: 1, v: 5, fm: null },
+    { id: 'PC', spec: '14409', group: 'Variable', desc: 'Variable, piston (tubular trimmer)', lb: 0.0060, t: 2, c: 1, v: 5, fm: 'Capacitor, Variable, Piston' },
+    { id: 'CT', spec: '92', group: 'Variable', desc: 'Variable, air dielectric (trimmer)', lb: 0.0000072, t: 2, c: 1, v: 5, fm: null },
+    { id: 'CG', spec: '23183', group: 'Variable', desc: 'Fixed or variable, vacuum', lb: 0.0060, t: 1, c: 1, v: 5, fm: null },
+  ],
+  // π_T = exp(−Ea/k·[1/(T+273) − 1/298]); T is the capacitor's ambient temperature.
+  ea: { 1: 0.15, 2: 0.35 },
+  // π_C = C^x, C in µF.
+  capExponent: { 1: 0.09, 2: 0.23 },
+  // π_V = (S/a)^n + 1; S = (DC voltage + peak AC voltage) / rated voltage.
+  voltage: { 1: [0.6, 5], 2: [0.6, 10], 3: [0.6, 3], 4: [0.6, 17], 5: [0.5, 3] },
+  // π_SR by circuit resistance CR in Ω/V: upper bound of each band (inclusive) and π_SR.
+  seriesResistance: [[0.1, 3.3], [0.2, 2.7], [0.4, 2.0], [0.6, 1.3], [0.8, 1.0], [Infinity, 0.66]],
+  quality: [
+    { id: 'D', label: 'D (established reliability)', piQ: 0.001 },
+    { id: 'C', label: 'C (established reliability)', piQ: 0.01 },
+    { id: 'S', label: 'S or B (established reliability)', piQ: 0.03 },
+    { id: 'R', label: 'R (established reliability)', piQ: 0.1 },
+    { id: 'P', label: 'P (established reliability)', piQ: 0.3 },
+    { id: 'M', label: 'M (established reliability)', piQ: 1.0 },
+    { id: 'L', label: 'L (established reliability)', piQ: 1.5 },
+    { id: 'non-er', label: 'Non-established reliability (most two-letter styles)', piQ: 3.0 },
+    { id: 'commercial', label: 'Commercial or unknown screening', piQ: 10 },
+  ],
+  piE: [1.0, 10, 20, 7.0, 15, 12, 15, 25, 30, 40, 0.50, 20, 50, 570],
+};
+
 export const TABLES_217F = [
   RELAY_MECHANICAL, RELAY_SOLID_STATE, SWITCHES, CONNECTORS, SOCKETS, PTH_BOARDS,
-  CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS,
+  CRYSTALS, FUSES, LAMPS, OPTOELECTRONICS, CAPACITORS_217F,
 ];
