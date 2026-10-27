@@ -183,6 +183,64 @@ def circuit_board():
     return pixel
 
 
+# A beetle seen from above, head to the right: a yellow striped body, a white
+# head, and red legs that run in over the body towards the middle.
+def bug(size=16):
+    import math
+    pixel = [[None] * size for _ in range(size)]
+    body = lambda x, y: ((x + 0.5 - 6.5) / 5.6) ** 2 + ((y + 0.5 - 8) / 4.1) ** 2 <= 1
+    head = lambda x, y: math.hypot(x + 0.5 - 12.6, y + 0.5 - 8) <= 2.3
+    for y in range(size):
+        for x in range(size):
+            if body(x, y):
+                pixel[y][x] = '#a68c12' if x in (3, 5, 7) else '#f2d832'
+            elif head(x, y):
+                pixel[y][x] = '#f4f4f4'
+    # A one-pixel dark outline around body and head.
+    for y in range(size):
+        for x in range(size):
+            if pixel[y][x] is None and any(0 <= y + j < size and 0 <= x + i < size and pixel[y + j][x + i] not in (None, '#2a1a00')
+                                           for i, j in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                pixel[y][x] = '#2a1a00'
+    # A dark collar between body and head.
+    for y in range(6, 10):
+        pixel[y][11] = '#2a1a00'
+    # Three legs a side, from the edge of the tile in towards the thorax.
+    legs = [[(2, 1), (5, 4), (6, 5)], [(8, 0), (8, 3)], [(13, 1), (10, 4), (9, 5)]]
+    for leg in legs:
+        for mirror in (False, True):
+            pts = [(x, size - 1 - y) if mirror else (x, y) for x, y in leg]
+            for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+                steps = max(abs(x1 - x0), abs(y1 - y0))
+                for k in range(steps + 1):
+                    pixel[y0 + round(k * (y1 - y0) / steps)][x0 + round(k * (x1 - x0) / steps)] = '#d42412'
+    return pixel
+
+
+def flame_square(size=16):
+    """A square of fire, twisted so its corners curl: red-orange outside, a yellow ring, a dark red heart."""
+    import math
+    pixel = [[None] * size for _ in range(size)]
+    mid = size / 2
+    for y in range(size):
+        for x in range(size):
+            px, py = x + 0.5 - mid, y + 0.5 - mid
+            r = math.hypot(px, py)
+            turn = 0.45 + 0.09 * r
+            u = px * math.cos(turn) + py * math.sin(turn)
+            v = -px * math.sin(turn) + py * math.cos(turn)
+            m = max(abs(u), abs(v))
+            if m < 1.6:
+                pixel[y][x] = '#a81800'
+            elif m < 3.4:
+                pixel[y][x] = '#ffd82a'
+            elif m < 5.2:
+                pixel[y][x] = '#e8461a'
+            elif m < 6.1:
+                pixel[y][x] = '#7a1000'
+    return pixel
+
+
 # Portal: concentric square rings, blue outside, then cyan, alternating to the centre.
 PORTAL_COLOURS = ('#0a3cff', '#00e4ff')
 
@@ -252,6 +310,8 @@ def main():
         'board': circuit_board(),
         'detective': from_grid(DETECTIVE),
         'arrows': arrows(),
+        'bug': bug(),
+        'fire-square': flame_square(),
         'portal-floor': portal_on_floor(),
     }
     for name, pixel in pieces.items():
