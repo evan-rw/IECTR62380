@@ -109,6 +109,34 @@ CHIP = {
 }
 
 
+# An inspector in a fedora, dark glasses and a trench coat with the collar up,
+# all in cyan: he traces how failures travel through the structure.
+DETECTIVE = {
+    'grid': [
+        '.....KKKKKK.....',
+        '....KTTTTTTK....',
+        '....KTDTTDTK....',
+        '...KTTTTTTTTK...',
+        '...KBBBBBBBBK...',
+        '.KKTTTTTTTTTTKK.',
+        '..KKssssssssKK..',
+        '...KSGGSSGGSK...',
+        '...KSSSSSSSSK...',
+        '...KsSSSsSSsK...',
+        '....KSsmmsSK....',
+        '..KLLKSSSSKLLK..',
+        'KLCCLKwkkwKLCCLK',
+        'KCCCCLKkkKLCCCCK',
+        'KCCCCcLKKLcCCCCK',
+        'KCCCCcCCCCcCCCCK',
+    ],
+    'colours': {
+        'K': '#0b2a2c', 'T': '#7fd8d8', 'D': '#3e9a9c', 'B': '#1c5a5c', 'S': '#eef4f2', 's': '#b8cccc',
+        'G': '#0e1616', 'L': '#bff4f4', 'C': '#5cc4c6', 'c': '#2c8a8c', 'w': '#e8f0f0', 'k': '#183c3e', 'm': '#6c8686',
+    },
+}
+
+
 # A circuit board: bright green traces on dark green, with a darker edge.
 # Each trace is a polyline of horizontal, vertical and 45° segments.
 BOARD_COLOURS = {'edge': '#1d4a14', 'board': '#2f6a22', 'trace': '#7cf25c'}
@@ -204,6 +232,7 @@ def main():
         'boot': from_grid(BOOT),
         'chip': from_grid(CHIP),
         'board': circuit_board(),
+        'detective': from_grid(DETECTIVE),
         'portal-floor': portal_on_floor(),
     }
     for name, pixel in pieces.items():
