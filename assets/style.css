@@ -360,16 +360,14 @@ table.results tr:last-child td { background: var(--face); font-weight: bold; bor
   margin: -3px 4px -3px 0;
   background: center / 16px 16px no-repeat; image-rendering: pixelated;
 }
-/* Page menu: the way out is a blue portal, the page you are on a cyan one. */
-.site-nav a::before { background-image: url(art/portal-blue.svg); }
-.site-nav a[aria-current="page"]::before { background-image: url(art/portal-cyan.svg); }
+/* Page menu: switching pages is a teleport. */
+.site-nav a::before { background-image: url(art/portal.svg); }
 /* The part adding the most to the total. */
 #results tr.top > td:first-child::after { margin: -3px 0 -3px 5px; background-image: url(art/flame.svg); }
 /* Confirming locks the guessed values in. */
 [data-act="confirm-guesses"]::before { background-image: url(art/key.svg); }
-/* Drag and drop in the structure tree: leave by one portal, arrive by the other. */
-.st-ghost::before { background-image: url(art/portal-blue.svg); }
-.st-row.drop .st-nm::before { background-image: url(art/portal-cyan.svg); }
+/* Drag and drop in the structure tree: a portal on the item and on where it lands. */
+.st-ghost::before, .st-row.drop .st-nm::before { background-image: url(art/portal.svg); }
 /* An empty board: parts arrive from the schematic. */
 .parts .empty {
   display: flex; align-items: center; min-height: 64px; padding-left: 76px;
