@@ -1,7 +1,7 @@
 {
   "name": "iectr62380",
   "private": true,
-  "description": "Browser calculator for IEC TR 62380 reliability predictions",
+  "description": "Browser calculator for reliability estimates following the IEC TR 62380 approach",
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {

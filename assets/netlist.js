@@ -114,6 +114,8 @@ const OTHER_FAMILY = {
 
 const prefixOf = (designator) => (/^[A-Za-z_]+/.exec(designator)?.[0] ?? '').toUpperCase();
 const norm = (s) => String(s ?? '').toUpperCase().replace(/_/g, '-');
+// Footprint name without a library prefix such as "Package_DIP:".
+const fpName = (footprint) => norm(String(footprint ?? '').split(':').pop());
 const fmtMm = (x) => String(+x.toFixed(2));
 
 // Body size written into the footprint name, e.g. "QFN-32_5x5mm" or "LQFP-64_10x10mm".
@@ -140,7 +142,7 @@ const IC_PIN_PACKAGES = [
 
 // Guess an IC package (Tables 17a-17b) from the footprint name.
 function guessIcPackage(footprint, highestPin) {
-  const fp = norm(footprint);
+  const fp = fpName(footprint);
   const params = {};
   const inferred = {};
   const why = `from footprint “${footprint}”`;
@@ -201,7 +203,7 @@ const DISCRETE_PATTERNS = [
 ];
 
 function guessDiscretePackage(footprint) {
-  const fp = norm(footprint);
+  const fp = fpName(footprint);
   for (const [re, id] of DISCRETE_PATTERNS) {
     if (re.test(fp)) {
       const note = id === 'do41-plastic' ? ' (plastic body assumed)' : '';
@@ -251,7 +253,7 @@ export function classifyComponent(c) {
   const prefix = prefixOf(c.designator);
   const source = { value: c.value, footprint: c.footprint, description: c.description };
   const text = norm(`${c.value} ${c.description}`);
-  const fp = norm(c.footprint);
+  const fp = fpName(c.footprint);
   if (MECHANICAL.has(prefix)) return { skip: 'mechanical' };
 
   let model = PREFIX_MODEL[prefix] ?? 'fixed';
@@ -360,6 +362,18 @@ export function compressRefs(refs) {
     i = j + 1;
   }
   return out.join(', ');
+}
+
+// "C1–C3, C5" -> ["C1", "C2", "C3", "C5"]; the inverse of compressRefs.
+export function expandRefs(text) {
+  const out = [];
+  for (const token of String(text).split(',').map((t) => t.trim()).filter(Boolean)) {
+    const m = /^(.*?)(\d+)\s*[–-]\s*(?:\1)?(\d+)$/.exec(token);
+    const [from, to] = m ? [Number(m[2]), Number(m[3])] : [];
+    if (m && to >= from && to - from < 10000) for (let n = from; n <= to; n++) out.push(`${m[1]}${n}`);
+    else out.push(token);
+  }
+  return out;
 }
 
 // Parse a netlist and return grouped part lines plus a report.

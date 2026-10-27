@@ -67,6 +67,9 @@ export function profileProblems(profile) {
   const problems = [];
   if (prof.phases.length === 0) problems.push('Add at least one phase.');
   if (prof.phases.some((p) => p.tau < 0)) problems.push('A working time ratio τ is negative.');
+  // t_ac only matters in working phases; a blank one there would silently read as 0 °C.
+  const noTemp = profile.phases.findIndex((p) => Number(p.tau) > 0 && (p.tac == null || p.tac === ''));
+  if (noTemp >= 0) problems.push(`Phase ${noTemp + 1} is a working phase but has no t_ac.`);
   if (prof.phases.some((p) => p.n < 0 || p.dT < 0)) problems.push('Cycle counts and amplitudes cannot be negative.');
   if (prof.tauOn > 1 + 1e-9) problems.push(`The working time ratios add up to ${prof.tauOn.toFixed(3)}, more than 1.`);
   if (prof.tauOn + prof.tauOff <= 0) problems.push('τ_on + τ_off is zero.');
@@ -143,7 +146,7 @@ export const MODELS = {
   ic: {
     label: 'Integrated circuit',
     clause: '7',
-    status: 'Model structure follows the die + package + overstress form described in TI SLOA294; coefficients unverified.',
+    status: 'The formula matches the one published in TI SLOA294A. Coefficients are from Kicad-Space-Reliability and have not been checked against the standard.',
     defaults: {
       family: 'mos-digital', count: null, year: new Date().getFullYear(),
       power: null, rja: null, package: 'pqfp-10', pins: null, bodyW: null, bodyL: null,
@@ -151,7 +154,7 @@ export const MODELS = {
       l1Override: null, l2Override: null, l3Override: null,
     },
     fields: [
-      { key: 'family', label: 'Family (Table 16)', type: 'select', options: options(IC_FAMILIES), wide: true, required: true },
+      { key: 'family', label: 'Family', type: 'select', options: options(IC_FAMILIES), wide: true, required: true },
       {
         key: 'count', type: 'number', min: 0, step: 'any', required: true,
         label: (p) => (p.family ? `Size, in ${byId(IC_FAMILIES, p.family).unit}` : 'Size (choose a family first)'),
@@ -165,7 +168,7 @@ export const MODELS = {
       },
       { key: 'year', label: 'Year of manufacture', type: 'number', step: 1, required: true, help: 'a = year − 1998; the per-transistor term falls as e^(−0.35a).' },
       ...thermalFields,
-      { key: 'package', label: 'Package (Tables 17a–17b)', type: 'select', options: options(IC_PACKAGES), wide: true, required: true },
+      { key: 'package', label: 'Package', type: 'select', options: options(IC_PACKAGES), wide: true, required: true },
       { key: 'pins', label: 'Pin count S', type: 'number', min: 1, step: 1, required: (p) => !isNum(p.l3Override), show: (p) => p.package && ['pins', 'linear'].includes(byId(IC_PACKAGES, p.package).kind) },
       { key: 'bodyW', label: 'Body width', unit: 'mm', type: 'number', min: 0, step: 'any', required: (p) => !isNum(p.l3Override), show: (p) => p.package && byId(IC_PACKAGES, p.package).kind === 'diagonal' },
       { key: 'bodyL', label: 'Body length', unit: 'mm', type: 'number', min: 0, step: 'any', required: (p) => !isNum(p.l3Override), show: (p) => p.package && byId(IC_PACKAGES, p.package).kind === 'diagonal' },
@@ -210,8 +213,8 @@ export const MODELS = {
         fit: die + pkgFit + eos,
         parts: [['Die', die], ['Package', pkgFit], ['Overstress', eos]],
         values: [
-          ['λ1', fmtE(l1), isNum(p.l1Override) ? 'override' : 'Table 16'],
-          ['λ2', fmtE(l2), isNum(p.l2Override) ? 'override' : 'Table 16'],
+          ['λ1', fmtE(l1), isNum(p.l1Override) ? 'override' : 'Kicad-Space-Reliability'],
+          ['λ2', fmtE(l2), isNum(p.l2Override) ? 'override' : 'Kicad-Space-Reliability'],
           ['N', fmtE(N), `${fam.nPer} per ${fam.unit.replace(/s$/, '')}`],
           ['a', String(a), 'year − 1998'],
           ['λ1·N·e^(−0.35a) + λ2', fmtE(dieBase), 'FIT'],
@@ -219,7 +222,7 @@ export const MODELS = {
           ['π_t reference', `${fam.tRef} K, A = ${fam.ea}`, 'π_t = exp{A × [1/T_ref − 1/(273 + t_j)]}'],
           ['Σ π_t·τ_i / (τ_on + τ_off)', fmtE(op.value), ''],
           ...(diagonal ? [['D', fmtE(diagonal), 'mm']] : []),
-          ['λ3', fmtE(l3), isNum(p.l3Override) ? 'override' : 'Table 17'],
+          ['λ3', fmtE(l3), isNum(p.l3Override) ? 'override' : 'Kicad-Space-Reliability'],
           ['π_α', fmtE(pa), `0.06 × |${alphaS} − ${alphaC}|^1.68`],
           ['Σ π_n·ΔT_i^0.68', fmtE(cyc.value), ''],
           ['Package', fmtE(pkgFit), 'FIT = 2.75×10⁻³ × π_α × Σ × λ3'],
@@ -236,13 +239,13 @@ export const MODELS = {
   diode: {
     label: 'Diode',
     clause: '8.2–8.3',
-    status: 'Model structure reconstructed (π_U·λ0·Σπ_t + 2.75×10⁻³·Σπ_n·ΔT^0.68·λ_B + λ_EOS); coefficients unverified.',
+    status: 'Model structure (π_U·λ0·Σπ_t + 2.75×10⁻³·Σπ_n·ΔT^0.68·λ_B + λ_EOS) and coefficients are from Kicad-Space-Reliability and have not been checked against the standard.',
     defaults: { type: 'signal', piU: 1, power: null, rja: null, package: 'sod123', eos: 'none', l0Override: null, lbOverride: null },
     fields: [
       { key: 'type', label: 'Type', type: 'select', options: options(DIODES), wide: true, required: true },
       { key: 'piU', label: 'Use factor π_U', type: 'number', min: 0, step: 'any', required: true, help: '1 unless the standard gives another value for this use.' },
       ...thermalFields,
-      { key: 'package', label: 'Package (Table 18)', type: 'select', required: (p) => !isNum(p.lbOverride), options: options(DISCRETE_PACKAGES, (r) => `${r.label}: λ_B ${r.lb}`) },
+      { key: 'package', label: 'Package', type: 'select', required: (p) => !isNum(p.lbOverride), options: options(DISCRETE_PACKAGES, (r) => `${r.label}: λ_B ${r.lb}`) },
       eosField,
       { key: 'l0Override', label: 'λ0 override', unit: 'FIT', type: 'number', step: 'any', optional: true, advanced: true },
       { key: 'lbOverride', label: 'λ_B override', unit: 'FIT', type: 'number', step: 'any', optional: true, advanced: true },
@@ -268,7 +271,7 @@ export const MODELS = {
           ['ΔT_j', fmtE(dTj), '°C = R_JA × P'],
           ['π_t reference', '313 K, A = 4640', 'π_t = exp{4640 × [1/313 − 1/(273 + t_j)]}'],
           ['Σ π_t·τ_i / (τ_on + τ_off)', fmtE(op.value), ''],
-          ['λ_B', fmtE(lb), isNum(p.lbOverride) ? 'override' : 'Table 18'],
+          ['λ_B', fmtE(lb), isNum(p.lbOverride) ? 'override' : 'Kicad-Space-Reliability'],
           ['Σ π_n·ΔT_i^0.68', fmtE(cyc.value), ''],
           ['λ_EOS', fmtE(eos), 'FIT'],
         ],
@@ -283,13 +286,13 @@ export const MODELS = {
   transistor: {
     label: 'Transistor',
     clause: '8.4–8.5',
-    status: 'Model structure and the voltage factor π_S = 0.22·e^(1.7·S) reconstructed; coefficients unverified.',
+    status: 'The structure (voltage factor × λ0 × Arrhenius at 0.3 eV and 100 °C for MOS, plus package and overstress terms) agrees with Thurlbeck & Cao 2022. π_S = 0.22·e^(1.7·S) and the λ0 values are from Kicad-Space-Reliability and have not been checked against the standard.',
     defaults: { type: 'mos-lp', stress: null, power: null, rja: null, package: 'sot23', eos: 'none', l0Override: null, lbOverride: null },
     fields: [
       { key: 'type', label: 'Type', type: 'select', options: options(TRANSISTORS), wide: true, required: true },
       { key: 'stress', label: 'Voltage stress S', type: 'number', min: 0, max: 1, step: 'any', required: true, help: 'V_CE / V_CEO for bipolar, V_DS / V_DS(max) for MOS.' },
       ...thermalFields,
-      { key: 'package', label: 'Package (Table 18)', type: 'select', required: (p) => !isNum(p.lbOverride), options: options(DISCRETE_PACKAGES, (r) => `${r.label}: λ_B ${r.lb}`) },
+      { key: 'package', label: 'Package', type: 'select', required: (p) => !isNum(p.lbOverride), options: options(DISCRETE_PACKAGES, (r) => `${r.label}: λ_B ${r.lb}`) },
       eosField,
       { key: 'l0Override', label: 'λ0 override', unit: 'FIT', type: 'number', step: 'any', optional: true, advanced: true },
       { key: 'lbOverride', label: 'λ_B override', unit: 'FIT', type: 'number', step: 'any', optional: true, advanced: true },
@@ -316,7 +319,7 @@ export const MODELS = {
           ['ΔT_j', fmtE(dTj), '°C = R_JA × P'],
           ['π_t reference', `373 K, A = ${row.ea}`, 'π_t = exp{A × [1/373 − 1/(273 + t_j)]}'],
           ['Σ π_t·τ_i / (τ_on + τ_off)', fmtE(op.value), ''],
-          ['λ_B', fmtE(lb), isNum(p.lbOverride) ? 'override' : 'Table 18'],
+          ['λ_B', fmtE(lb), isNum(p.lbOverride) ? 'override' : 'Kicad-Space-Reliability'],
           ['Σ π_n·ΔT_i^0.68', fmtE(cyc.value), ''],
           ['λ_EOS', fmtE(eos), 'FIT'],
         ],
@@ -331,7 +334,7 @@ export const MODELS = {
   capacitor: {
     label: 'Capacitor',
     clause: '10',
-    status: 'Model structure λ0·[Σπ_t·τ_i/(τ_on+τ_off) + k·Σπ_n·ΔT^0.68] matches the tantalum equation quoted in Micromachines 2023; coefficients unverified.',
+    status: 'Model structure λ0·[Σπ_t·τ_i/(τ_on+τ_off) + k·Σπ_n·ΔT^0.68] matches the tantalum equation in Micromachines 2023. Coefficients are from Kicad-Space-Reliability and have not been checked against the standard.',
     defaults: { type: 'ceramic-2', rise: 0, l0Override: null },
     fields: [
       { key: 'type', label: 'Type', type: 'select', options: options(CAPACITORS, (r) => `${r.label} (${r.clause})`), wide: true, required: true },
@@ -368,7 +371,7 @@ export const MODELS = {
   resistor: {
     label: 'Resistor',
     clause: '11',
-    status: 'Model structure as for capacitors, with t_R = t_ac + rise × P/P_rated; coefficients unverified.',
+    status: 'Model structure as for capacitors, with t_R = t_ac + rise × P/P_rated. Structure and coefficients are from Kicad-Space-Reliability and have not been checked against the standard.',
     defaults: { type: 'smd', power: null, rated: null, elements: 1, l0Override: null },
     fields: [
       { key: 'type', label: 'Type', type: 'select', options: options(RESISTORS, (r) => `${r.label} (${r.clause})`), wide: true, required: true },
@@ -413,10 +416,10 @@ export const MODELS = {
   inductor: {
     label: 'Inductor or transformer',
     clause: '12',
-    status: 'Model structure and t_R = t_ac + 8.2 × P_loss/S reconstructed; λ0 must be entered.',
+    status: 'Model structure and t_R = t_ac + 8.2 × P_loss/S are from Kicad-Space-Reliability and have not been checked against the standard. Enter λ0 from a datasheet or vendor data.',
     defaults: { l0: null, ploss: null, area: null },
     fields: [
-      { key: 'l0', label: 'λ0 (from clause 12)', unit: 'FIT', type: 'number', min: 0, step: 'any', wide: true, required: true },
+      { key: 'l0', label: 'λ0', unit: 'FIT', type: 'number', min: 0, step: 'any', wide: true, required: true },
       { key: 'ploss', label: 'Power loss P_loss', unit: 'W', type: 'number', min: 0, step: 'any', required: true },
       { key: 'area', label: 'Radiating surface S', unit: 'dm²', type: 'number', min: 0, step: 'any', required: true, help: '1 dm² = 10 000 mm².' },
     ],

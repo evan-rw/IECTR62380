@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseProtel, classifyComponent, compressRefs, netlistToParts } from '../assets/netlist.js';
+import { parseProtel, classifyComponent, compressRefs, expandRefs, netlistToParts } from '../assets/netlist.js';
 import { computeComponent, normaliseProfile } from '../assets/models.js';
 
 // Protel 2.0 component block in the layout gEDA/Lepton and Altium write:
@@ -156,4 +156,21 @@ test('imported parts compute once their missing values are filled', () => {
 test('classification ignores designator case and reports mechanical parts', () => {
   assert.deepEqual(classifyComponent({ designator: 'fid1', footprint: '', value: '', description: '' }), { skip: 'mechanical' });
   assert.equal(classifyComponent({ designator: 'c9', footprint: '0402', value: '1nF C0G', description: '' }).params.type, 'ceramic-1');
+});
+
+test('expands reference lists back into designators', () => {
+  assert.deepEqual(expandRefs('C1–C3, C5'), ['C1', 'C2', 'C3', 'C5']);
+  assert.deepEqual(expandRefs('R1-R3'), ['R1', 'R2', 'R3']);
+  assert.deepEqual(expandRefs('U1'), ['U1']);
+  for (const refs of [['C1', 'C2', 'C3', 'C5'], ['R1', 'R2', 'R10'], ['MH1', 'TP1', 'TP2']]) {
+    assert.deepEqual(expandRefs(compressRefs(refs)), refs);
+  }
+});
+
+test('footprint library prefixes are ignored', () => {
+  const c = (footprint) => classifyComponent({ designator: 'U9', footprint, value: '', description: '' }).params;
+  assert.deepEqual([c('Package_DIP:DIP-8_W7.62mm').package, c('Package_DIP:DIP-8_W7.62mm').pins], ['pdil', 8]);
+  assert.equal(c('Package_SO:SOIC-14_3.9x8.7mm_P1.27mm').pins, 14);
+  const r = classifyComponent({ designator: 'R9', footprint: 'Resistor_SMD:R_0402_1005Metric', value: '1k', description: '' }).params;
+  assert.equal(r.rated, 0.063);
 });

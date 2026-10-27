@@ -49,6 +49,8 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   const fill = (card, values) => { for (const [k, v] of Object.entries(values)) typeInto($(`[data-key="${k}"]`, card), v); };
   const total = () => $('#summary .value').textContent;
+  // The results table keeps three significant digits; the headline tiles show two.
+  const boardTotal = () => parseFloat($('#results tr:last-child td:nth-child(5)').textContent.replace(/,/g, ''));
   const warn = () => $('#summary .warn')?.textContent ?? '';
   const settle = (ms = 20) => new Promise((r) => setTimeout(r, ms));
   const pick = async (inputId, file) => {
@@ -59,19 +61,22 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   };
   const cardFor = (ref) => $$('.part').find((p) => $('[data-key="ref"]', p).value === ref);
 
-  // The example board renders complete.
+  // The example board renders complete, with the provenance and safety-case caution up top.
   assert.equal($$('.part').length, 8);
-  assert.equal(total(), '48.7 FIT');
+  assert.equal(total(), '49 FIT');
+  assert.equal(boardTotal(), 48.7);
   assert.equal(warn(), '');
+  assert.match($('.notice').textContent, /not taken from the standard.*not suitable as evidence for an ISO 26262 or IEC 61508 safety case/s);
+  assert.match($('#summary .scope').textContent, /parts wired in parallel still add up/);
 
   // Typing updates results without replacing the input being typed in.
   const u1 = $$('.part')[0];
   const power = $('[data-key="power"]', u1);
   typeInto(power, 2);
   assert.ok(document.contains(power));
-  assert.notEqual(total(), '48.7 FIT');
+  assert.notEqual(boardTotal(), 48.7);
   typeInto(power, 0.8);
-  assert.equal(total(), '48.7 FIT');
+  assert.equal(boardTotal(), 48.7);
   typeInto($('[data-key="count"]', u1), 1000);
   assert.match($('[data-help-key="count"]', u1).textContent, /= 4000 transistors/);
 
@@ -83,10 +88,16 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.equal($('[data-field="bodyW"] .state-tag', card).textContent, 'Missing');
   assert.equal($('[data-key="bodyW"]', card).getAttribute('aria-invalid'), 'true');
   assert.match(warn(), /1 part line needs more input/);
+  // With a line left out, the total is a lower bound and MTBF/survival are upper bounds.
+  assert.match(total(), /^≥ \d/);
+  assert.match($$('#summary .value')[1].textContent, /^≤ /);
+  assert.match($$('#summary .value')[2].textContent, /^≤ /);
+  assert.match($('#summary').textContent, /Lower bound: 1 line left out/);
   assert.equal(document.activeElement?.dataset.key, 'package');
   fill(card, { bodyW: 13, bodyL: 15 });
   assert.equal($$('.field.missing', card).length, 0);
   assert.equal(warn(), '');
+  assert.doesNotMatch(total(), /≥/);
 
   // New parts start with their operating values missing, then compute once filled.
   for (const opt of [...$('#add-model').options]) {
@@ -106,14 +117,23 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
 
   // Quantity, duplicate, remove, collapse.
   const fixed = cardFor('X1');
-  const before = parseFloat(total());
+  const before = boardTotal();
   typeInto($('[data-key="qty"]', fixed), 2);
-  assert.ok(Math.abs(parseFloat(total()) - before - 25) < 0.6);
+  assert.ok(Math.abs(boardTotal() - before - 25) < 0.15, `${boardTotal()} vs ${before}`);
   click($('[data-act="dup"]', fixed));
   assert.ok(cardFor('X1 copy'));
   click($('[data-act="del"]', cardFor('X1 copy')));
   click($('[data-act="toggle"]', cardFor('X1')));
   assert.equal($('.part-body', cardFor('X1')).hidden, true);
+
+  // The automotive profiles from TI SLOA294A Table 6-1.
+  choose($('#preset'), 'auto-motor');
+  assert.equal($$('#phases tr').length, 6);
+  assert.match($('#tau-summary').textContent, /τon = 0.058, τoff = 0.942/);
+  assert.equal($('#profile-problems').textContent, '');
+  assert.equal($('#phases [data-i="3"][data-key="tac"]').placeholder, '—', 'cycle-only phases leave t_ac blank');
+  typeInto($('#phases [data-i="0"][data-key="tac"]'), '');
+  assert.match($('#profile-problems').textContent, /Phase 1 is a working phase but has no t_ac/);
 
   // Mission profile editing.
   choose($('#preset'), 'military-radio');
@@ -137,7 +157,8 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.match(report.textContent, /Skipped 1 mechanical items \(TP1\)/);
   assert.match(report.textContent, /3 lines need input/);
   // Only the capacitors are complete: 3 × 0.15 × (π_t(26 °C)·0.5 + 3.3e-3 × 36^0.76 × 15^0.68).
-  assert.equal(total(), '0.356 FIT');
+  assert.equal(boardTotal(), 0.356);
+  assert.equal(total(), '≥ 0.36 FIT');
   assert.match(warn(), /3 part lines need more input.*3 lines use guessed values/);
 
   const mcu = cardFor('U1');
@@ -164,11 +185,23 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.deepEqual($$('.field.inferred', mcuCard).map((f) => f.dataset.field), ['package']);
   fill(mcuCard, { count: 1e5, power: 0.3, rja: 60 });
   assert.ok(!mcuCard.classList.contains('needs-input'));
-  assert.notEqual(total(), '0.356 FIT');
+  assert.ok(boardTotal() > 0.356);
   click($('[data-act="confirm-guesses"]', mcuCard));
   mcuCard = cardFor('U1');
   assert.ok(!mcuCard.classList.contains('has-guesses'));
   assert.equal($$('.field.inferred', mcuCard).length, 0);
+  // Confirming keeps a record of what was guessed; editing the value removes it.
+  assert.match($('[data-confirmed-for="package"]', mcuCard).textContent, /Guessed from footprint .*; confirmed/);
+  choose($('[data-key="package"]', mcuCard), 'pqfp-10');
+  assert.equal($('[data-confirmed-for="package"]', cardFor('U1')), null);
+
+  // Split turns a grouped line into one line per reference, keeping its values.
+  const caps = cardFor('C1–C3');
+  click($('[data-act="split"]', caps));
+  assert.deepEqual($$('.part [data-key="ref"]').map((i) => i.value).filter((r) => r.startsWith('C')), ['C1', 'C2', 'C3']);
+  assert.equal($('[data-key="qty"]', cardFor('C2')).value, '1');
+  assert.ok(cardFor('C2').classList.contains('has-guesses'), 'guesses carried over');
+  assert.equal($('[data-act="split"]', cardFor('C2')), null, 'single lines have no Split');
 
   // Typing into a guessed number clears its guess.
   const res = cardFor('R1');
@@ -183,20 +216,31 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.match(alerted, /Could not read “notes.txt”: No components found/);
   assert.equal($$('.part').length, partsBefore);
 
-  // JSON round trip keeps guesses and netlist sources.
+  // JSON round trip keeps guesses, confirmed guesses and netlist sources.
+  click($('[data-act="toggle"]', cardFor('C3')));
+  click($('[data-act="confirm-guesses"]', cardFor('C3')));
   const exported = total();
   click($('[data-act="export-json"]'));
   const json = await downloads.at(-1).text();
   const parsed = JSON.parse(json);
   assert.equal(parsed.format, 'iec62380-board');
   assert.ok(!('id' in parsed.parts[0]) && !('open' in parsed.parts[0]), 'export omits UI state');
-  assert.equal(parsed.parts.find((p) => p.ref === 'C1–C3').inferred.type.startsWith('assumed class II'), true);
+  assert.equal(parsed.parts.find((p) => p.ref === 'C1').inferred.type.startsWith('assumed class II'), true);
+  assert.match(parsed.parts.find((p) => p.ref === 'C3').confirmed.type, /assumed class II/);
+  assert.equal(parsed.parts.find((p) => p.ref === 'C3').inferred, undefined);
   assert.equal(parsed.parts.find((p) => p.ref === 'R1').source.value, '10µ');
   click($('[data-act="new"]'));
   assert.equal(total(), '0 FIT');
   await pick('#import-file', { text: async () => json });
   assert.equal(total(), exported);
-  assert.equal($$('.field.inferred', cardFor('C1–C3')).length, 1);
+  assert.equal($$('.field.inferred', cardFor('C1')).length, 1);
+
+  // A blank phase temperature survives a save and reload instead of becoming a default.
+  choose($('#preset'), 'auto-motor');
+  click($('[data-act="export-json"]'));
+  await pick('#import-file', { text: async () => downloads.at(-1).text() });
+  assert.equal($('#phases [data-i="3"][data-key="tac"]').value, '');
+  assert.equal($('#profile-problems').textContent, '');
 
   // CSV: one row per line plus header and total; formula-like text neutralised.
   typeInto($('[data-key="ref"]', $$('.part')[0]), '=HYPERLINK("x")');

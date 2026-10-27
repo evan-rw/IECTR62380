@@ -172,6 +172,9 @@ button.link { background: none; border: none; color: var(--accent); padding: 4px
 .tile .value { font-size: 1.35rem; font-weight: 650; font-variant-numeric: tabular-nums; }
 .tile .sub { font-size: 0.8125rem; color: var(--text-2); }
 .summary .warn { color: var(--error); font-size: 0.875rem; margin: 10px 0 0; }
+.summary .scope { color: var(--text-2); font-size: 0.8125rem; margin: 8px 0 0; max-width: 90ch; }
+.tiles.partial .tile { outline: 1px dashed var(--error); outline-offset: -1px; }
+.tiles.partial .bounded .value { color: var(--text-2); }
 
 /* Tables */
 
@@ -260,6 +263,7 @@ table.trace-table caption { text-align: left; font-weight: 600; padding-bottom: 
 .field.inferred input, .field.inferred select { border-color: var(--warn-border); box-shadow: 0 0 0 1px var(--warn-border); background: var(--warn-bg); }
 .guess { margin: 4px 0 0; font-size: 0.78rem; color: var(--warn-text); }
 .guess[hidden] { display: none; }
+.guess.confirmed { color: var(--text-2); }
 
 .part.needs-input { border-left: 4px solid var(--error); }
 .part.has-guesses:not(.needs-input) { border-left: 4px solid var(--warn-border); }

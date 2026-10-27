@@ -1,21 +1,25 @@
 // Coefficient tables for the IEC TR 62380:2004 models.
 //
-// The values are inferred from public sources, not copied from the standard:
-// the IEC's licence for purchased copies does not allow using them in
-// software. Every table lists its sources and a status saying how well it is
-// supported. Raise a table to 'corroborated' only when a second, independent
-// public source (a vendor reliability report, a paper) gives the same values,
-// and add that source to its list.
+// None of these values were taken from the standard: the IEC's licence for
+// purchased copies does not allow using them in software. Apart from the
+// mission profiles, which are published excerpts of the standard, they were
+// copied from one open-source project (Kicad-Space-Reliability) and have not
+// been checked against the standard. Each table's `ref` names the table of
+// the standard that the source says the values correspond to.
+//
+// Raise a table to 'corroborated' only when a second, independent public
+// source (a vendor reliability report, a paper) gives the same values, and
+// add that source to its list.
 
 export const STATUS = {
-  preview: "From the standard's free preview",
-  corroborated: 'Two or more sources agree',
-  single: 'Single source',
+  excerpt: 'Published excerpt of the standard',
+  corroborated: 'Two or more independent sources agree',
+  single: 'Single source, not checked against the standard',
 };
 
 export const SOURCES = {
   iecPreview: {
-    label: 'IEC TR 62380:2004 publisher preview (front matter, Tables 1–2)',
+    label: 'IEC TR 62380:2004 free preview, hosted by iTeh Standards (front matter, Tables 1–2)',
     url: 'https://cdn.standards.iteh.ai/samples/13261/98ed8ee73b204649b3da358d6417259b/IEC-TR-62380-2004.pdf',
   },
   kicad: {
@@ -29,6 +33,10 @@ export const SOURCES = {
   pmcTantalum: {
     label: 'Micromachines 2023, 14(1):221, eq. (3): tantalum capacitor model',
     url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC9866997/',
+  },
+  thurlbeck: {
+    label: 'Thurlbeck & Cao, "A Mission Profile Based Reliability Modeling Framework for Fault-tolerant Electric Propulsion", IEEE Trans. Industry Applications, 2022 (author copy)',
+    url: 'https://web.engr.oregonstate.edu/~caoy2/files/IAS_thurlbeck.pdf',
   },
   reconstructed: {
     label: 'Model structure reconstructed from secondary descriptions of the standard',
@@ -50,14 +58,34 @@ export const EA = {
 // time ratio tau (0 for a dormant phase), annual thermal cycles n, cycle
 // amplitude dT (°C), and addRise — whether the cycle amplitude also includes
 // one third of the part's own temperature rise (the "ΔTj/3 +" entries).
+// A phase with tau 0 adds thermal cycles only; its tac is not used.
+const AUTOMOTIVE = (temps, swings) => [
+  ...temps.map(([tac, tau]) => ({ name: `Working at ${tac} °C`, tac, tau, n: 0, dT: 0, addRise: false })),
+  { name: 'Night starts', tac: null, tau: 0, n: 670, dT: swings[0], addRise: true },
+  { name: 'Daytime starts', tac: null, tau: 0, n: 1340, dT: swings[1], addRise: true },
+  { name: 'Days not used', tac: null, tau: 0, n: 30, dT: 10, addRise: false },
+];
+
 export const MISSION_PROFILES = {
   id: 'missionProfiles',
   title: 'Mission profiles',
-  ref: 'Tables 1–2',
-  status: 'preview',
-  sources: ['iecPreview'],
-  note: 'Tables 9–11 (telecom, avionics, automotive) are not in the public preview and are not included.',
+  ref: 'Tables 1, 2 and 11',
+  status: 'excerpt',
+  sources: ['iecPreview', 'tiSloa294'],
+  note: 'Tables 1–2 are in the free preview. The automotive rows of Table 11 are reproduced in TI SLOA294A, Table 6-1. Tables 9–10 (telecom, avionics) are not publicly available and are not included.',
   rows: [
+    {
+      id: 'auto-motor',
+      label: 'Automotive: motor control',
+      ref: 'Table 11, via TI SLOA294A Table 6-1',
+      phases: AUTOMOTIVE([[32, 0.020], [60, 0.015], [85, 0.023]], [55, 45]),
+    },
+    {
+      id: 'auto-cabin',
+      label: 'Automotive: passenger compartment',
+      ref: 'Table 11, via TI SLOA294A Table 6-1',
+      phases: AUTOMOTIVE([[27, 0.006], [30, 0.046], [85, 0.006]], [30, 20]),
+    },
     {
       id: 'leo-onoff',
       label: 'Spatial: low earth orbit (LEO), on/off cycling',
@@ -306,7 +334,8 @@ export const TRANSISTORS = {
   title: 'λ0 for low-power and power transistors',
   ref: 'Clauses 8.4–8.5',
   status: 'single',
-  sources: ['kicad'],
+  sources: ['kicad', 'thurlbeck'],
+  note: 'Thurlbeck & Cao (2022) independently give the MOS activation energy (0.3 eV) and the 100 °C reference temperature. The λ0 values have a single source.',
   rows: [
     { id: 'bip-lp', group: 'Low power (8.4)', label: 'Silicon bipolar (up to 5 W)', l0: 0.75, ea: EA.BIPOLAR },
     { id: 'mos-lp', group: 'Low power (8.4)', label: 'Silicon MOS (up to 5 W)', l0: 0.75, ea: EA.MOS },
@@ -322,7 +351,7 @@ export const CAPACITORS = {
   ref: 'Clause 10',
   status: 'single',
   sources: ['kicad', 'pmcTantalum'],
-  note: 'The tantalum row (λ0 = 0.4, k = 3.8 × 10⁻³) is the only one with a second source, the Micromachines paper. Film capacitors (10.1), aluminium solid and polymer (10.6–10.7), variable ceramic (10.8) and NTC thermistors (10.9) are pending.',
+  note: 'Equation (3) of the Micromachines paper states the same tantalum λ0 = 0.4 and k = 3.8 × 10⁻³, but its worked example does not follow it, so it is weak support. Film capacitors (10.1), aluminium solid and polymer (10.6–10.7), variable ceramic (10.8) and NTC thermistors (10.9) are pending.',
   rows: [
     { id: 'ceramic-1', label: 'Ceramic, class I (defined temperature coefficient)', clause: '10.2', l0: 0.05, k: 3.3e-3, ea: EA.CAP_CERAMIC, tRef: 303 },
     { id: 'ceramic-2', label: 'Ceramic, class II', clause: '10.3', l0: 0.15, k: 3.3e-3, ea: EA.CAP_CERAMIC, tRef: 303 },
@@ -353,7 +382,7 @@ export const INDUCTORS = {
   ref: 'Clause 12',
   status: 'single',
   sources: ['kicad'],
-  note: 'λ0 must be entered from the standard.',
+  note: 'No λ0 values are included; enter one from a datasheet or vendor data.',
   k: 7e-3,
   riseCoef: 8.2,
 };

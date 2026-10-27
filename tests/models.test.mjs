@@ -157,3 +157,19 @@ test('every table names its sources and how well they support it', () => {
     if (t.status === 'corroborated') assert.ok(t.sources.length >= 2, t.id);
   }
 });
+
+test('automotive motor-control profile (TI SLOA294A Table 6-1)', () => {
+  const prof = normaliseProfile(preset('auto-motor'));
+  close(prof.tauOn, 0.058);
+  close(prof.tauOff, 0.942);
+  assert.deepEqual(profileProblems(preset('auto-motor')), []);
+  // TI's worked example: with ΔTj = 15 °C, the start cycles are 15/3 + 55 = 60 °C and 15/3 + 45 = 50 °C.
+  const r = MODELS.ic.compute({ ...COMPLETE.ic, power: 0.3, rja: 50 }, prof);
+  assert.deepEqual(r.cycling.map((c) => [c.n, +c.dT.toFixed(6)]), [[0, 0], [0, 0], [0, 0], [670, 60], [1340, 50], [30, 10]]);
+  assert.deepEqual(r.operating.map((o) => o.t), [32 + 15, 60 + 15, 85 + 15]);
+});
+
+test('a working phase without a temperature is a profile problem', () => {
+  assert.match(profileProblems({ phases: [{ tac: null, tau: 1, n: 0, dT: 0 }] })[0], /Phase 1 is a working phase but has no t_ac/);
+  assert.deepEqual(profileProblems({ phases: [{ tac: 25, tau: 1, n: 0, dT: 0 }, { tac: null, tau: 0, n: 30, dT: 10 }] }), []);
+});

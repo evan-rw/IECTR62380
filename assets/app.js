@@ -2,7 +2,7 @@ import {
   MODELS, PENDING_FAMILIES, computeBoard, profileProblems, mtbfHours, reliability, byId, fieldLabel,
 } from './models.js';
 import { MISSION_PROFILES, ALL_TABLES, SOURCES, STATUS } from './tables.js';
-import { netlistToParts } from './netlist.js';
+import { netlistToParts, expandRefs } from './netlist.js';
 
 const STORAGE_KEY = 'iec62380.board.v1';
 const FORMAT = 'iec62380-board';
@@ -19,20 +19,24 @@ let seq = 0;
 const newId = () => `p${Date.now().toString(36)}${(seq++).toString(36)}`;
 
 const nf = new Intl.NumberFormat('en', { maximumSignificantDigits: 3 });
-function fmt(x) {
+const nf2 = new Intl.NumberFormat('en', { maximumSignificantDigits: 2 });
+function fmt(x, format = nf) {
   if (!Number.isFinite(x)) return '—';
   if (x === 0) return '0';
-  if (Math.abs(x) < 0.001) return x.toExponential(2);
-  return nf.format(x);
+  if (Math.abs(x) < 0.001) return x.toExponential(format === nf ? 2 : 1);
+  return format.format(x);
 }
+// Headline figures: two significant digits, since the inputs justify no more.
+const fmt2 = (x) => fmt(x, nf2);
 
 // ---------------------------------------------------------------------------
-// Board state. A part is { id, ref, qty, model, params, inferred, source, open }:
-// `inferred` maps a parameter to the reason it was guessed (cleared when the
-// user edits or confirms it); `source` keeps what the netlist said.
+// Board state. A part is { id, ref, qty, model, params, inferred, confirmed,
+// source, open }: `inferred` maps a parameter to the reason it was guessed;
+// "Confirm guesses" moves those reasons to `confirmed` so the record stays;
+// editing a value removes it from both. `source` keeps what the netlist said.
 
 function makePart(model, ref, qty = 1, params = {}, extra = {}) {
-  return { id: newId(), ref, qty, model, params: { ...clone(MODELS[model].defaults), ...params }, inferred: {}, source: null, open: false, ...extra };
+  return { id: newId(), ref, qty, model, params: { ...clone(MODELS[model].defaults), ...params }, inferred: {}, confirmed: {}, source: null, open: false, ...extra };
 }
 
 function presetProfile(id) {
@@ -75,19 +79,21 @@ function sanitize(raw) {
     if (!model) { skipped.push(String(p?.model)); continue; }
     const params = clone(model.defaults);
     const inferred = {};
+    const confirmed = {};
     for (const key of Object.keys(params)) {
       const v = p.params?.[key];
       if (v === null || typeof v === 'number' || typeof v === 'string') params[key] = v;
       if (typeof p.inferred?.[key] === 'string') inferred[key] = p.inferred[key];
+      if (typeof p.confirmed?.[key] === 'string') confirmed[key] = p.confirmed[key];
     }
     const source = p.source && typeof p.source === 'object'
       ? { value: str(p.source.value), footprint: str(p.source.footprint), description: str(p.source.description) }
       : null;
-    parts.push({ id: newId(), ref: str(p.ref), qty: isNum(p.qty) ? p.qty : 1, model: p.model, params, inferred, source, open: Boolean(p.open), advOpen: Boolean(p.advOpen), traceOpen: Boolean(p.traceOpen) });
+    parts.push({ id: newId(), ref: str(p.ref), qty: isNum(p.qty) ? p.qty : 1, model: p.model, params, inferred, confirmed, source, open: Boolean(p.open), advOpen: Boolean(p.advOpen), traceOpen: Boolean(p.traceOpen) });
   }
   const phases = raw.profile.phases.map((ph) => ({
     name: str(ph?.name),
-    tac: isNum(ph?.tac) ? ph.tac : 25,
+    tac: isNum(ph?.tac) ? ph.tac : null,
     tau: isNum(ph?.tau) ? ph.tau : 0,
     n: isNum(ph?.n) ? ph.n : 0,
     dT: isNum(ph?.dT) ? ph.dT : 0,
@@ -110,9 +116,10 @@ function exportable(board) {
   return {
     format: FORMAT, version: 1, title: board.title, years: board.years,
     profile: board.profile,
-    parts: board.parts.map(({ ref, qty, model, params, inferred, source }) => ({
+    parts: board.parts.map(({ ref, qty, model, params, inferred, confirmed, source }) => ({
       ref, qty, model, params,
       ...(Object.keys(inferred ?? {}).length ? { inferred } : {}),
+      ...(Object.keys(confirmed ?? {}).length ? { confirmed } : {}),
       ...(source ? { source } : {}),
     })),
   };
@@ -138,6 +145,7 @@ function save() {
 let state = load() ?? exampleBoard();
 const findPart = (id) => state.parts.find((p) => p.id === id);
 const guessCount = (part) => Object.keys(part.inferred ?? {}).length;
+const canSplit = (part) => part.qty > 1 && expandRefs(part.ref).length === part.qty;
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -162,6 +170,7 @@ function fieldHTML(part, f, p) {
   const label = fieldLabel(f, p);
   const help = typeof f.help === 'function' ? f.help(p) : f.help;
   const guess = part.inferred?.[f.key];
+  const confirmedGuess = part.confirmed?.[f.key];
   const id = `${part.id}-${f.key}`;
   const data = `data-bind="part" data-id="${part.id}" data-key="${f.key}"`;
   let control;
@@ -178,7 +187,8 @@ function fieldHTML(part, f, p) {
   }
   const unit = f.unit ? ` <span class="unit">(${esc(f.unit)})</span>` : '';
   const helpHTML = help ? `<p class="help" data-help-key="${f.key}">${esc(help)}</p>` : '';
-  const guessHTML = guess ? `<p class="guess" data-guess-for="${f.key}">Guessed ${esc(guess)}.</p>` : '';
+  const guessHTML = guess ? `<p class="guess" data-guess-for="${f.key}">Guessed ${esc(guess)}.</p>`
+    : confirmedGuess ? `<p class="guess confirmed" data-confirmed-for="${f.key}">Guessed ${esc(confirmedGuess)}; confirmed.</p>` : '';
   return `<div class="field${f.wide ? ' wide' : ''}" data-field="${f.key}"><label for="${id}">${esc(label)}${unit}<span class="state-tag"></span></label>${control}${guessHTML}${helpHTML}</div>`;
 }
 
@@ -205,6 +215,7 @@ function partHTML(part) {
         <div class="part-fit" data-out="fit"></div>
         <div class="part-actions">
           <button type="button" class="icon" data-act="toggle" data-id="${part.id}" aria-expanded="${part.open}" aria-controls="${part.id}-body">${part.open ? 'Close' : 'Edit'}</button>
+          ${canSplit(part) ? `<button type="button" class="icon" data-act="split" data-id="${part.id}" title="One line per reference, so each can have its own values">Split</button>` : ''}
           <button type="button" class="icon" data-act="dup" data-id="${part.id}" title="Duplicate">Copy</button>
           <button type="button" class="icon" data-act="del" data-id="${part.id}" title="Remove">✕</button>
         </div>
@@ -252,7 +263,7 @@ function renderPresets() {
 function renderPhases() {
   $('#phases').innerHTML = state.profile.phases.map((ph, i) => {
     const d = (key) => `data-bind="phase" data-i="${i}" data-key="${key}"`;
-    const num = (key, label, attrs = '') => `<td><input type="number" step="any" inputmode="decimal" ${attrs} aria-label="${label}, phase ${i + 1}" value="${esc(ph[key] ?? '')}" ${d(key)}></td>`;
+    const num = (key, label, attrs = '') => `<td><input type="number" step="any" inputmode="decimal" ${attrs} aria-label="${label}, phase ${i + 1}" value="${esc(ph[key] ?? '')}" placeholder="—" ${d(key)}></td>`;
     return `<tr>
       <td><input type="text" aria-label="Phase ${i + 1} name" value="${esc(ph.name)}" ${d('name')}></td>
       ${num('tac', 't_ac')}${num('tau', 'τ', 'min="0" max="1"')}${num('n', 'n', 'min="0"')}${num('dT', 'ΔT', 'min="0"')}
@@ -287,14 +298,14 @@ function renderSources() {
     return s.url ? `<a href="${esc(s.url)}" rel="noopener">${esc(s.label)}</a>` : esc(s.label);
   };
   const rows = ALL_TABLES.map((t) => `<tr>
-      <td>${esc(t.title)}<br><span class="unit">${esc(t.ref)}</span></td>
+      <td>${esc(t.title)}<br><span class="unit">${t.status === 'excerpt' ? `IEC TR 62380 ${esc(t.ref)}` : `${esc(t.ref)} of the standard, according to the source`}</span></td>
       <td><span class="badge ${t.status === 'single' ? 'no' : 'ok'}">${esc(STATUS[t.status])}</span></td>
       <td>${t.sources.map(link).join('<br>')}${t.note ? `<p class="help">${esc(t.note)}</p>` : ''}</td>
     </tr>`).join('');
   const models = Object.values(MODELS).map((m) => `<li><strong>${esc(m.label)}</strong> (clause ${esc(m.clause)}): ${esc(m.status)}</li>`).join('');
   const pending = PENDING_FAMILIES.map((f) => `<li>${esc(f)}</li>`).join('');
   $('#source-list').innerHTML = `
-    <p class="hint">The values are inferred from public sources, not copied from the standard. Each table says how many independent sources agree on it. The mission profiles come from the publisher's free preview of the standard.</p>
+    <p class="hint">None of the values were taken from the standard. The mission profiles are published excerpts of it: the free preview and TI's application note. Everything else was copied from one open-source project, Kicad-Space-Reliability (MIT licence, see <a href="THIRD_PARTY_NOTICES.md">third-party notices</a>), and has not been checked against the standard.</p>
     <div class="table-scroll"><table class="source-table"><thead><tr><th>Table</th><th>Status</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table></div>
     <h3>Models</h3><ul>${models}</ul>
     <h3>Not modelled yet</h3>
@@ -351,6 +362,8 @@ function update() {
       wrap.querySelector('input, select')?.setAttribute('aria-invalid', String(missing));
       const note = wrap.querySelector('[data-guess-for]');
       if (note) note.hidden = !guessed;
+      const confirmedNote = wrap.querySelector('[data-confirmed-for]');
+      if (confirmedNote) confirmedNote.hidden = !comp.confirmed?.[key];
     }
     for (const f of model.fields) {
       if (typeof f.help !== 'function') continue;
@@ -368,11 +381,19 @@ function update() {
   if (problems.length) warn.push('The mission profile has problems (see above).');
   if (board.incomplete) warn.push(`${plural(board.incomplete, 'part line needs', 'part lines need')} more input; the total leaves ${board.incomplete > 1 ? 'them' : 'it'} out.`);
   if (guessedLines) warn.push(`${plural(guessedLines, 'line uses', 'lines use')} guessed values; check and confirm them.`);
-  $('#summary').innerHTML = `<div class="tiles">
-    <div class="tile"><div class="label">Board failure rate</div><div class="value">${fmt(total)} FIT</div><div class="sub">${fmt(pieces)} pieces in ${state.parts.length} lines</div></div>
-    <div class="tile"><div class="label">MTBF</div><div class="value">${Number.isFinite(mtbf) ? `${fmt(mtbf)} h` : '—'}</div><div class="sub">${Number.isFinite(mtbf) ? `${fmt(mtbf / 8760)} years` : 'no failure rate yet'}</div></div>
-    <div class="tile"><div class="label">Survival over ${fmt(years)} years</div><div class="value">${(R * 100).toFixed(R > 0.999 ? 3 : 1)}%</div><div class="sub">${fmt(1000 * (1 - R))} failures per 1000 boards</div></div>
-    </div>${warn.length ? `<p class="warn">${warn.map(esc).join(' ')}</p>` : ''}`;
+  // While lines are left out, the total is only a lower bound, so MTBF and
+  // survival are upper bounds; say so and show fewer digits.
+  const partial = board.incomplete > 0;
+  const ge = partial ? '≥ ' : '';
+  const le = partial ? '≤ ' : '';
+  const pct = (r) => `${(r * 100).toFixed(r > 0.999 ? 3 : 1)}%`;
+  const boundNote = partial ? `<div class="sub">Lower bound: ${plural(board.incomplete, 'line')} left out</div>` : '';
+  $('#summary').innerHTML = `<div class="tiles${partial ? ' partial' : ''}">
+    <div class="tile"><div class="label">Board failure rate</div><div class="value">${ge}${fmt2(total)} FIT</div><div class="sub">${fmt(pieces)} pieces in ${state.parts.length} lines</div>${boundNote}</div>
+    <div class="tile bounded"><div class="label">MTBF</div><div class="value">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf)} h` : '—'}</div><div class="sub">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf / 8760)} years` : 'no failure rate yet'}</div></div>
+    <div class="tile bounded"><div class="label">Survival over ${fmt(years)} years</div><div class="value">${le}${pct(R)}</div><div class="sub">${ge}${fmt2(1000 * (1 - R))} failures per 1000 boards</div></div>
+    </div>${warn.length ? `<p class="warn">${warn.map(esc).join(' ')}</p>` : ''}
+    <p class="scope">The total counts a failure of any listed part as a board failure, so parts wired in parallel still add up. Solder joints are part of each component's package term; the bare printed circuit board and anything not in the list are not included.</p>`;
 
   const sorted = [...board.items].sort((a, b) => b.result.total - a.result.total || Number(a.result.complete) - Number(b.result.complete));
   $('#results').innerHTML = sorted.length
@@ -409,20 +430,20 @@ function csvCell(v) {
 
 function boardCSV() {
   const board = computeBoard({ profile: state.profile, components: state.parts });
-  const rows = [['Ref', 'Part type', 'Description', 'Qty', 'Lambda each (FIT)', 'Lambda total (FIT)', 'Share (%)', 'Breakdown (FIT)', 'Problems', 'Guessed values']];
+  const rows = [['Ref', 'Part type', 'Description', 'Qty', 'Lambda each (FIT)', 'Lambda total (FIT)', 'Share (%)', 'Breakdown (FIT)', 'Problems', 'Guessed values', 'Confirmed guesses']];
   for (const { comp, result } of board.items) {
     const model = MODELS[comp.model];
     const p = { ...model.defaults, ...comp.params };
-    const guessed = Object.keys(comp.inferred ?? {}).map((k) => fieldLabel(model.fields.find((f) => f.key === k) ?? { label: k }, p));
+    const labels = (map) => Object.keys(map ?? {}).map((k) => fieldLabel(model.fields.find((f) => f.key === k) ?? { label: k }, p)).join('; ');
     rows.push([
       comp.ref, model.label, model.describe(p), result.qty,
       result.complete ? result.fit : '', result.complete ? result.total : '',
       result.complete && board.total > 0 ? ((100 * result.total) / board.total).toFixed(2) : '',
       result.complete ? result.parts.map(([k, v]) => `${k} ${+v.toPrecision(4)}`).join('; ') : '',
-      result.errors.join(' '), guessed.join('; '),
+      result.errors.join(' '), labels(comp.inferred), labels(comp.confirmed),
     ]);
   }
-  rows.push(['Board', '', '', '', '', board.total, '100', '', board.incomplete ? `${board.incomplete} lines left out` : '', '']);
+  rows.push(['Board', '', '', '', '', board.total, '100', '', board.incomplete ? `Lower bound: ${board.incomplete} lines left out` : '', '', '']);
   return rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
 }
 
@@ -459,8 +480,10 @@ function nextRef(model) {
   return `${prefix}${max + 1}`;
 }
 
+// An edited value is the user's own, no longer a guess, confirmed or not.
 function clearGuess(part, key) {
   if (part.inferred?.[key]) delete part.inferred[key];
+  if (part.confirmed?.[key]) delete part.confirmed[key];
 }
 
 document.addEventListener('input', (e) => {
@@ -569,9 +592,16 @@ document.addEventListener('click', (e) => {
       $(`[data-act="toggle"][data-id="${part.id}"]`)?.focus();
       break;
     case 'confirm-guesses':
+      part.confirmed = { ...part.confirmed, ...part.inferred };
       part.inferred = {};
       rerenderPart(part);
       break;
+    case 'split': {
+      const singles = expandRefs(part.ref).map((ref) => ({ ...clone(part), id: newId(), ref, qty: 1, open: false }));
+      state.parts.splice(state.parts.indexOf(part), 1, ...singles);
+      renderParts();
+      break;
+    }
     case 'dup': {
       const copy = { ...clone(part), id: newId(), ref: `${part.ref} copy` };
       state.parts.splice(state.parts.indexOf(part) + 1, 0, copy);
