@@ -65,19 +65,31 @@ export function normaliseProfile(profile) {
   return { phases, tauOn, tauOff, env217f: profile.env217f ?? 'GB' };
 }
 
-export function profileProblems(profile) {
+// Each problem with the phase-table cells it concerns ([phase index, key]), so the
+// page can mark those cells and take the user to them.
+export function profileIssues(profile) {
   const prof = normaliseProfile(profile);
-  const problems = [];
-  if (prof.phases.length === 0) problems.push('Add at least one phase.');
-  if (prof.phases.some((p) => p.tau < 0)) problems.push('A working time ratio τ is negative.');
+  const out = [];
+  if (prof.phases.length === 0) out.push({ text: 'Add at least one phase.', cells: [] });
+  prof.phases.forEach((p, i) => {
+    if (p.tau < 0) out.push({ text: `Phase ${i + 1}: the working time ratio τ is negative.`, cells: [[i, 'tau']] });
+  });
   // t_ac only matters in working phases; a blank one there would silently read as 0 °C.
-  const noTemp = profile.phases.findIndex((p) => Number(p.tau) > 0 && (p.tac == null || p.tac === ''));
-  if (noTemp >= 0) problems.push(`Phase ${noTemp + 1} is a working phase but has no t_ac.`);
-  if (prof.phases.some((p) => p.n < 0 || p.dT < 0)) problems.push('Cycle counts and amplitudes cannot be negative.');
-  if (prof.tauOn > 1 + 1e-9) problems.push(`The working time ratios add up to ${prof.tauOn.toFixed(3)}, more than 1.`);
-  if (prof.tauOn + prof.tauOff <= 0) problems.push('τ_on + τ_off is zero.');
-  return problems;
+  profile.phases.forEach((p, i) => {
+    if (Number(p.tau) > 0 && (p.tac == null || p.tac === '')) out.push({ text: `Phase ${i + 1} is a working phase but has no t_ac.`, cells: [[i, 'tac']] });
+  });
+  prof.phases.forEach((p, i) => {
+    const bad = ['n', 'dT'].filter((k) => p[k] < 0);
+    if (bad.length) out.push({ text: `Phase ${i + 1}: ${bad.map((k) => (k === 'n' ? 'the cycle count n' : 'the amplitude ΔT')).join(' and ')} cannot be negative.`, cells: bad.map((k) => [i, k]) });
+  });
+  if (prof.tauOn > 1 + 1e-9) {
+    out.push({ text: `The working time ratios add up to ${prof.tauOn.toFixed(3)}, more than 1.`, cells: prof.phases.flatMap((p, i) => (p.tau > 0 ? [[i, 'tau']] : [])) });
+  }
+  if (prof.tauOn + prof.tauOff <= 0) out.push({ text: 'τ_on + τ_off is zero.', cells: prof.phases.map((p, i) => [i, 'tau']) });
+  return out;
 }
+
+export const profileProblems = (profile) => profileIssues(profile).map((x) => x.text);
 
 // Σ π_t(t_i)·τ_i / (τ_on + τ_off) over the working phases.
 function operatingSum(prof, tempOf, ea, tRef) {

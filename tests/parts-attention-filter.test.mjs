@@ -1,4 +1,4 @@
-// with "Only parts that need attention" ticked, the card being worked on stays on screen
+// With "Only parts that need attention" ticked, the card being worked on stays on screen
 // until it is closed. Before the fix the rule `.parts.attention-only .part:not(.needs-input):not(.has-guesses)
 // { display: none }` (assets/style.css) hides the card on the keystroke that completes it: in Chrome focus
 // falls to <body>, so typing "1.5" into the last Missing field stores 1 and the ".5" goes nowhere.

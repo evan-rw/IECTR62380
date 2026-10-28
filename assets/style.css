@@ -150,6 +150,9 @@ h3 { font-size: 12px; font-weight: bold; }
 label { display: block; margin-bottom: 2px; }
 
 input[type="text"], input[type="number"], input[type="search"], select {
+  /* Phone browsers draw their own rounded, shaded fields unless told not to (Safari needs the prefix). */
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   min-height: 22px;
   padding: 3px 5px;
@@ -162,6 +165,7 @@ input[type="text"], input[type="number"], input[type="search"], select {
 }
 input[type="number"] { font-variant-numeric: tabular-nums; }
 select {
+  -webkit-appearance: none;
   appearance: none;
   padding-right: 22px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 18'%3E%3Crect width='16' height='18' fill='%23d4d0c8'/%3E%3Cpath d='M0 17.5H15.5V0' stroke='%23404040' fill='none'/%3E%3Cpath d='M1 16.5H14.5V1' stroke='%23808080' fill='none'/%3E%3Cpath d='M.5 17V.5H15' stroke='%23fff' fill='none'/%3E%3Cpath d='M4 7h8l-4 4z' fill='%23000'/%3E%3C/svg%3E");
@@ -173,7 +177,7 @@ input:focus-visible, select:focus-visible { outline: 1px dotted #000; outline-of
 input:disabled, select:disabled { background-color: var(--face); color: var(--gray-text); }
 
 input[type="checkbox"] {
-  appearance: none; width: 13px; height: 13px; margin: 0;
+  -webkit-appearance: none; appearance: none; border: 0; border-radius: 0; width: 13px; height: 13px; margin: 0; flex: none;
   background: var(--window); box-shadow: var(--sunken); vertical-align: middle;
 }
 input[type="checkbox"]:checked {
@@ -182,6 +186,8 @@ input[type="checkbox"]:checked {
 input[type="checkbox"]:focus-visible { outline: 1px dotted #000; outline-offset: 1px; }
 
 button {
+  -webkit-appearance: none;
+  appearance: none;
   min-height: 23px;
   padding: 3px 10px;
   border: 0;
@@ -280,6 +286,11 @@ table.phases td.check { text-align: center; }
 .part-head .ref input { font-weight: bold; }
 .part-kind { min-width: 0; }
 .part-kind .model { font-weight: bold; }
+.part[hidden] { display: none; }
+.part-kind .refs-full { font-size: 11px; font-weight: bold; overflow-wrap: anywhere; }
+.part-kind .refs-full:empty { display: none; }
+.parts-filter { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; max-width: 420px; }
+.parts-filter label { margin: 0; white-space: nowrap; }
 .part-kind .desc { color: var(--text-2); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .part-fit { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .part-fit .each { font-weight: bold; }
@@ -336,6 +347,7 @@ table.trace-table caption { text-align: left; font-weight: bold; padding-bottom:
 /* An open card stays shown until it is closed, so the key that completes a line does not hide it mid-entry. */
 .undo-bar { margin: 6px 0 0; padding: 2px 6px; background: var(--info-bg); border: 1px solid #000; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .undo-bar[hidden] { display: none; }
+table.phases td.invalid input { background-color: var(--error-bg); box-shadow: 0 0 0 1px var(--error), var(--sunken); }
 table.phases td.check label { display: flex; align-items: center; justify-content: center; margin: 0; min-height: 22px; }
 .parts.attention-only .part:not(.needs-input):not(.has-guesses):not(.is-open) { display: none; }
 
@@ -343,7 +355,10 @@ table.phases td.check label { display: flex; align-items: center; justify-conten
 .source-line { margin: 0 0 8px; font-size: 11px; color: var(--text-2); overflow-wrap: anywhere; }
 .source-line b { color: var(--text); }
 
-.import-report { margin: 0 0 8px; padding: 6px 8px; background: var(--info-bg); border: 1px solid #000; }
+.import-report { margin: 8px 0 0; padding: 6px 8px; background: var(--info-bg); border: 1px solid #000; }
+.import-report p { margin: 0; }
+.import-report .report-actions { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+.import-report:focus-visible { outline: 1px dotted #000; outline-offset: 2px; }
 .import-report[hidden] { display: none; }
 .check-label { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 8px; }
 
@@ -385,13 +400,22 @@ table.life-lines td:first-child { min-width: 180px; }
 table.life-lines input[type="number"] { width: 66px; min-width: 0; }
 table.life-lines select { width: 100%; min-width: 84px; }
 table.life-lines tr.worn td { background: var(--error-bg); }
-table.life-lines .life-acts { white-space: nowrap; }
+table.smt-devices .life-acts { white-space: nowrap; }
 .life-settings .field { flex-basis: 380px; }
 #life-add { max-width: 420px; }
 
 /* Results */
 
 table.results td:nth-child(2) { color: var(--text-2); }
+/* A line's references: two lines at most (the full list is the tooltip), a link to the line. */
+table.results td.ref { width: 40%; }
+table.results .refs { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; text-align: left; font: inherit; }
+/* A list view: the header and the board row stay in sight while the lines scroll. */
+.results-scroll { max-height: min(70vh, 720px); overflow: auto; }
+table.results thead th { position: sticky; top: 0; z-index: 1; }
+table.results tr:last-child td { position: sticky; bottom: 0; }
+.summary .jump { margin: 6px 0 0; }
+@media print { .results-scroll { max-height: none; overflow: visible; } }
 table.results .bad { color: var(--error); font-weight: bold; }
 table.results tr:last-child td { background: var(--face); font-weight: bold; border-top: 2px solid var(--shadow); }
 
@@ -399,7 +423,6 @@ table.results tr:last-child td { background: var(--face); font-weight: bold; bor
    empty pseudo-elements and backgrounds, so screen readers and text are untouched. */
 
 .site-nav a::before,
-#results tr.top > td:first-child::after,
 [data-act="confirm-guesses"]::before,
 .st-ghost::before,
 .st-row.drop .st-nm::before {
@@ -410,7 +433,7 @@ table.results tr:last-child td { background: var(--face); font-weight: bold; bor
 /* Page menu: switching pages is a teleport. */
 .site-nav a::before { background-image: url(art/portal.svg); }
 /* The part adding the most to the total. */
-#results tr.top > td:first-child::after { margin: -3px 0 -3px 5px; background-image: url(art/flame.svg); }
+#results tr.top > td:first-child { padding-right: 26px; background: url(art/flame.svg) right 5px center / 16px 16px no-repeat; image-rendering: pixelated; }
 /* Confirming locks the guessed values in. */
 [data-act="confirm-guesses"]::before { background-image: url(art/key.svg); }
 /* Drag and drop in the structure tree: a portal on the item and on where it lands. */
@@ -489,6 +512,9 @@ li[role="treeitem"]:focus-visible > .st-row { outline: 1px dotted #000; outline-
 .st-row.sel .muted, .st-row.sel .st-fit { color: var(--select-text); }
 .st-row.drop { outline: 2px solid var(--line); outline-offset: -2px; background: #dce8ff; }
 .st-row.match .st-nm { text-decoration: underline 2px #e0a000; }
+.st-rowacts { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 4px 4px calc(34px + var(--lvl) * 14px); }
+.st-nets { white-space: nowrap; font-size: 11px; }
+.st-next { margin: 6px 0 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .st-row.has-match .st-nm { text-decoration: underline dotted 2px #e0a000; }
 .st-row.proposed .st-nm { font-style: italic; }
 .st-row.inred .st-fit { color: var(--gray-text); }
@@ -554,6 +580,11 @@ body.st-dragging, body.st-dragging * { cursor: grabbing !important; user-select:
 #st-rbd .lasso { fill: rgba(10, 36, 106, 0.12); stroke: #000; stroke-dasharray: 2 2; }
 #st-rbd.lod .sub { display: none; }
 #st-rbd.lod .t1 { font-size: 14px; }
+#st-rbd.lod2 .t1, #st-rbd.lod2 .head, #st-rbd.lod2 .vote text { display: none; }
+#st-rbd .names { pointer-events: none; }
+#st-rbd .names rect { fill: var(--info-bg); stroke: #000; stroke-width: 1; }
+#st-rbd .names text { font: bold 11px var(--ui); fill: #000; transform: translateX(4px); }
+.st-goto { width: auto; max-width: 12em; }
 
 /* Side panel: a property sheet */
 .st-btns { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
@@ -582,6 +613,8 @@ body.st-dragging, body.st-dragging * { cursor: grabbing !important; user-select:
   .app { margin: 0; box-shadow: none; }
   /* Finger-sized controls (40 px), in the same bevelled look. */
   input[type="text"], input[type="number"], input[type="search"], select { font-size: 16px; min-height: 40px; }
+  /* The drop-down button grows with the 40 px field, keeping its shape. */
+  select { padding-right: 38px; background-position: right 2px center; background-size: 32px 36px; }
   button { min-height: 40px; }
   button.icon { min-width: 40px; }
   .check-label { min-height: 40px; }
@@ -593,7 +626,18 @@ body.st-dragging, body.st-dragging * { cursor: grabbing !important; user-select:
   details > summary { padding: 11px 0; }
   button.link { padding: 13px 6px; margin: -13px -4px; }
   .help, .guess, .desc, .flag, .state-tag, .unit { font-size: 12px; }
-  .board-bar { grid-template-columns: 1fr; }
+  /* Name and mission length side by side, the read-outs one line each, so the
+     three board figures fit on the first screen. */
+  .board-bar { grid-template-columns: minmax(0, 1fr) 118px; }
+  .board-bar .toolbar { grid-column: 1 / -1; }
+  .tiles { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .tile { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: center; padding: 4px 8px; }
+  .tile .label, .tile .sub { grid-column: 1; }
+  .tile .value { grid-column: 2; grid-row: 1 / span 3; font-size: 18px; text-align: right; }
+  .summary .jump a { display: inline-block; padding: 11px 0; }
+  table.results .refs { min-height: 0; padding: 0; margin: 0; }
+  table.results td.ref { width: 55%; }
+  table.results td.ref::after { content: attr(data-desc); display: block; width: 0; min-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text-2); }
   .field.narrow { max-width: none; }
   .panel-head .field.inline { flex-direction: column; align-items: stretch; width: 100%; gap: 2px; }
   .panel-head .field.inline label { white-space: normal; }

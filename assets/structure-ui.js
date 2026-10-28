@@ -26,6 +26,8 @@ let ev = null;
 let lastItems = [];
 let lastYears = 0;
 let selection = new Set();
+// "Select several" (for touch): a plain tap acts as Ctrl+click.
+let multi = false;
 let focusId = ROOT;
 let anchor = null;
 let visible = [];
@@ -41,6 +43,13 @@ let pane = null;
 let lastMarkup = '';
 // A redraw skipped while the diagram is hidden behind the Tree tab on a phone.
 let diagramDirty = false;
+// Top-level block names drawn at screen size while zoomed out, where the drawing's own text is too small.
+let names = [];
+let topIds = new Set();
+// Whether the structure panel is on screen (or near it), from an IntersectionObserver; a
+// refresh while it is off screen is drawn when it comes back.
+let onScreen = true;
+let drawingStale = false;
 
 // ---------------------------------------------------------------------------
 // Refresh and commit
@@ -57,13 +66,27 @@ export function refreshStructure(items, years) {
   }
   selection = new Set([...selection].filter((id) => rt.nodes.has(id)));
   if (!rt.nodes.has(focusId)) focusId = ROOT;
-  render();
+  // The board figures need only the evaluation; the tree and diagram wait until on screen.
+  if (onScreen) render(); else drawingStale = true;
   return ev;
 }
 
-function commit(selectIds) {
+// Earlier saved structures, for Undo; cleared when a new board is loaded.
+let history = [];
+// record: false for changes of view (a block opened or closed), which Undo skips.
+function commit(selectIds, { record = true } = {}) {
   pendingSelection = selectIds ?? [...selection];
+  if (record) {
+    history.push(ctx.getSaved());
+    if (history.length > 50) history.shift();
+  }
   ctx.commit(serializeStructure(rt));
+}
+function undo() {
+  if (!history.length) return say('Nothing to undo.');
+  pendingSelection = [...selection];
+  ctx.commit(history.pop());
+  say('Undone.');
 }
 
 const say = (msg) => { el.status.textContent = msg; };
@@ -72,6 +95,9 @@ function render(fullInspector = false) {
   renderTree();
   renderDiagram();
   renderMoveTo();
+  renderGoto();
+  const undoBtn = el.section.querySelector('[data-st="undo"]');
+  if (undoBtn) undoBtn.disabled = history.length === 0;
   const key = [...selection].sort().join(',') + '|' + [...selection].map((id) => {
     const n = rt.nodes.get(id);
     return n ? `${n.kind}${n.mode ?? ''}${n.proposed ? 'p' : ''}` : '';
@@ -158,7 +184,15 @@ function outdent() {
 // rebuilding would put "Everything else" back as whole lines and drop the parts split off.
 function selectMatches() {
   const found = selectRefs(rt, el.find.value);
-  if (!found.ids.length) return say('No parts match.');
+  if (!found.ids.length) {
+    // A net name (+3V3) finds the blocks proposed on it.
+    const tokens = new Set(el.find.value.split(/[\s,]+/).map((t) => t.toUpperCase()).filter(Boolean));
+    const blocks = [...rt.nodes.values()].filter((b) => b.kind === 'block' && b.nets?.some((x) => tokens.has(x.toUpperCase()))).map((b) => b.id);
+    if (!blocks.length) return say('No parts match.');
+    found.ids = blocks;
+    found.count = blocks.reduce((t, id) => t + pieces(rt, id), 0);
+    found.unknown = [];
+  }
   match = new Set();
   matchIn = new Set();
   // The parts split off are new nodes: work out their figures before drawing them.
@@ -168,10 +202,43 @@ function selectMatches() {
   [focusId] = found.ids;
   for (const id of found.ids) for (let p = rt.parent.get(id); p; p = rt.parent.get(p)) rt.nodes.get(p).expanded = true;
   render(true);
+  if (!diagramHidden()) frameIds([...selection]);
   const row = document.getElementById(`st-t-${focusId}`);
   row?.focus();
   row?.scrollIntoView?.({ block: 'nearest' });
   say(`Selected ${plural(found.count, 'part')}${found.unknown.length ? `; not on the board: ${found.unknown.join(', ')}` : ''}. Press P to group them as parallel, S as series.`);
+}
+
+// Reviewing an import's proposals one after another.
+// The first proposal after `id` in tree order, wrapping round (null if none other is left).
+function proposalAfter(id) {
+  const order = [];
+  const walk = (x) => {
+    const n = rt.nodes.get(x);
+    if (n.kind !== 'block') return;
+    order.push(x);
+    n.children.forEach(walk);
+  };
+  walk(ROOT);
+  const i = Math.max(0, order.indexOf(id));
+  return [...order.slice(i + 1), ...order.slice(0, i + 1)].find((x) => x !== id && rt.nodes.get(x).proposed) ?? null;
+}
+const proposalCount = () => [...rt.nodes.values()].filter((x) => x.proposed).length;
+function focusRow(id) {
+  const row = document.getElementById(`st-t-${id}`);
+  row?.focus();
+  row?.scrollIntoView?.({ block: 'nearest' });
+}
+function nextProposal() {
+  const next = proposalAfter([...selection][0] ?? ROOT);
+  if (!next) return say('No proposals left to review.');
+  selection = new Set([next]);
+  anchor = next;
+  focusId = next;
+  for (let p = rt.parent.get(next); p; p = rt.parent.get(p)) rt.nodes.get(p).expanded = true;
+  render(true);
+  focusRow(next);
+  return say(`${label(rt, next)}: Mark redundant, or Dismiss to count its parts in series. ${plural(proposalCount(), 'proposal')} to review.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -212,10 +279,11 @@ function rowHTML(n, level) {
     <div class="${cls}" style="--lvl:${level - 1}">
       <span class="st-handle${n.fixed ? ' off' : ''}" aria-hidden="true">${n.fixed ? '' : '⠿'}</span>
       <span class="st-twisty" aria-hidden="true">${kids ? (n.expanded ? '▾' : '▸') : ''}</span>
-      <span class="st-main">${isBlock ? (n.fixed ? '<span class="st-badge">series</span>' : modeBadge(n)) : `<span class="st-qty">×${st.pieces}</span>`}${name}${chips(n, st)}</span>
+      <span class="st-main">${isBlock ? (n.fixed ? '<span class="st-badge">series</span>' : modeBadge(n)) : `<span class="st-qty">×${st.pieces}</span>`}${name}${isBlock && n.nets?.length ? `<span class="st-nets muted">${esc(n.nets.join(' / '))}</span>` : ''}${chips(n, st)}</span>
       <span class="st-fit"${title}>${fitText}</span>
       <span class="st-bar" aria-hidden="true">${!st.inRed && st.share > 0 ? `<i style="width:${Math.max(3, st.share * 100).toFixed(1)}%"></i>` : ''}</span>
-    </div>`;
+    </div>${n.proposed && sel && selection.size === 1 ? `
+    <div class="st-rowacts" style="--lvl:${level - 1}"><button type="button" class="primary" data-st="accept" tabindex="-1">Mark redundant</button><button type="button" data-st="dismiss" tabindex="-1">Dismiss</button></div>` : ''}`;
 }
 
 function renderTree() {
@@ -251,7 +319,7 @@ function setExpanded(id, on) {
   const n = rt.nodes.get(id);
   if (n.kind !== 'block' || n.expanded === on) return;
   n.expanded = on;
-  commit();
+  commit(undefined, { record: false });
 }
 
 function setFocus(id, extend) {
@@ -263,6 +331,7 @@ function setFocus(id, extend) {
 }
 
 function select(id, e = {}) {
+  if (multi && !e.shiftKey) e = { ...e, ctrlKey: true };
   if (e.shiftKey && anchor && visible.includes(anchor) && visible.includes(id)) {
     const [a, b] = [visible.indexOf(anchor), visible.indexOf(id)].sort((x, y) => x - y);
     visible.slice(a, b + 1).forEach((v) => selection.add(v));
@@ -355,7 +424,6 @@ function paneSize() {
   if (!pane) pane = { w: el.svg.clientWidth, h: el.svg.clientHeight };
   return pane;
 }
-const wrapWidth = () => Math.max(400, (paneSize().w || 640) / 0.8);
 
 function lay(id) {
   const n = rt.nodes.get(id);
@@ -368,21 +436,39 @@ function lay(id) {
   const head = id === ROOT ? 0 : HEAD;
   g.par = id !== ROOT && n.mode === 'kofn';
   if (id === ROOT) {
-    const target = Math.max(wrapWidth(), ...kids.map((k) => k.w));
-    const rows = [];
-    let cur = [];
-    let w = 0;
-    n.children.forEach((c, i) => {
-      const k = kids[i];
-      if (cur.length && w + GX + k.w > target) { rows.push(cur); cur = []; w = 0; }
-      w += (cur.length ? GX : 0) + k.w;
-      cur.push(c);
-    });
-    rows.push(cur);
-    g.rows = rows.map((r) => {
-      const gs = r.map((c) => geo.get(c));
-      return { ids: r, w: gs.reduce((s, k) => s + k.w, 0) + GX * (r.length - 1), above: Math.max(...gs.map((k) => k.port)), below: Math.max(...gs.map((k) => k.h - k.port)) };
-    });
+    const pack = (target) => {
+      const rows = [];
+      let cur = [];
+      let w = 0;
+      n.children.forEach((c, i) => {
+        const k = kids[i];
+        if (cur.length && w + GX + k.w > target) { rows.push(cur); cur = []; w = 0; }
+        w += (cur.length ? GX : 0) + k.w;
+        cur.push(c);
+      });
+      rows.push(cur);
+      const out = rows.map((r) => {
+        const gs = r.map((c) => geo.get(c));
+        return { ids: r, w: gs.reduce((s, k) => s + k.w, 0) + GX * (r.length - 1), above: Math.max(...gs.map((k) => k.port)), below: Math.max(...gs.map((k) => k.h - k.port)) };
+      });
+      const W = PAD * 2 + GX * 2 + Math.max(...out.map((r) => r.w));
+      const H = PAD * 2 + out.reduce((s, r) => s + r.above + r.below, 0) + RG * (out.length - 1);
+      return { rows: out, W, H };
+    };
+    // Row widths from the widest block to one long row: keep the one Fit shows largest in this pane,
+    // so a board of many blocks fills a wide desktop pane and a tall phone pane alike.
+    const PW = paneSize().w || 640;
+    const PH = paneSize().h || 480;
+    const widest = Math.max(...kids.map((k) => k.w));
+    const total = kids.reduce((t, k) => t + k.w + GX, 0);
+    let best = null;
+    for (let t = widest; ; t *= 1.12) {
+      const r = pack(Math.min(t, total));
+      const k = Math.min((PW - 40) / (r.W + 16), (PH - 40) / (r.H + 16));
+      if (!best || k > best.k * 1.0001) best = { ...r, k };
+      if (t >= total) break;
+    }
+    g.rows = best.rows;
     g.w = PAD * 2 + GX * 2 + Math.max(...g.rows.map((r) => r.w));
     g.h = PAD * 2 + g.rows.reduce((s, r) => s + r.above + r.below, 0) + RG * (g.rows.length - 1);
     g.port = PAD + g.rows[0].above;
@@ -390,7 +476,12 @@ function lay(id) {
     const inner = kids.reduce((s, k) => s + k.h, 0) + GY * (kids.length - 1);
     Object.assign(g, { w: PAD * 2 + RAIL * 2 + Math.max(...kids.map((k) => k.w)), h: head + PAD * 2 + inner, port: head + PAD + inner / 2 });
   } else if (kids.length > 8) {
-    const cols = Math.ceil(Math.sqrt(kids.length * 2.5));
+    // Very large grids (a long "Everything else") take the pane's shape too.
+    const cw0 = Math.max(...kids.map((k) => k.w)) + 10;
+    const ch0 = Math.max(...kids.map((k) => k.h)) + GY;
+    const cols = kids.length > 40
+      ? Math.max(1, Math.min(kids.length, Math.round(Math.sqrt(kids.length * (ch0 / cw0) * ((paneSize().w || 640) / (paneSize().h || 480))))))
+      : Math.ceil(Math.sqrt(kids.length * 2.5));
     const rows = Math.ceil(kids.length / cols);
     const cw = Math.max(...kids.map((k) => k.w));
     const ch = Math.max(...kids.map((k) => k.h));
@@ -459,6 +550,7 @@ function draw(id, L, inRed) {
     const title = leafy ? label(rt, id) : n.id === REST ? 'Everything else' : label(rt, id);
     const sub = leafy ? (!line ? 'Not in parts list' : miss ? 'Missing input' : `${st.pieces > 1 ? `×${st.pieces} · ` : ''}${fmt(st.fit)} FIT`)
       : `${n.proposed ? 'proposed' : n.mode === 'kofn' ? `${n.need ?? '?'} of ${members(rt, id)}` : 'series'} · ${st.pieces} parts · ${fmt(st.fit)} FIT`;
+    if (topIds.has(id)) names.push({ id, x: g.x, y: g.y, w: g.w, text: title });
     L.boxes.push(`<g class="st-box${leafy ? ' leaf' : ' collapsed'}${miss ? ' missing' : ''}${n.proposed ? ' proposed' : ''}${sel}${m}" data-id="${did}" data-drag="1" transform="translate(${g.x} ${g.y})">`
       + (leafy && st.pieces > 1 ? `<rect class="stack" x="4" y="-4" width="${g.w}" height="${g.h}" rx="5"/>` : '')
       + `<rect class="face" width="${g.w}" height="${g.h}" rx="${leafy ? 5 : 8}"/>`
@@ -473,6 +565,7 @@ function draw(id, L, inRed) {
   const red = ev.red.has(id);
   if (id !== ROOT) {
     const [nm, rest, full] = headText(n, g, st);
+    if (topIds.has(id)) names.push({ id, x: g.x, y: g.y, w: g.w, text: n.id === REST ? 'Everything else' : label(rt, id) });
     L.frames.push(`<rect class="frame${g.par ? ' par' : ''}${n.proposed ? ' proposed' : ''}${n.mode === 'kofn' && !red ? ' invalid' : ''}${sel}" data-id="${did}" x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="8"/>`
       + `<rect class="hband" data-id="${did}"${n.fixed ? '' : ' data-drag="1"'} x="${g.x}" y="${g.y}" width="${g.w}" height="${HEAD}"><title>${esc(full)}. ${n.fixed ? '' : 'Drag to move. '}Double-click to zoom.</title></rect>`);
     L.labels.push(`<text class="head" x="${g.x + 10}" y="${g.y + 16}">${esc(nm)}<tspan class="m">${esc(rest)}</tspan></text>`);
@@ -515,6 +608,8 @@ function renderDiagram(force = false) {
   if (!force && diagramHidden()) { diagramDirty = true; return; }
   diagramDirty = false;
   geo.clear();
+  names = [];
+  topIds = new Set(rt.nodes.get(ROOT).children);
   lay(ROOT);
   place(ROOT, 0, 0);
   const L = { frames: [], wires: [], boxes: [], labels: [] };
@@ -523,6 +618,7 @@ function renderDiagram(force = false) {
   if (markup !== lastMarkup) {
     el.vp.innerHTML = markup;
     lastMarkup = markup;
+    el.names.innerHTML = names.map((nm) => `<g data-id="${esc(nm.id)}"><rect height="15"/><text y="11"></text></g>`).join('');
   }
   paintMarks();
   applyView();
@@ -566,6 +662,24 @@ function nodeAt(lx, ly) {
 function applyView() {
   el.vp.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`);
   el.svg.classList.toggle('lod', view.k < 0.55);
+  el.svg.classList.toggle('lod2', view.k < 0.3);
+  // Zoomed out, each top-level block is named in a tooltip-style label at a readable size.
+  const show = view.k < 0.55;
+  el.names.style.display = show ? '' : 'none';
+  if (show) {
+    names.forEach((nm, i) => {
+      const node = el.names.children[i];
+      if (!node) return;
+      const wpx = nm.w * view.k;
+      const max = Math.floor((wpx - 8) / 6.2);
+      if (max < 3) { node.style.display = 'none'; return; }
+      node.style.display = '';
+      const text = nm.text.length > max ? `${nm.text.slice(0, max - 1)}…` : nm.text;
+      if (node.lastChild.textContent !== text) node.lastChild.textContent = text;
+      node.setAttribute('transform', `translate(${(nm.x * view.k + view.x).toFixed(1)} ${(nm.y * view.k + view.y + 1).toFixed(1)})`);
+      node.firstChild.setAttribute('width', Math.min(wpx, text.length * 6.2 + 8).toFixed(1));
+    });
+  }
   el.zoomlvl.textContent = `${Math.round(view.k * 100)}%`;
 }
 const svgPoint = (e) => { const r = el.svg.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
@@ -599,6 +713,37 @@ function frameBox(x, y, w, h, animate) {
   const to = { k, x: (r.width - w * k) / 2 - x * k, y: (r.height - h * k) / 2 - y * k };
   if (animate) animateTo(to); else { view = to; applyView(); }
   return true;
+}
+// Frame items, or the nearest drawn block holding each; with onlyIfHidden, only when they are off screen or tiny.
+function frameIds(ids, onlyIfHidden) {
+  reindex(rt);
+  const shown = (id) => { let x = id; while (x && !geo.get(x)?.shown) x = rt.parent.get(x); return x; };
+  const gs = [...new Set(ids.map(shown))].filter((x) => x && x !== ROOT).map((x) => geo.get(x));
+  if (!gs.length) return;
+  const x0 = Math.min(...gs.map((g) => g.x));
+  const y0 = Math.min(...gs.map((g) => g.y));
+  const x1 = Math.max(...gs.map((g) => g.x + g.w));
+  const y1 = Math.max(...gs.map((g) => g.y + g.h));
+  if (onlyIfHidden) {
+    const r = el.svg.getBoundingClientRect();
+    const [sx0, sy0, sx1, sy1] = [x0 * view.k + view.x, y0 * view.k + view.y, x1 * view.k + view.x, y1 * view.k + view.y];
+    if (sx0 >= 0 && sy0 >= 0 && sx1 <= r.width && sy1 <= r.height && view.k >= 0.55) return;
+  }
+  frameBox(x0 - 12, y0 - 12, x1 - x0 + 24, y1 - y0 + 24, true);
+}
+// The diagram's block list, for finding a block without panning.
+function renderGoto() {
+  if (!el.goto || diagramHidden()) return;
+  const opts = ['<option value="">Go to…</option>'];
+  const walk = (id, depth) => {
+    const n = rt.nodes.get(id);
+    if (n.kind !== 'block') return;
+    if (id !== ROOT) opts.push(`<option value="${esc(id)}">${'\u00a0\u00a0'.repeat(depth - 1)}${esc(id === REST ? 'Everything else' : label(rt, id))}</option>`);
+    n.children.forEach((c) => walk(c, depth + 1));
+  };
+  walk(ROOT, 0);
+  const html = opts.join('');
+  if (html !== el.goto.dataset.html) { el.goto.innerHTML = html; el.goto.dataset.html = html; }
 }
 function fit(animate) {
   const g = geo.get(ROOT);
@@ -690,7 +835,7 @@ function renderInspectorOut() {
     ${st.inRed && id !== ROOT ? '<p class="help">Shown on its own: inside a redundant block it does not add straight to the board total.</p>' : ''}
     ${prob.length ? `<ul class="st-problems">${prob.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>${n.mode === 'kofn' ? '<p class="help">Counts in series until these are fixed.</p>' : ''}` : ''}
     ${id === ROOT && st.missing ? `<p class="help">${plural(st.missing, 'line')} with missing input ${st.missing === 1 ? 'is' : 'are'} left out, so the total is a lower bound.</p>` : ''}
-    ${id === ROOT && proposals ? `<p class="help">${plural(proposals, 'proposal')} from the netlist to review.</p>` : ''}`;
+    ${proposals - (n.proposed ? 1 : 0) > 0 ? `<p class="st-next">${plural(proposals - (n.proposed ? 1 : 0), 'proposal')} ${n.proposed ? 'more ' : ''}left to review. <button type="button" data-st="next-proposal" aria-keyshortcuts="N">Next proposal (N)</button></p>` : ''}`;
 }
 
 function renderMoveTo() {
@@ -712,7 +857,15 @@ function showTab(tab) {
   el.panes.dataset.tab = tab;
   el.section.querySelectorAll('[role="tab"]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
   if (tab === 'diagram' && diagramDirty && rt) renderDiagram(true);
-  if (tab === 'diagram') requestAnimationFrame(() => { if (!fitted) fit(false); });
+  if (tab === 'diagram') {
+    renderGoto();
+    requestAnimationFrame(() => {
+      if (!fitted) fit(false);
+      // What was just picked in the tree is brought into view.
+      const ids = [...selection].filter((id) => id !== ROOT && rt.nodes.has(id));
+      if (ids.length) frameIds(ids, true);
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -727,6 +880,8 @@ export function mountStructure(section, context) {
     vp: $('#st-vp', section),
     lasso: $('#st-lasso', section),
     zoomlvl: $('#st-zoomlvl', section),
+    names: $('#st-names', section),
+    goto: $('#st-goto', section),
     inspector: $('#st-inspector', section),
     status: $('#st-status', section),
     moveto: $('#st-moveto', section),
@@ -735,10 +890,16 @@ export function mountStructure(section, context) {
     diagramPane: $('.st-diagram-pane', section),
     ghost: $('#st-ghost'),
   };
+  if (typeof IntersectionObserver !== 'undefined') {
+    new IntersectionObserver((entries) => {
+      onScreen = entries.some((e) => e.isIntersecting);
+      if (onScreen && drawingStale && rt) { drawingStale = false; render(true); }
+    }, { rootMargin: '300px' }).observe(section);
+  }
 
   el.tree.addEventListener('click', (e) => {
     const li = e.target.closest('[data-id]');
-    if (!li || e.target.closest('.st-handle')) return;
+    if (!li || e.target.closest('.st-handle, [data-st]')) return;
     const id = li.dataset.id;
     const n = rt.nodes.get(id);
     if (e.target.closest('.st-twisty') && n.kind === 'block') { focusId = id; setExpanded(id, !n.expanded); return; }
@@ -792,7 +953,7 @@ export function mountStructure(section, context) {
   let gesture = null;
   el.svg.addEventListener('pointerdown', (e) => {
     const handle = e.target.closest('[data-drag]');
-    if (handle && e.button === 0 && pointers.size === 0) { beginNodePointer(e, handle.dataset.id, true); return; }
+    if (handle && e.button === 0 && pointers.size === 0 && !lassoMode && !e.shiftKey) { beginNodePointer(e, handle.dataset.id, true); return; }
     el.svg.setPointerCapture?.(e.pointerId);
     pointers.set(e.pointerId, svgPoint(e));
     const pts = [...pointers.values()];
@@ -803,7 +964,9 @@ export function mountStructure(section, context) {
     }
     if (pts.length > 2) return;
     const p = svgPoint(e);
-    gesture = lassoMode || e.shiftKey ? { type: 'lasso', p0: p, p1: p, add: e.shiftKey || e.ctrlKey || e.metaKey } : { type: 'pan', p0: p, v0: { ...view }, moved: false };
+    gesture = lassoMode || e.shiftKey
+      ? { type: 'lasso', p0: p, p1: p, add: e.shiftKey || e.ctrlKey || e.metaKey, handle: handle?.dataset.id }
+      : { type: 'pan', p0: p, v0: { ...view }, moved: false };
   });
   el.svg.addEventListener('pointermove', (e) => {
     if (!pointers.has(e.pointerId)) return;
@@ -836,6 +999,8 @@ export function mountStructure(section, context) {
   });
   const finishLasso = (g) => {
     el.lasso.style.display = 'none';
+    // A Shift-click on a box (no drag) still adds it to the selection.
+    if (g.handle && Math.hypot(g.p1[0] - g.p0[0], g.p1[1] - g.p0[1]) < 4) { select(g.handle, { ctrlKey: true }); return; }
     const [ax, ay] = toLayout(g.p0);
     const [bx, by] = toLayout(g.p1);
     const [x0, x1, y0, y1] = [Math.min(ax, bx), Math.max(ax, bx), Math.min(ay, by), Math.max(ay, by)];
@@ -933,10 +1098,22 @@ export function mountStructure(section, context) {
         commit();
         say('Marked redundant. Say how many must keep working.');
         return $('#st-need', el.inspector)?.focus();
-      case 'dismiss':
+      case 'dismiss': {
+        const next = proposalAfter(n.id);
+        const name = label(rt, n.id);
         // Parallel strings go back to parts in series, not to loose string blocks.
         ungroupNodes(rt, n.children.filter((c) => rt.nodes.get(c).kind === 'block' && rt.nodes.get(c).mode === 'series'));
-        return ungroup(n.id);
+        ungroupNodes(rt, [n.id]);
+        commit(next ? [next] : []);
+        focusRow(next ?? focusId);
+        return say(`Dismissed ${name}: its parts count in series again.${next ? ` Next: ${label(rt, next)}.` : ' No proposals left to review.'}`);
+      }
+      case 'next-proposal': return nextProposal();
+      case 'undo': return undo();
+      case 'multi':
+        multi = !multi;
+        btn.setAttribute('aria-pressed', String(multi));
+        return say(multi ? 'Select several: each tap adds an item or takes it away. Tap the button again to stop.' : 'Taps select one item again.');
       case 'confirm': n.inferred = {}; inspectorKey = ''; commit(); return say('Confirmed.');
       case 'need-': case 'need+':
         n.need = clamp((n.need ?? members(rt, n.id)) + (btn.dataset.st === 'need+' ? 1 : -1), 1, members(rt, n.id));
@@ -958,18 +1135,31 @@ export function mountStructure(section, context) {
   });
   // Shortcuts work while focus is inside the structure editor, outside text fields.
   section.addEventListener('keydown', (e) => {
-    if (e.target.closest('input, select, textarea') || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.closest('input, select, textarea')) return;
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (k === 'p') group('kofn');
     else if (k === 's') group('series');
     else if (k === 'u') ungroup();
     else if (k === 'l') split();
     else if (k === 'm') { if (!el.moveto.disabled) el.moveto.focus(); }
+    else if (k === 'n') nextProposal();
     else if (e.key === 'Escape') { selection = new Set(); render(); }
     else return;
     e.preventDefault();
   });
   el.moveto.addEventListener('change', (e) => { const t = e.target.value; if (t) move([...selection], t); });
+  el.goto?.addEventListener('change', (e) => {
+    const t = e.target.value;
+    e.target.value = '';
+    if (!t || !rt.nodes.has(t)) return;
+    selection = new Set([t]);
+    focusId = t;
+    anchor = t;
+    zoomTo(t);
+    render();
+  });
   el.find.addEventListener('input', (e) => {
     const q = e.target.value.trim();
     match = new Set();
@@ -992,9 +1182,11 @@ export function mountStructure(section, context) {
   say('Try: type C1–C3 in Find and press Enter, then P. Or drag a ⠿ handle onto a block.');
 }
 
-// A new board (import, New, example) is framed whole the next time the diagram is drawn.
-export function resetDiagramView() {
+// A new board (import, New, example) is framed whole the next time the diagram is drawn,
+// and the structure edits of the previous board cannot be undone onto it.
+export function resetStructureView() {
   fitted = false;
+  history = [];
 }
 
 // For tests and the page: the current evaluation.

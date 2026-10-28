@@ -1,4 +1,4 @@
-// t_ac must be typeable as a negative number on a phone.
+// T_ac must be typeable as a negative number on a phone.
 // inputmode="decimal" brings up iOS's decimal pad, which has digits and a
 // decimal point but no minus key, so -40 °C cannot be typed on an iPhone.
 // type="number" with no inputmode gives the numbers-and-punctuation keyboard

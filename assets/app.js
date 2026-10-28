@@ -1,5 +1,5 @@
 import {
-  MODELS, MODEL_GROUPS, computeBoard, profileProblems, mtbfHours, reliability, byId, fieldLabel, clauseOf,
+  MODELS, MODEL_GROUPS, computeBoard, profileIssues, mtbfHours, reliability, byId, fieldLabel, clauseOf,
 } from './models.js';
 import { ENVIRONMENTS, SMT_217F } from './tables217f.js';
 import { MISSION_PROFILES } from './tables.js';
@@ -8,7 +8,7 @@ import { ROOT, sanitizeStructure, migrateGroups, meanTimeToFailure, members as s
 import { evaluateSmt, chipCandidates, flexRisks } from './smt.js';
 import { evaluateBoard, laminateOf, qualityBand } from './pth.js';
 import { LAMINATES, PTH_MODEL, SOURCES_BOARD } from './tablesboard.js';
-import { mountStructure, refreshStructure, currentStructure, resetDiagramView } from './structure-ui.js';
+import { mountStructure, refreshStructure, currentStructure, resetStructureView } from './structure-ui.js';
 import { parseBom, bomToParts, mergeBom } from './bom.js';
 import { failureModesFor } from './failuremodes.js';
 import { evaluateCapLife, withLife, lifeInputs, LIFE_KEYS, TECHS, typeTech } from './caplife.js';
@@ -126,6 +126,7 @@ function sanitizeSmt(raw) {
       d: num(d?.d), h: num(d?.h), rise: num(d?.rise),
       ...(typeof d?.auto === 'string' ? { auto: d.auto } : {}),
       inferred: Object.fromEntries(Object.entries(d?.inferred ?? {}).filter(([k, v]) => ['lead', 'body', 'd', 'h', 'rise'].includes(k) && typeof v === 'string')),
+      confirmed: Object.fromEntries(Object.entries(d?.confirmed ?? {}).filter(([k, v]) => ['lead', 'body', 'd', 'h', 'rise'].includes(k) && typeof v === 'string')),
     })),
   };
 }
@@ -308,14 +309,16 @@ function sourceHTML(source) {
 function partHTML(part) {
   const model = MODELS[part.model];
   const p = { ...model.defaults, ...part.params };
-  const main = model.fields.filter((f) => !f.advanced).map((f) => fieldHTML(part, f, p)).join('');
-  const adv = model.fields.filter((f) => f.advanced).map((f) => fieldHTML(part, f, p)).join('');
+  // A closed card is only its head: its fields are built when it is opened, which keeps
+  // a large board's page small (a 500-line board had 88 000 elements, most of them hidden).
+  const main = part.open ? model.fields.filter((f) => !f.advanced).map((f) => fieldHTML(part, f, p)).join('') : '';
+  const adv = part.open ? model.fields.filter((f) => f.advanced).map((f) => fieldHTML(part, f, p)).join('') : '';
   return `
     <article class="part${part.open ? ' is-open' : ''}" data-part="${part.id}">
       <div class="part-head">
         <div class="ref"><label class="visually-hidden" for="${part.id}-ref">Reference</label>
-          <input id="${part.id}-ref" type="text" value="${esc(part.ref)}" data-bind="part" data-id="${part.id}" data-key="ref" autocomplete="off"></div>
-        <div class="part-kind"><div class="model">${esc(model.label)} <span class="flags" data-out="flags"></span></div><div class="desc" data-out="desc"></div></div>
+          <input id="${part.id}-ref" type="text" value="${esc(part.ref)}" data-bind="part" data-id="${part.id}" data-key="ref" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>
+        <div class="part-kind"><div class="model">${esc(model.label)} <span class="flags" data-out="flags"></span></div><div class="desc" data-out="desc"></div><div class="refs-full" data-out="refs"></div></div>
         <div class="qty"><label class="visually-hidden" for="${part.id}-qty">Quantity</label>
           <input id="${part.id}-qty" type="number" min="0" step="1" inputmode="numeric" value="${esc(part.qty)}" data-bind="part" data-id="${part.id}" data-key="qty" title="Quantity"></div>
         <div class="part-fit" data-out="fit"></div>
@@ -326,7 +329,7 @@ function partHTML(part) {
           <button type="button" class="icon" data-act="del" data-id="${part.id}" title="Remove">✕</button>
         </div>
       </div>
-      <div class="part-body" id="${part.id}-body"${part.open ? '' : ' hidden'}>
+      <div class="part-body" id="${part.id}-body"${part.open ? '' : ' hidden'}>${part.open ? `
         ${sourceHTML(part.source)}
         <div class="field model-field"><label for="${part.id}-model">Part type</label>
           <select id="${part.id}-model" data-bind="part-model" data-id="${part.id}">${optionsHTML(modelOptions(), part.model)}</select></div>
@@ -335,7 +338,7 @@ function partHTML(part) {
         ${adv ? `<details class="advanced" data-id="${part.id}" data-open-key="advOpen"${part.advOpen ? ' open' : ''}><summary>Override table values</summary><div class="fields">${adv}</div></details>` : ''}
         <ul class="part-errors" data-out="errors"></ul>
         <details class="trace" data-id="${part.id}" data-open-key="traceOpen"${part.traceOpen ? ' open' : ''}><summary>Show the calculation</summary><div class="trace-body" data-out="trace"></div></details>
-        <p class="status-line">${esc(clauseOf(model))}. ${esc(model.status)}</p>
+        <p class="status-line">${esc(clauseOf(model))}. ${esc(model.status)}</p>` : ''}
       </div>
     </article>`;
 }
@@ -421,14 +424,52 @@ function renderParts() {
   $('#parts').innerHTML = state.parts.length
     ? state.parts.map(partHTML).join('')
     : '<p class="empty">No parts yet. Import a netlist, or choose a part type and add it.</p>';
+  applyFind();
 }
 
 function rerenderPart(part, focusKey) {
   const el = $(`[data-part="${part.id}"]`);
   if (!el) return;
   el.outerHTML = partHTML(part);
+  applyFind();
   if (focusKey) $(`[data-id="${part.id}"][data-key="${focusKey}"]`)?.focus();
 }
+
+// Find a line: a designator matches whole, also inside a range (C7 finds C6–C8 but not C17);
+// other text matches the start of the imported value or part number.
+function partMatches(part, tokens) {
+  const refs = new Set(expandRefs(part.ref).map((r) => r.toLowerCase()));
+  const texts = [part.source?.value, part.source?.mpn].filter(Boolean).map((t) => t.toLowerCase());
+  return tokens.some((t) => refs.has(t) || texts.some((x) => x.startsWith(t)));
+}
+function applyFind() {
+  const tokens = ($('#parts-find')?.value ?? '').toLowerCase().split(/[\s,;]+/).filter(Boolean);
+  for (const el of document.querySelectorAll('#parts > .part')) {
+    const part = findPart(el.dataset.part);
+    el.hidden = tokens.length > 0 && Boolean(part) && !partMatches(part, tokens);
+  }
+}
+document.addEventListener('input', (e) => { if (e.target.id === 'parts-find') applyFind(); });
+
+// Enter in a part's field goes to the next Missing field, opening the next line that needs input.
+document.addEventListener('keydown', (e) => {
+  const el = e.target;
+  if (e.key !== 'Enter' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || el.dataset?.bind !== 'part' || el.tagName !== 'INPUT') return;
+  e.preventDefault();
+  const card = el.closest('.part');
+  const following = (x) => el.compareDocumentPosition(x) & 4;
+  const next = [...card.querySelectorAll('.field.missing input, .field.missing select')].find(following);
+  if (next) { next.focus(); return; }
+  const cards = [...document.querySelectorAll('#parts > .part:not([hidden])')];
+  const i = cards.indexOf(card);
+  const target = [...cards.slice(i + 1), ...cards.slice(0, i)].find((c) => c.classList.contains('needs-input'));
+  if (!target) return;
+  const part = findPart(target.dataset.part);
+  if (!part.open) { part.open = true; rerenderPart(part); repaintPart(part); save(); }
+  const fresh = $(`[data-part="${part.id}"]`);
+  (fresh.querySelector('.field.missing input, .field.missing select') ?? $(`[data-act="toggle"][data-id="${part.id}"]`)).focus();
+  fresh.scrollIntoView?.({ block: 'nearest' });
+});
 
 // ---------------------------------------------------------------------------
 // Circuit board: plated-hole fatigue
@@ -461,6 +502,17 @@ function renderPcb() {
     : '<tr><td colspan="7" class="empty">No hole sizes yet. Add the smallest vias and the through holes for leaded parts; the smallest usually wear out first.</td></tr>';
 }
 
+// Board-level settings a check is missing, by name ("plating quality K_Q").
+const settingsMissing = (problems) => problems.filter((p) => p.startsWith('Missing'))
+  .map((p) => p.replace(/^Missing(?: for the custom laminate)?: /, '').replace(/\.$/, ''));
+// A missing control says so in words and to assistive technology, as part cards do.
+function markMissing(wrap, control, missing) {
+  wrap?.classList.toggle('missing', missing);
+  const tag = wrap?.querySelector?.('.state-tag');
+  if (tag) tag.textContent = missing ? 'Missing' : '';
+  control?.setAttribute('aria-invalid', String(missing));
+}
+
 function updatePcb(ev) {
   const s = state.pcb;
   const active = s.holes.length > 0;
@@ -474,17 +526,19 @@ function updatePcb(ev) {
     ...PCB_NUMBERS.filter((k) => !isNum(s[k]) || (k !== 'reflows' && k !== 'reflowPeak' && !(s[k] > 0)) || (k === 'kq' && s[k] > 10)),
     ...(s.laminate === 'custom' ? ['tg', 'alpha1', 'alpha2', 'modulus'].filter((k) => !isNum(s.custom[k])).map((k) => `custom-${k}`) : []),
   ] : []);
-  for (const el of document.querySelectorAll('#pcb .pcb-settings .field')) el.classList.toggle('missing', missingKeys.has(el.dataset.field));
+  for (const el of document.querySelectorAll('#pcb .pcb-settings .field')) markMissing(el, el.querySelector('input, select'), missingKeys.has(el.dataset.field));
   $('#pcb-kq-band').textContent = s.kq > 0 && s.kq <= 10 ? `Yours is ${qualityBand(s.kq)}.` : '';
   ev.holes.forEach((r, i) => {
     const row = $(`#pcb-holes [data-hole="${i}"]`);
     if (!row) return;
-    for (const key of ['drill', 'plating']) $(`[data-cell="${key}"]`, row).classList.toggle('missing', (r.missing ?? []).includes(key));
+    for (const key of ['drill', 'plating']) { const cell = $(`[data-cell="${key}"]`, row); markMissing(cell, $('input', cell), (r.missing ?? []).includes(key)); }
     row.classList.toggle('worst', ev.worst === r);
     row.classList.toggle('cracked', Boolean(r.cracked));
     $('[data-out="used"]', row).textContent = r.complete && r.assembly ? `${Math.min(100, Math.round(r.used * 100))} %` : r.complete ? '0 %' : '—';
     $('[data-out="life"]', row).textContent = r.complete && !r.cracked ? (Number.isFinite(r.alphaHours) ? `${fmt2(r.alphaHours / 8760)} y` : '∞') : r.cracked ? 'cracks' : '—';
-    $('[data-out="fit"]', row).innerHTML = r.complete && !r.cracked ? fmt(r.fit) : r.cracked ? '<span class="bad">Cracks</span>' : '<span class="bad">Missing</span>';
+    // A row waiting only for the board settings is not itself missing anything.
+    $('[data-out="fit"]', row).innerHTML = r.complete && !r.cracked ? fmt(r.fit) : r.cracked ? '<span class="bad">Cracks</span>'
+      : (r.missing ?? []).length ? '<span class="bad">Missing</span>' : '<span class="muted" title="Waiting for the board settings above">—</span>';
     if (r.complete) {
       row.title = [...(r.assembly ? [r.assembly] : []), ...r.field]
         .map((l) => `${l.label} (${fmt(l.tLow)} to ${fmt(l.tHigh)} °C): ${fmt2(l.nf)} cycles to failure, effective strain ${(l.strainEff * 100).toFixed(2)} %`).join('; ');
@@ -496,9 +550,13 @@ function updatePcb(ev) {
     lines.push(`Weakest: <b>${esc(w.hole.label || 'unnamed hole size')}</b>, ${w.assembly ? `assembly uses ${Math.round(w.used * 100)} % of its life, ` : ''}characteristic life ${Number.isFinite(w.alphaHours) ? `${fmt2(w.alphaHours / 8760)} years` : 'unlimited'}, <b>${fmt(w.fit)} FIT</b> averaged over the ${fmt(state.years)}-year design life. ${s.include ? 'Added to the board total.' : 'Not added to the board total.'}`);
   }
   if (active && !ev.conditions.field.length) lines.push('The mission profile has no thermal cycles (n and ΔT), so only the assembly reflows wear the holes.');
-  if (ev.incomplete) lines.push(`${plural(ev.incomplete, 'hole size needs', 'hole sizes need')} input (red).`);
+  const pcbSettings = settingsMissing(ev.conditions.problems);
+  if (active && pcbSettings.length) lines.unshift(`The board settings above need input: ${esc(pcbSettings.join(', '))} (marked Missing).`);
+  const ownHoles = ev.holes.filter((r) => (r.missing ?? []).length).length;
+  if (ownHoles) lines.push(`${plural(ownHoles, 'hole size needs', 'hole sizes need')} input (marked Missing).`);
+  const pcbOther = ev.problems.filter((p) => !p.startsWith('Missing'));
   $('#pcb-result').innerHTML = (lines.length ? `<p>${lines.join(' ')}</p>` : '')
-    + (active && ev.problems.length ? `<ul class="problems">${ev.problems.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : '');
+    + (active && pcbOther.length ? `<ul class="problems">${pcbOther.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : '');
 }
 
 // ---------------------------------------------------------------------------
@@ -520,7 +578,7 @@ function smtRowHTML(d, i) {
     <td data-cell="rise">${num('rise', 'Temperature rise from its own power, °C')}</td>
     <td class="num" data-out="life"></td>
     <td class="num" data-out="fit"></td>
-    <td><button type="button" class="icon" data-act="smt-del" data-i="${i}" aria-label="Remove ${esc(d.label || 'device')}">✕</button></td>
+    <td class="life-acts"><button type="button" class="icon" data-act="smt-confirm" data-i="${i}" title="Confirm the guessed values" aria-label="Confirm the guessed values of ${esc(d.label || 'this device')}"${Object.keys(d.inferred ?? {}).length ? '' : ' hidden'}>✓</button><button type="button" class="icon" data-act="smt-del" data-i="${i}" aria-label="Remove ${esc(d.label || 'device')}">✕</button></td>
   </tr>`;
 }
 
@@ -539,19 +597,20 @@ function renderSmt() {
 function updateSmt(smt) {
   const s = state.smt;
   $('#smt-equipment-field').hidden = s.cycling !== 'handbook';
-  $('#smt-substrate').closest('.field').classList.toggle('missing', !s.substrate && s.devices.length > 0);
+  markMissing($('#smt-substrate').closest('.field'), $('#smt-substrate'), !s.substrate && s.devices.length > 0);
   smt.devices.forEach((r, i) => {
     const row = $(`#smt-devices [data-smt="${i}"]`);
     if (!row) return;
     for (const key of SMT_FIELDS) {
       const cell = $(`[data-cell="${key}"]`, row);
-      cell?.classList.toggle('missing', (r.missing ?? []).includes(key));
+      if (cell) markMissing(cell, $('input, select', cell), (r.missing ?? []).includes(key));
       cell?.classList.toggle('inferred', Boolean(s.devices[i].inferred?.[key]));
     }
     const worst = smt.worst === r;
     row.classList.toggle('worst', worst);
     $('[data-out="life"]', row).textContent = r.complete ? (Number.isFinite(r.alphaHours) ? `${fmt2(r.alphaHours / 8760)} y` : '∞') : '—';
-    $('[data-out="fit"]', row).innerHTML = r.complete ? fmt(r.fit) : '<span class="bad">Missing</span>';
+    $('[data-out="fit"]', row).innerHTML = r.complete ? fmt(r.fit)
+      : (r.missing ?? []).length ? '<span class="bad">Missing</span>' : '<span class="muted" title="Waiting for the settings above">—</span>';
     if (r.complete) row.title = r.perLoad.map((l) => `${l.label}: ${fmt2(l.nf)} cycles to failure`).join('; ');
   });
   const lines = [];
@@ -559,9 +618,13 @@ function updateSmt(smt) {
     const w = smt.worst;
     lines.push(`Weakest link: <b>${esc(w.device.label || 'unnamed device')}</b>, characteristic life ${Number.isFinite(w.alphaHours) ? `${fmt2(w.alphaHours / 8760)} years` : 'unlimited'}, <b>${fmt(w.fit)} FIT</b> averaged over the ${fmt(state.years)}-year design life (ECF ${w.ecf}). ${s.include ? 'Added to the board total.' : 'Not added to the board total.'}`);
   }
-  if (smt.incomplete) lines.push(`${plural(smt.incomplete, 'device needs', 'devices need')} input (red) before ${smt.incomplete > 1 ? 'they count' : 'it counts'}.`);
+  const smtSettings = settingsMissing(smt.conditions.problems);
+  if (s.devices.length && smtSettings.length) lines.unshift(`The settings above need input: ${esc(smtSettings.join(', '))} (marked Missing).`);
+  const ownDevices = smt.devices.filter((r) => (r.missing ?? []).length).length;
+  if (ownDevices) lines.push(`${plural(ownDevices, 'device needs', 'devices need')} input (marked Missing) before ${ownDevices > 1 ? 'they count' : 'it counts'}.`);
+  const smtOther = smt.problems.filter((p) => !p.startsWith('Missing'));
   $('#smt-result').innerHTML = (lines.length ? `<p>${lines.join(' ')}</p>` : '')
-    + (s.devices.length && smt.problems.length ? `<ul class="problems">${smt.problems.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : '');
+    + (s.devices.length && smtOther.length ? `<ul class="problems">${smtOther.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : '');
 }
 
 // Large ceramic chips crack when the board bends; no model counts it, so the page says so.
@@ -629,8 +692,7 @@ function updateCapLife(life) {
   const s = state.caplife;
   const roleField = $('#life-role').closest('.field');
   const roleMissing = !s.defaultRole && life.rows.some((r) => r.values.role === 'default');
-  roleField.classList.toggle('missing', roleMissing);
-  $('.state-tag', roleField).textContent = roleMissing ? 'Missing' : '';
+  markMissing(roleField, $('#life-role'), roleMissing);
   for (const r of life.rows) {
     const row = $(`#life-lines [data-life="${r.part.id}"]`);
     if (!row) continue;
@@ -639,9 +701,9 @@ function updateCapLife(life) {
     for (const key of LIFE_CELLS) {
       const cell = $(`[data-cell="${key}"]`, row);
       if (!cell) continue;
-      cell.classList.toggle('missing', r.missing.includes(key));
-      cell.classList.toggle('inferred', Boolean(r.inferred[key]));
       const control = $('input, select', cell);
+      markMissing(cell, control, r.missing.includes(key));
+      cell.classList.toggle('inferred', Boolean(r.inferred[key]));
       if (control) control.title = r.inferred[key] ? `Guessed ${r.inferred[key]}` : r.confirmed[key] ? `Guessed ${r.confirmed[key]}; confirmed` : '';
     }
     $('[data-key="role"] option[value="default"]', row).textContent = `Default${s.defaultRole ? ` (${ROLE_SHORT[s.defaultRole]})` : ''}`;
@@ -693,42 +755,72 @@ function renderAll() {
 }
 
 // Recompute everything and refresh outputs without touching the inputs.
+// The phase cells a profile problem concerns are marked, and described by the problem.
+function markProfileCells(issues) {
+  const marks = new Map();
+  issues.forEach((p, k) => p.cells.forEach(([i, key]) => marks.set(`${i}-${key}`, [...(marks.get(`${i}-${key}`) ?? []), `profile-problem-${k}`])));
+  for (const input of $('#phases').querySelectorAll('input[data-key]')) {
+    const ids = marks.get(`${input.dataset.i}-${input.dataset.key}`);
+    input.closest('td').classList.toggle('invalid', Boolean(ids));
+    if (ids) {
+      input.setAttribute('aria-invalid', 'true');
+      input.setAttribute('aria-describedby', ids.join(' '));
+    } else if (input.hasAttribute('aria-invalid')) {
+      input.removeAttribute('aria-invalid');
+      input.removeAttribute('aria-describedby');
+    }
+  }
+}
+
+// Writes that skip unchanged content: a keystroke then touches only what it changed.
+const putHTML = (node, html) => { if (node && node.innerHTML !== html) node.innerHTML = html; };
+const putText = (node, text) => { if (node && node.textContent !== text) node.textContent = text; };
+
+// What each card last showed, so a card whose line did not change is not repainted.
+const paintedAs = new WeakMap();
+
 // One part card's figures and field states, from its line's result. Returns whether it has guesses.
-function paintCard(el, comp, result, phases) {
+// profileKey stands for the mission profile, which every card's figures depend on.
+function paintCard(el, comp, result, phases, profileKey = JSON.stringify(phases)) {
+  const guesses = guessCount(comp);
+  const key = JSON.stringify([comp.ref, comp.model, comp.qty, comp.params, Object.keys(comp.inferred ?? {}), Object.keys(comp.confirmed ?? {}),
+    result.complete, result.fit, result.total, result.qty, result.missing, result.errors, result.wearOut, profileKey]);
+  if (paintedAs.get(el) === key) return guesses > 0;
+  paintedAs.set(el, key);
   const model = MODELS[comp.model];
   const p = { ...model.defaults, ...comp.params };
-  const guesses = guessCount(comp);
   el.classList.toggle('needs-input', !result.complete);
   el.classList.toggle('has-guesses', guesses > 0);
-  $('[data-out="desc"]', el).textContent = model.describe(p);
-  $('[data-out="flags"]', el).innerHTML = [
+  putText($('[data-out="desc"]', el), model.describe(p));
+  // A long reference list is cut off in its box: the whole list is shown under the description.
+  putText($('[data-out="refs"]', el), comp.ref.length > 8 ? comp.ref : '');
+  putHTML($('[data-out="flags"]', el), [
     result.missing.length ? `<span class="flag missing">${result.missing.length} missing</span>` : '',
     !result.missing.length && !result.complete ? '<span class="flag missing">check input</span>' : '',
     guesses ? `<span class="flag guessed">${guesses} guessed</span>` : '',
-  ].join('');
-  $('[data-out="fit"]', el).innerHTML = !result.complete
+  ].join(''));
+  putHTML($('[data-out="fit"]', el), !result.complete
     ? '<span class="bad">Needs input</span>'
-    : `<div class="each">${fmt(result.fit)} FIT</div>${result.qty !== 1 ? `<div class="total">× ${fmt(result.qty)} = ${fmt(result.total)} FIT</div>` : ''}`;
-  $('[data-out="errors"]', el).innerHTML = result.errors.map((e) => `<li>${esc(e)}</li>`).join('');
-  // The calculation is drawn only while it is shown; opening it draws it (see the toggle listener).
-  if (comp.traceOpen) $('[data-out="trace"]', el).innerHTML = traceHTML(result, phases, failureModesFor(comp.model, p));
+    : `<div class="each">${fmt(result.fit)} FIT</div>${result.qty !== 1 ? `<div class="total">× ${fmt(result.qty)} = ${fmt(result.total)} FIT</div>` : ''}`);
+  putHTML($('[data-out="errors"]', el), result.errors.map((e) => `<li>${esc(e)}</li>`).join(''));
+  // Only open cards have a calculation panel (closed cards are just their head).
+  const trace = $('[data-out="trace"]', el);
+  if (trace) putHTML(trace, traceHTML(result, phases, failureModesFor(comp.model, p)));
   for (const wrap of el.querySelectorAll('[data-field]')) {
-    const key = wrap.dataset.field;
-    const missing = result.missing.includes(key);
-    const guessed = Boolean(comp.inferred?.[key]);
+    const field = wrap.dataset.field;
+    const missing = result.missing.includes(field);
+    const guessed = Boolean(comp.inferred?.[field]);
     wrap.classList.toggle('missing', missing);
     wrap.classList.toggle('inferred', guessed && !missing);
-    wrap.querySelector('.state-tag').textContent = missing ? 'Missing' : guessed ? 'Guessed' : '';
+    putText(wrap.querySelector('.state-tag'), missing ? 'Missing' : guessed ? 'Guessed' : '');
     wrap.querySelector('input, select')?.setAttribute('aria-invalid', String(missing));
     const note = wrap.querySelector('[data-guess-for]');
     if (note) note.hidden = !guessed;
     const confirmedNote = wrap.querySelector('[data-confirmed-for]');
-    if (confirmedNote) confirmedNote.hidden = !comp.confirmed?.[key];
+    if (confirmedNote) confirmedNote.hidden = !comp.confirmed?.[field];
   }
   for (const f of model.fields) {
-    if (typeof f.help !== 'function') continue;
-    const h = $(`[data-help-key="${f.key}"]`, el);
-    if (h) h.textContent = f.help(p);
+    if (typeof f.help === 'function') putText($(`[data-help-key="${f.key}"]`, el), f.help(p));
   }
   return guesses > 0;
 }
@@ -745,17 +837,21 @@ function update() {
   // Capacitor wear-out is added to the lines whose drift counts, before anything is summed.
   const life = evaluateCapLife(state.parts, state.caplife, state.profile, years);
   const board = withLife(computeBoard({ profile: state.profile, components: state.parts }), life);
-  const problems = profileProblems(state.profile);
+  const issues = profileIssues(state.profile);
+  const problems = issues.map((x) => x.text);
 
   $('#tau-summary').innerHTML = `τ<sub>on</sub> = <b>${fmt(board.prof.tauOn)}</b>, τ<sub>off</sub> = <b>${fmt(board.prof.tauOff)}</b>${state.profile.tauOff == null ? ' (1 − τ<sub>on</sub>)' : ''}`;
-  $('#profile-problems').innerHTML = problems.map((p) => `<li>${esc(p)}</li>`).join('');
+  setHTML($('#profile-problems'), issues.map((p, k) => `<li id="profile-problem-${k}">${esc(p.text)}${p.cells.length
+    ? ` <button type="button" class="link" data-act="show-cell" data-i="${p.cells[0][0]}" data-key="${p.cells[0][1]}">Show</button>` : ''}</li>`).join(''));
+  markProfileCells(issues);
 
   let guessedLines = 0;
   // One lookup for all the cards: a document query per line grows with lines × page size.
   const cards = new Map([...document.querySelectorAll('#parts > [data-part]')].map((c) => [c.dataset.part, c]));
+  const profileKey = JSON.stringify(board.prof.phases);
   board.items.forEach(({ comp, result }) => {
     const el = cards.get(comp.id);
-    if (el && paintCard(el, comp, result, board.prof.phases)) guessedLines++;
+    if (el && paintCard(el, comp, result, board.prof.phases, profileKey)) guessedLines++;
   });
 
   updateCapLife(life);
@@ -781,18 +877,28 @@ function update() {
   const mtbf = redundancy ? (wearFit ? meanTimeToFailure((t) => structure.survival(t) * smtR(t)) : structure.mttfHours) : mtbfHours(total);
   const pieces = board.items.reduce((s, it) => s + it.result.qty, 0);
   const warn = [];
+  // Warnings about a check that needs input link to it (text → panel id).
+  const warnPanel = new Map();
   if (problems.length) warn.push('The mission profile has problems (see above).');
   if (board.incomplete) warn.push(`${plural(board.incomplete, 'part line needs', 'part lines need')} more input; the total leaves ${board.incomplete > 1 ? 'them' : 'it'} out.`);
   // With some devices complete, the weakest link so far is counted; the rest may be worse.
   const smtWaiting = smtPending && smt.worst && !smt.problems.length;
   if (pcb.cracked) warn.push(`${plural(pcb.cracked, 'plated hole size is', 'plated hole sizes are')} predicted to crack during assembly; see Circuit board.`);
-  else if (pcbPending) warn.push('The circuit-board check needs input; the total leaves it out.');
+  else if (pcbPending) {
+    const what = settingsMissing(pcb.conditions.problems);
+    warn.push(`The circuit-board check needs input${what.length ? `: ${what.join(', ')}` : ''}; the total leaves it out.`);
+    warnPanel.set(warn.at(-1), 'pcb');
+  }
   if (smtPending) {
     warn.push(smtWaiting
       ? `${plural(smt.incomplete, 'surface-mount device needs', 'surface-mount devices need')} input; until then the weakest link is taken from the others.`
-      : 'The surface-mount check needs input; the total leaves it out.');
+      : `The surface-mount check needs input${settingsMissing(smt.conditions.problems).length ? `: ${settingsMissing(smt.conditions.problems).join(', ')}` : ''}; the total leaves it out.`);
+    warnPanel.set(warn.at(-1), 'smt');
   }
-  if (life.pending) warn.push(`${plural(life.pending, 'capacitor life check needs', 'capacitor life checks need')} input; the total leaves ${life.pending > 1 ? 'their' : 'its'} wear-out out.`);
+  if (life.pending) {
+    warn.push(`${plural(life.pending, 'capacitor life check needs', 'capacitor life checks need')} input; the total leaves ${life.pending > 1 ? 'their' : 'its'} wear-out out.`);
+    warnPanel.set(warn.at(-1), 'caplife');
+  }
   if (life.wornOut.length) warn.push(`${plural(life.wornOut.length, 'capacitor line reaches', 'capacitor lines reach')} end of life before the end of the mission; see Electrolytic capacitor life.`);
   const guessedGroups = [...structure.red].filter((id) => currentBlock(id)?.inferred?.shortPct).length;
   if (guessedLines) warn.push(`${plural(guessedLines, 'line uses', 'lines use')} guessed values; check and confirm them.`);
@@ -809,6 +915,11 @@ function update() {
     smtPending ? (smtWaiting ? plural(smt.incomplete, 'surface-mount device') : 'the surface-mount check') : '',
     life.pending ? plural(life.pending, 'capacitor wear-out') : '',
   ].filter(Boolean).join(', ');
+  // A link down to the results, naming what dominates the board.
+  const largest = [...board.items].filter((it) => it.result.complete && it.result.total > 0).sort((a, b) => b.result.total - a.result.total)[0];
+  const sumAll = board.total + wearFit;
+  const shortRefs = (ref) => { const r = ref.split(/,\s*/); return r.length > 3 ? `${r.slice(0, 3).join(', ')}…` : ref; };
+  const jump = `<p class="jump"><a href="#results-heading">Results by part</a>${largest && sumAll > 0 ? `: largest ${esc(shortRefs(largest.comp.ref))}, ${((100 * largest.result.total) / sumAll).toFixed(0)}%` : ''}</p>`;
   const boundNote = partial ? `<div class="sub">Lower bound: ${leftOut} left out</div>` : '';
   // The spreadsheet reports these same figures.
   lastFigures = { board, life, smt, pcb, total, sum: board.total + wearFit, R, mtbf, redundancy, partial, leftOut, pieces, warn, guessedLines };
@@ -816,7 +927,7 @@ function update() {
     <div class="tile"><div class="label">${redundancy ? `Board failure rate, average over ${fmt(years)} years` : 'Board failure rate'}</div><div class="value">${ge}${fmt2(total)} FIT</div><div class="sub">${fmt(pieces)} pieces in ${state.parts.length} lines${redundancy ? ', with redundancy' : ''}</div>${boundNote}</div>
     <div class="tile bounded"><div class="label">${redundancy ? 'Mean time to failure' : 'MTBF'}</div><div class="value">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf)} h` : '—'}</div><div class="sub">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf / 8760)} years` : 'no failure rate yet'}</div></div>
     <div class="tile bounded"><div class="label">Survival over ${fmt(years)} years</div><div class="value">${le}${pct(R)}</div><div class="sub">${ge}${fmt2(1000 * (1 - R))} failures per 1000 boards</div></div>
-    </div>${warn.length ? `<p class="warn">${warn.map(esc).join(' ')}</p>` : ''}
+    </div>${warn.length ? `<p class="warn">${warn.map((w) => (warnPanel.has(w) ? `<a href="#${warnPanel.get(w)}" data-goto="${warnPanel.get(w)}">${esc(w)}</a>` : esc(w))).join(' ')}</p>` : ''}
     <p class="scope">${redundancy
     ? 'Parts in redundant blocks count as set under Reliability structure; every other part counts in series.'
     : 'The total counts a failure of any listed part as a board failure, so parts wired in parallel still add up unless you group them under Reliability structure.'} ${smtFit
@@ -825,7 +936,7 @@ function update() {
     ? 'The circuit board counts through its weakest plated hole size.'
     : 'The bare circuit board is not included unless its plated holes are checked under Circuit board.'}${life.rows.length
     ? ' Aluminium electrolytic capacitors include their wear-out only where drift is a failure (Electrolytic capacitor life).' : ''}${flex.length
-    ? ` Flex cracking of ${esc(flexText(flex))}, ceramic chips 1210 or larger, is not counted; see Surface-mount solder joints.` : ''} Anything not in the list is not included.</p>`);
+    ? ` Flex cracking of ${esc(flexText(flex))}, ceramic chips 1210 or larger, is not counted; see Surface-mount solder joints.` : ''} Anything not in the list is not included.</p>${jump}`);
 
   const sum = board.total + wearFit;
   const sorted = [...board.items].sort((a, b) => b.result.total - a.result.total || Number(a.result.complete) - Number(b.result.complete));
@@ -836,7 +947,8 @@ function update() {
       const top = i === 0 && sorted.length > 1 && result.complete && result.total > 0;
       const share = sum > 0 ? (100 * result.total) / sum : 0;
       const each = result.complete ? fmt(result.fit) : '<span class="bad">Missing</span>';
-      return `<tr${top ? ' class="top"' : ''}><td>${esc(comp.ref)}</td><td class="opt">${esc(model.describe({ ...model.defaults, ...comp.params }))}${result.wearOut ? ', with wear-out' : ''}</td><td class="num">${fmt(result.qty)}</td><td class="num opt">${each}</td><td class="num">${result.complete ? fmt(result.total) : '—'}</td><td class="num">${result.complete ? `${share.toFixed(1)}%` : '—'}</td></tr>`;
+      const desc = `${model.describe({ ...model.defaults, ...comp.params })}${result.wearOut ? ', with wear-out' : ''}`;
+      return `<tr${top ? ' class="top"' : ''}><td class="ref" data-desc="${esc(desc)}"><button type="button" class="link refs" data-act="goto-part" data-id="${comp.id}" title="${esc(comp.ref)}">${esc(comp.ref)}</button></td><td class="opt">${esc(desc)}</td><td class="num">${fmt(result.qty)}</td><td class="num opt">${each}</td><td class="num">${result.complete ? fmt(result.total) : '—'}</td><td class="num">${result.complete ? `${share.toFixed(1)}%` : '—'}</td></tr>`;
     }).join('')
       + (pcbFit ? `<tr class="smt-row"><td>Circuit board</td><td class="opt">Plated holes, weakest: ${esc(pcb.worst.hole.label || 'unnamed hole size')}</td><td></td><td class="opt"></td><td class="num">${fmt(pcbFit)}</td><td class="num">${sum > 0 ? `${((100 * pcbFit) / sum).toFixed(1)}%` : '—'}</td></tr>` : '')
       + (smtFit ? `<tr class="smt-row"><td>Solder joints</td><td class="opt">Surface mount, weakest link: ${esc(smt.worst.device.label || 'unnamed device')}</td><td></td><td class="opt"></td><td class="num">${fmt(smtFit)}</td><td class="num">${sum > 0 ? `${((100 * smtFit) / sum).toFixed(1)}%` : '—'}</td></tr>` : '')
@@ -967,10 +1079,29 @@ async function readText(file) {
   }
 }
 
+// The toolbar button that opened the file picker, where Dismiss returns the focus.
+let reportOpener = null;
 function showReport(html) {
   const box = $('#import-report');
-  box.innerHTML = `${html} <button type="button" class="link" data-act="dismiss-report">Dismiss</button>`;
+  const attention = document.querySelector('#parts .part.needs-input, #parts .part.has-guesses');
+  box.innerHTML = `<p>${html}</p><p class="report-actions">${attention ? '<button type="button" data-act="attention">Show only the lines that need attention</button> ' : ''}<button type="button" data-act="dismiss-report">Dismiss</button></p>`;
   box.hidden = false;
+  box.scrollIntoView?.({ block: 'nearest' });
+  box.focus({ preventScroll: true });
+}
+
+// Open a part line, show it and put the focus on it (from the results or the structure).
+function showPart(part) {
+  part.open = true;
+  if ($('#attention-only').checked && !$(`[data-part="${part.id}"]`)?.matches('.needs-input, .has-guesses')) {
+    $('#attention-only').checked = false;
+    $('#parts').classList.remove('attention-only');
+  }
+  rerenderPart(part);
+  repaintPart(part);
+  $(`#${part.id}-ref`)?.scrollIntoView?.({ block: 'center' });
+  $(`[data-act="toggle"][data-id="${part.id}"]`)?.focus();
+  save();
 }
 
 // ---------------------------------------------------------------------------
@@ -1107,6 +1238,65 @@ document.addEventListener('change', (e) => {
   update();
 });
 
+// A block copied from a spreadsheet fills the phase table from the cell pasted into, adding
+// phases as needed (name, t_ac, τ, n, ΔT, +ΔT/3). A single value is left to the browser.
+const PHASE_COLS = ['name', 'tac', 'tau', 'n', 'dT', 'addRise'];
+const cellNumber = (raw) => {
+  const t = raw.replace(/[\u2212\u2013]/g, '-').replace(/\s*°?\s*C$/i, '').trim();
+  return numOrNull(/^-?\d+,\d+$/.test(t) ? t.replace(',', '.') : t);
+};
+document.addEventListener('paste', (e) => {
+  const el = e.target;
+  if (el.dataset?.bind !== 'phase') return;
+  const text = (e.clipboardData?.getData('text/plain') ?? '').replace(/\r/g, '').replace(/\n+$/, '');
+  if (!/[\t\n]/.test(text)) return;
+  e.preventDefault();
+  let rows = text.split('\n').map((r) => r.split('\t'));
+  const col0 = PHASE_COLS.indexOf(el.dataset.key);
+  const numeric = (cells) => cells.some((c, k) => !['name', 'addRise'].includes(PHASE_COLS[col0 + k]) && cellNumber(c) != null);
+  if (rows.length > 1 && !numeric(rows[0])) rows = rows.slice(1); // a header row
+  const start = Number(el.dataset.i);
+  rows.forEach((cells, r) => {
+    const i = start + r;
+    while (state.profile.phases.length <= i) state.profile.phases.push({ name: `Phase ${state.profile.phases.length + 1}`, tac: 25, tau: 0, n: 0, dT: 0, addRise: false });
+    const ph = state.profile.phases[i];
+    cells.forEach((raw, k) => {
+      const key = PHASE_COLS[col0 + k];
+      if (key === 'name') ph.name = raw.trim();
+      else if (key === 'addRise') ph.addRise = /^(1|y|yes|x|true|\u2713|\u2714)$/i.test(raw.trim());
+      else if (key) ph[key] = cellNumber(raw);
+    });
+  });
+  markCustomProfile();
+  undoProfile = null;
+  renderPhases();
+  $(`#phases [data-i="${start}"][data-key="${el.dataset.key}"]`)?.focus();
+  save();
+  update();
+});
+
+// Enter in the solder-joint and hole tables: the same column on the next row; from the last row, a new row.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.target.tagName !== 'INPUT') return;
+  const row = e.target.closest('#smt-devices tr[data-smt], #pcb-holes tr[data-hole]');
+  if (!row) return;
+  e.preventDefault();
+  const next = row.nextElementSibling;
+  if (next) ($(`[data-key="${e.target.dataset.key}"]`, next) ?? $('input, select', next))?.focus();
+  else $(row.dataset.smt != null ? '[data-act="smt-add"]' : '[data-act="pcb-add"]').click();
+});
+
+// A "needs input" warning goes to the first missing control of that check.
+document.addEventListener('click', (e) => {
+  const link = e.target.closest('a[data-goto]');
+  if (!link) return;
+  e.preventDefault();
+  const panel = $(`#${link.dataset.goto}`);
+  const target = panel.querySelector('.missing input, .missing select') ?? panel.querySelector('input, select');
+  target?.scrollIntoView?.({ block: 'center' });
+  target?.focus();
+});
+
 // <details> toggle does not bubble; listen in the capture phase.
 document.addEventListener('toggle', (e) => {
   const el = e.target;
@@ -1115,11 +1305,6 @@ document.addEventListener('toggle', (e) => {
   if (!part) return;
   part[el.dataset.openKey] = el.open;
   save();
-  if (el.dataset.openKey === 'traceOpen' && el.open && lastFigures) {
-    const item = lastFigures.board.items.find((it) => it.comp.id === part.id);
-    const model = MODELS[part.model];
-    if (item) $('[data-out="trace"]', el).innerHTML = traceHTML(item.result, lastFigures.board.prof.phases, failureModesFor(part.model, { ...model.defaults, ...part.params }));
-  }
 }, true);
 
 document.addEventListener('click', (e) => {
@@ -1133,16 +1318,25 @@ document.addEventListener('click', (e) => {
     if (state.parts.length && !confirm('Replace the current board? Export it first if you want to keep it.')) return;
     state = next;
     $('#import-report').hidden = true;
-    resetDiagramView();
+    resetStructureView();
     renderAll();
     save();
   };
   switch (act) {
     case 'new': replaceBoard(emptyBoard()); return;
     case 'example': replaceBoard(exampleBoard()); return;
-    case 'import': $('#import-file').click(); return;
-    case 'import-netlist': $('#netlist-file').click(); return;
-    case 'import-bom': $('#bom-file').click(); return;
+    case 'import': reportOpener = btn; $('#import-file').click(); return;
+    case 'import-netlist': reportOpener = btn; $('#netlist-file').click(); return;
+    case 'import-bom': reportOpener = btn; $('#bom-file').click(); return;
+    case 'goto-part': if (part) showPart(part); return;
+    case 'attention': {
+      $('#attention-only').checked = true;
+      $('#parts').classList.add('attention-only');
+      const first = $('#parts .part.needs-input, #parts .part.has-guesses');
+      first?.scrollIntoView?.({ block: 'start' });
+      $('[data-act="toggle"]', first ?? document)?.focus();
+      return;
+    }
     case 'pcb-add':
       state.pcb.holes.push({ label: '', drill: null, plating: null });
       renderPcb();
@@ -1168,6 +1362,16 @@ document.addEventListener('click', (e) => {
       renderSmt();
       const dels = document.querySelectorAll('#smt-devices [data-act="smt-del"]');
       (dels[i] ?? dels[dels.length - 1] ?? $('[data-act="smt-add"]')).focus();
+      break;
+    }
+    case 'smt-confirm': {
+      // The guesses become the row's own values, with the reasons kept on record.
+      const i = Number(btn.dataset.i);
+      const dev = state.smt.devices[i];
+      dev.confirmed = { ...dev.confirmed, ...dev.inferred };
+      dev.inferred = {};
+      $(`#smt-devices [data-smt="${i}"]`).outerHTML = smtRowHTML(dev, i);
+      refocus = () => $(`#smt-devices [data-smt="${i}"] input`)?.focus();
       break;
     }
     case 'smt-chips': {
@@ -1205,7 +1409,10 @@ document.addEventListener('click', (e) => {
       };
       break;
     }
-    case 'dismiss-report': $('#import-report').hidden = true; return;
+    case 'dismiss-report':
+      $('#import-report').hidden = true;
+      (reportOpener ?? $('[data-act="import-netlist"]')).focus();
+      return;
     case 'export-json': download(`${fileBase()}.iec62380.json`, 'application/json', JSON.stringify(exportable(state), null, 2)); return;
     case 'export-csv': download(`${fileBase()}.csv`, 'text/csv', boardCSV()); return;
     case 'export-xlsx': download(`${fileBase()}-FIT.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', boardWorkbook()); return;
@@ -1226,6 +1433,9 @@ document.addEventListener('click', (e) => {
       (next && !next.disabled ? next : $('[data-act="add-phase"]')).focus();
       break;
     }
+    case 'show-cell':
+      $(`#phases [data-i="${btn.dataset.i}"][data-key="${btn.dataset.key}"]`)?.focus();
+      return;
     case 'undo-profile':
       if (undoProfile) { state.profile = undoProfile; undoProfile = null; renderPhases(); }
       $('#preset').focus();
@@ -1310,7 +1520,7 @@ $('#import-file').addEventListener('change', async (e) => {
     if (state.parts.length && !confirm(`Replace the current board with “${board.title}”?`)) return;
     state = board;
     $('#import-report').hidden = true;
-    resetDiagramView();
+    resetStructureView();
     renderAll();
     save();
     if (skipped.length) alert(`Skipped ${skipped.length} part(s) of unknown type: ${[...new Set(skipped)].join(', ')}`);
@@ -1341,7 +1551,7 @@ $('#netlist-file').addEventListener('change', async (e) => {
     })),
   };
   if (['Untitled board', 'Example board', ''].includes(state.title)) state.title = file.name.replace(/\.[^.]+$/, '');
-  resetDiagramView();
+  resetStructureView();
   renderAll();
   save();
   const board = computeBoard({ profile: state.profile, components: state.parts });
@@ -1351,8 +1561,7 @@ $('#netlist-file').addEventListener('change', async (e) => {
     ${result.notFittedCount ? `Left out ${plural(result.notFittedCount, 'part')} marked do not populate (${esc(result.notFitted)}).` : ''}
     ${result.duplicatesCount ? `<strong>${plural(result.duplicatesCount, 'designator is', 'designators are')} used more than once</strong> (${esc(result.duplicates)}): those parts are counted but not proposed in blocks, since their connections cannot be told apart. Annotate the schematic again to fix it.` : ''}
     <strong>${plural(board.incomplete, 'line needs', 'lines need')} input</strong> (red, “Missing”) and ${plural(guessed, 'line has', 'lines have')} guessed values (amber, “Guessed”).
-    ${result.groups.length ? `Proposed ${plural(result.groups.length, 'block')} of parts wired in parallel under Reliability structure; they count in series until you mark them redundant.` : ''}
-    Tick “Only parts that need attention” to work through them.`);
+    ${result.groups.length ? `Proposed ${plural(result.groups.length, 'block')} of parts wired in parallel under Reliability structure; they count in series until you mark them redundant.` : ''}`);
 });
 
 // A BOM: on an empty board it builds the parts; otherwise it adds part numbers,
@@ -1380,7 +1589,7 @@ $('#bom-file').addEventListener('change', async (e) => {
     state.parts = result.lines.map((l) => makePart(l.model, l.ref, l.qty, l.params, { inferred: { ...l.inferred }, source: l.source }));
     state.structure = { kind: 'block', id: ROOT, children: [] };
     if (['Untitled board', 'Example board', ''].includes(state.title)) state.title = file.name.replace(/\.[^.]+$/, '');
-    resetDiagramView();
+    resetStructureView();
     renderAll();
     save();
     const board = computeBoard({ profile: state.profile, components: state.parts });
@@ -1414,11 +1623,7 @@ mountStructure($('#structure'), {
   modelOf: (comp) => ({ model: comp.model, params: { ...MODELS[comp.model].defaults, ...comp.params } }),
   openPart: (id) => {
     const part = findPart(id);
-    if (!part) return;
-    part.open = true;
-    rerenderPart(part);
-    $(`#${part.id}-ref`)?.scrollIntoView({ block: 'center' });
-    $(`#${part.id}-ref`)?.focus();
+    if (part) showPart(part);
   },
 });
 renderAll();

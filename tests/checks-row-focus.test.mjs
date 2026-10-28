@@ -1,4 +1,4 @@
-// removing a hole size, a solder-joint device or a capacitor-life
+// Removing a hole size, a solder-joint device or a capacitor-life
 // line, or confirming a line's guesses, rebuilds the table and drops keyboard
 // focus to <body>; the next Tab starts again at the top of the page. Focus
 // should stay in the table: on the row that took the removed row's place,

@@ -703,7 +703,13 @@ test('page: import a KiCad netlist, accept a proposal, and the figures follow th
   const click = (el) => el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   const settle = () => new Promise((r) => setTimeout(r, 20));
   const pick = async (id, file) => { Object.defineProperty($(id), 'files', { value: [file], configurable: true }); fire($(id), 'change'); await settle(); };
-  const cardFor = (ref) => $$('.part').find((p) => $('[data-key="ref"]', p).value === ref);
+  // A closed card is only its head: the test opens it before looking inside, as a user would.
+  const cardFor = (ref) => {
+    const find = () => $$('.part').find((p) => $('[data-key="ref"]', p).value === ref);
+    const c = find();
+    if (c && $('.part-body', c).hidden) $('[data-act="toggle"]', c).dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    return find();
+  };
   const row = (name) => $$('#st-tree li[role="treeitem"]').find((li) => $('.st-nm', li)?.textContent.includes(name));
   const ev = () => currentStructure().ev;
   const exportJson = async () => { click($('[data-act="export-json"]')); return JSON.parse(await downloads.at(-1).text()); };

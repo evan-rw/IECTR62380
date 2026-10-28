@@ -1,4 +1,4 @@
-// on a phone the whole page pans sideways (scrollWidth 1050-1081 px
+// On a phone the whole page pans sideways (scrollWidth 1050-1081 px
 // at a 360 px viewport). The cause is the visually hidden "Remove"/"Actions"
 // column headers: they are position:absolute with no positioned ancestor, so
 // they escape the .table-scroll box and stretch the page to the table's width.

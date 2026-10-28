@@ -60,7 +60,13 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
     fire(input, 'change');
     await settle();
   };
-  const cardFor = (ref) => $$('.part').find((p) => $('[data-key="ref"]', p).value === ref);
+  // A closed card is only its head: the test opens it before looking inside, as a user would.
+  const cardFor = (ref) => {
+    const find = () => $$('.part').find((p) => $('[data-key="ref"]', p).value === ref);
+    const c = find();
+    if (c && $('.part-body', c).hidden) $('[data-act="toggle"]', c).dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    return find();
+  };
   // A card's calculation is drawn when it is shown, as a user opening "Show the calculation".
   const calcOf = (card) => {
     const d = $('details.trace', card);
@@ -172,7 +178,7 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.ok(cardFor('X1 copy'));
   click($('[data-act="del"]', cardFor('X1 copy')));
   click($('[data-act="toggle"]', cardFor('X1')));
-  assert.equal($('.part-body', cardFor('X1')).hidden, true);
+  assert.equal($('.part-body', $$('.part').find((p) => $('[data-key="ref"]', p).value === 'X1')).hidden, true);
 
   // The automotive profiles from TI SLOA294A Table 6-1.
   choose($('#preset'), 'auto-motor');

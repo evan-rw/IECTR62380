@@ -52,6 +52,7 @@
           <input id="bom-file" type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" hidden>
         </div>
       </div>
+      <div id="import-report" class="import-report" role="status" tabindex="-1" hidden></div>
       <div id="summary" class="summary" aria-live="polite"></div>
     </section>
 
@@ -63,7 +64,7 @@
           <select id="preset" data-bind="preset"></select>
         </div>
       </div>
-      <p class="hint">One row per phase of a typical year. t<sub>ac</sub> is the air temperature around the board. τ is the fraction of the year the equipment works in that phase (0 for a dormant phase). n and ΔT describe the thermal cycles the board goes through. Tick “+ΔT/3” where each cycle also heats the part by a third of its own temperature rise (the “ΔT<sub>j</sub>/3 +” entries in the standard).</p>
+      <p class="hint">One row per phase of a typical year. t<sub>ac</sub> is the air temperature around the board. τ is the fraction of the year the equipment works in that phase (0 for a dormant phase). n and ΔT describe the thermal cycles the board goes through. Tick “+ΔT/3” where each cycle also heats the part by a third of its own temperature rise (the “ΔT<sub>j</sub>/3 +” entries in the standard). Rows copied from a spreadsheet can be pasted into the table.</p>
       <div class="table-scroll">
         <table class="phases">
           <thead>
@@ -106,7 +107,7 @@
         </div>
       </div>
       <p class="hint">Import a KiCad, Protel or Protel 2 netlist to start from a schematic, a BOM (CSV) to start from a parts list, or both: a BOM imported after a netlist adds part numbers and descriptions to the matching lines and improves their guesses. Values the files cannot supply are marked <span class="tag-missing">Missing</span> and the part is left out of the total until they are filled in. Values the importer worked out from footprints, part names and descriptions are marked <span class="tag-guessed">Guessed</span> until you change or confirm them.</p>
-      <div id="import-report" class="import-report" role="status" hidden></div>
+      <div class="parts-filter"><label for="parts-find">Find a line</label><input type="search" id="parts-find" placeholder="C47, 100n, SN74…" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>
       <label class="check-label"><input type="checkbox" id="attention-only"> Only parts that need attention</label>
       <p id="parts-undo" class="undo-bar" role="status" hidden></p>
       <div id="parts" class="parts"></div>
@@ -247,6 +248,7 @@
         <button type="button" data-st="group-series" aria-keyshortcuts="S">Group as series <kbd>S</kbd></button>
         <button type="button" data-st="ungroup" aria-keyshortcuts="U">Ungroup <kbd>U</kbd></button>
         <button type="button" data-st="split" aria-keyshortcuts="L">Split line <kbd>L</kbd></button>
+        <button type="button" data-st="undo" aria-keyshortcuts="Control+Z" disabled>Undo</button>
         <label class="visually-hidden" for="st-moveto">Move the selection to a block</label>
         <select id="st-moveto" aria-keyshortcuts="M"></select>
       </div>
@@ -262,6 +264,7 @@
               <label class="visually-hidden" for="st-find">Find parts</label>
               <input id="st-find" class="st-grow" type="search" placeholder="Find: C1–C8, Q1 or “tantalum”, then Enter" autocomplete="off">
               <button type="button" data-st="select-matches">Select</button>
+              <button type="button" data-st="multi" aria-pressed="false" title="While pressed, each tap adds to the selection or takes away from it (as Ctrl+click)">Select several</button>
             </div>
             <div class="st-tree-scroll"><ul id="st-tree" role="tree" aria-label="Reliability structure" aria-multiselectable="true"></ul></div>
           </section>
@@ -274,11 +277,14 @@
             <button type="button" data-st="zin" aria-label="Zoom in">+</button>
             <button type="button" data-st="fit">Fit <kbd>0</kbd></button>
             <button type="button" data-st="lasso" aria-pressed="false" title="Drag on the background to select a box of items (or hold Shift)">Lasso</button>
+            <label class="visually-hidden" for="st-goto">Go to a block</label>
+            <select id="st-goto" class="st-goto"></select>
             <span class="st-grow"></span>
             <span class="st-pane-tip">Wheel or pinch to zoom · drag the background to pan · double-click a block</span>
           </div>
           <svg id="st-rbd" tabindex="0" role="img" aria-label="Reliability block diagram of the board. Edit with the structure tree; with this focused, plus and minus zoom, arrows pan, 0 fits.">
             <g id="st-vp"></g>
+            <g id="st-names" class="names" aria-hidden="true"></g>
             <rect id="st-lasso" class="lasso" style="display:none"></rect>
           </svg>
         </section>
@@ -287,8 +293,8 @@
 
     <section class="panel" aria-labelledby="results-heading">
       <h2 id="results-heading">Results by part</h2>
-      <p class="hint">Sorted by contribution. Rates are per calendar hour, dormant time included; shares are of the sum of all part rates.</p>
-      <div class="table-scroll">
+      <p class="hint">Sorted by contribution. Rates are per calendar hour, dormant time included; shares are of the sum of all part rates. Click a line's references to open it.</p>
+      <div class="table-scroll results-scroll" tabindex="0" role="region" aria-labelledby="results-heading">
         <table class="results">
           <thead>
             <tr>

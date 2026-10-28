@@ -21,7 +21,9 @@ test('a removed line can be put back with Undo, values and place intact', async 
 
   click($('[data-act="del"]', card));
   assert.equal($$('.part').some((c) => refOf(c) === ref), false, 'the line is removed');
-  const undo = $$('button').find((b) => /undo/i.test(b.textContent) && shown(b));
+  // The Parts panel's own Undo (the structure editor has one too).
+  const partsUndo = () => $$('button', $('#parts').closest('section')).filter((b) => /undo/i.test(b.textContent) && shown(b));
+  const undo = partsUndo()[0];
   assert.ok(undo, 'an Undo button is offered after removing a line');
   assert.match(undo.closest('[role="status"], [aria-live]')?.textContent ?? '', new RegExp(ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'the notice names the removed line');
 
@@ -31,5 +33,5 @@ test('a removed line can be put back with Undo, values and place intact', async 
   const reopened = open(back);
   assert.deepEqual($$('[data-bind="part"]', reopened).map((i) => [i.dataset.key, i.value]), valuesBefore);
   assert.equal(boardTotal(), totalBefore);
-  assert.ok(!$$('button').some((b) => /undo/i.test(b.textContent) && shown(b)), 'the Undo offer goes away once used');
+  assert.equal(partsUndo().length, 0, 'the Undo offer goes away once used');
 });

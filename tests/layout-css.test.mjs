@@ -27,3 +27,14 @@ test('no visually hidden header text can push the page sideways', () => {
   });
   assert.deepEqual(escaping.map((el) => `${el.closest('table').className}: ${el.textContent}`), []);
 });
+
+test('results by part is a list view: bounded height, header kept in sight, linked from the summary', () => {
+  const { window, $ } = page;
+  const scroller = $('table.results').closest('.table-scroll');
+  const cs = window.getComputedStyle(scroller);
+  assert.ok(cs.maxHeight && cs.maxHeight !== 'none', `results scroller max-height: ${cs.maxHeight || '(none)'}`);
+  assert.ok(['auto', 'scroll'].includes(cs.overflowY || cs.overflow), 'scrolls vertically itself');
+  assert.equal(window.getComputedStyle($('table.results thead th')).position, 'sticky');
+  // From the board figures to the table without scrolling past every part card.
+  assert.ok($('#summary a[href="#results-heading"]'), 'a link from the summary to the results');
+});

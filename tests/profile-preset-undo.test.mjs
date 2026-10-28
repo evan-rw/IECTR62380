@@ -1,4 +1,4 @@
-// a hand-made profile survives a stray choice on the preset list.
+// A hand-made profile survives a stray choice on the preset list.
 // Before the fix, choosing a preset replaces every phase at once, with no question and no
 // undo. On Windows, an arrow key or a typed letter on the focused (closed) list
 // changes its value and fires "change" straight away.
