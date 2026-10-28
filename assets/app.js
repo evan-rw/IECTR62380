@@ -14,6 +14,8 @@ import { failureModesFor } from './failuremodes.js';
 import { evaluateCapLife, withLife, lifeInputs, LIFE_KEYS, TECHS, typeTech } from './caplife.js';
 import { LIFE_RULES, END_OF_LIFE } from './tablescaplife.js';
 import { esc } from './html.js';
+import { xlsx } from './xlsx.js';
+import { boardSheets } from './report.js';
 
 const STORAGE_KEY = 'iec62380.board.v1';
 const FORMAT = 'iec62380-board';
@@ -774,6 +776,8 @@ function update() {
     life.pending ? plural(life.pending, 'capacitor wear-out') : '',
   ].filter(Boolean).join(', ');
   const boundNote = partial ? `<div class="sub">Lower bound: ${leftOut} left out</div>` : '';
+  // The spreadsheet reports these same figures.
+  lastFigures = { board, life, smt, pcb, total, sum: board.total + wearFit, R, mtbf, redundancy, partial, leftOut, pieces, warn, guessedLines };
   $('#summary').innerHTML = `<div class="tiles${partial ? ' partial' : ''}">
     <div class="tile"><div class="label">${redundancy ? `Board failure rate, average over ${fmt(years)} years` : 'Board failure rate'}</div><div class="value">${ge}${fmt2(total)} FIT</div><div class="sub">${fmt(pieces)} pieces in ${state.parts.length} lines${redundancy ? ', with redundancy' : ''}</div>${boundNote}</div>
     <div class="tile bounded"><div class="label">${redundancy ? 'Mean time to failure' : 'MTBF'}</div><div class="value">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf)} h` : '—'}</div><div class="sub">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf / 8760)} years` : 'no failure rate yet'}</div></div>
@@ -827,6 +831,20 @@ function csvCell(v) {
   let s = String(v ?? '');
   if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return `"${s.replace(/"/g, '""')}"`;
+}
+
+let lastFigures = null;
+
+// The board as an .xlsx workbook: summary, parts, calculation, inputs, profile, structure.
+function boardWorkbook() {
+  const f = lastFigures;
+  const text = (sel) => ($(sel)?.textContent ?? '').replace(/\s+/g, ' ').trim();
+  return xlsx(boardSheets({
+    title: state.title, years: isNum(state.years) ? state.years : 0, generated: new Date(), url: (document.location?.href ?? '').split(/[?#]/)[0],
+    notice: text('.notice'), scope: text('#summary .scope'), profile: state.profile,
+    board: f.board, life: f.life, smt: f.smt, pcb: f.pcb, smtInclude: state.smt.include, pcbInclude: state.pcb.include,
+    structure: currentStructure(), figures: f,
+  }), { title: state.title });
 }
 
 function boardCSV() {
@@ -1116,6 +1134,7 @@ document.addEventListener('click', (e) => {
     case 'dismiss-report': $('#import-report').hidden = true; return;
     case 'export-json': download(`${fileBase()}.iec62380.json`, 'application/json', JSON.stringify(exportable(state), null, 2)); return;
     case 'export-csv': download(`${fileBase()}.csv`, 'text/csv', boardCSV()); return;
+    case 'export-xlsx': download(`${fileBase()}-FIT.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', boardWorkbook()); return;
     case 'add-phase':
       state.profile.phases.push({ name: `Phase ${state.profile.phases.length + 1}`, tac: 25, tau: 0, n: 0, dT: 0, addRise: false });
       markCustomProfile();
