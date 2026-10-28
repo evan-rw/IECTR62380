@@ -379,7 +379,11 @@ function beginNodePointer(e, id, fromDiagram) {
   let dragging = false;
   let target = null;
   const ids = selection.has(id) ? topLevel(rt, selection).filter((x) => !rt.nodes.get(x).fixed) : [id];
+  // Only the pointer that picked the item up moves it (a second finger is not a drag).
+  const pid = e.pointerId;
+  const mine = (ev2) => pid == null || ev2.pointerId == null || ev2.pointerId === pid;
   const onMove = (ev2) => {
+    if (!mine(ev2)) return;
     if (!dragging) {
       if (Math.hypot(ev2.clientX - start[0], ev2.clientY - start[1]) < 6 || rt.nodes.get(id).fixed) return;
       dragging = true;
@@ -398,6 +402,7 @@ function beginNodePointer(e, id, fromDiagram) {
     }
   };
   const onUp = (ev2) => {
+    if (!mine(ev2)) return;
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
     window.removeEventListener('pointercancel', onUp);
@@ -772,7 +777,7 @@ function renderInspector() {
         <li><b>Select</b>: click a row or box; Ctrl/⌘+click adds; Shift+click a range; Shift+drag (or Lasso) on the diagram boxes a set.</li>
         <li><b>Find</b>: type references such as <i>C1–C8, Q1</i> and press Enter to select exactly those parts.</li>
         <li><b>Group</b>: <kbd>P</kbd> parallel (k of n), <kbd>S</kbd> series, <kbd>U</kbd> ungroup, <kbd>L</kbd> split a line, <kbd>M</kbd> move to a block.</li>
-        <li><b>Move</b>: drag a row by ⠿, or a box or block header in the diagram, onto any block. In the tree, Alt+→ moves into the block above, Alt+← moves out, Alt+↑/↓ reorders.</li>
+        <li><b>Move</b>: drag a row by ⠿, or a box or block header in the diagram, onto any block (on a touch screen, press and hold a box first; a swipe pans). In the tree, Alt+→ moves into the block above, Alt+← moves out, Alt+↑/↓ reorders.</li>
         <li><b>Zoom</b>: wheel or pinch; drag the background to pan; double-click a block to zoom to it; <kbd>0</kbd> fits.</li>
       </ul>`;
     return renderInspectorOut();
@@ -953,11 +958,15 @@ export function mountStructure(section, context) {
   let gesture = null;
   el.svg.addEventListener('pointerdown', (e) => {
     const handle = e.target.closest('[data-drag]');
-    if (handle && e.button === 0 && pointers.size === 0 && !lassoMode && !e.shiftKey) { beginNodePointer(e, handle.dataset.id, true); return; }
-    el.svg.setPointerCapture?.(e.pointerId);
+    // On touch a finger on a box pans and pinches like one on the background; a press and
+    // hold picks the box up. A mouse or pen picks it up at once.
+    const touch = e.pointerType === 'touch';
+    if (handle && e.button === 0 && pointers.size === 0 && !touch && !lassoMode && !e.shiftKey) { beginNodePointer(e, handle.dataset.id, true); return; }
+    try { el.svg.setPointerCapture?.(e.pointerId); } catch { /* the pointer may already be gone */ }
     pointers.set(e.pointerId, svgPoint(e));
     const pts = [...pointers.values()];
     if (pts.length === 2) {
+      if (gesture?.hold) clearTimeout(gesture.hold);
       const [a, b] = pts;
       gesture = { type: 'pinch', d: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], v0: { ...view } };
       return;
@@ -966,7 +975,20 @@ export function mountStructure(section, context) {
     const p = svgPoint(e);
     gesture = lassoMode || e.shiftKey
       ? { type: 'lasso', p0: p, p1: p, add: e.shiftKey || e.ctrlKey || e.metaKey, handle: handle?.dataset.id }
-      : { type: 'pan', p0: p, v0: { ...view }, moved: false };
+      : { type: 'pan', p0: p, v0: { ...view }, moved: false, handle: touch ? handle?.dataset.id : undefined };
+    if (gesture.handle && gesture.type === 'pan' && !rt.nodes.get(gesture.handle)?.fixed) {
+      const g = gesture;
+      const pid = e.pointerId;
+      const start = [e.clientX, e.clientY];
+      g.hold = setTimeout(() => {
+        if (gesture !== g || g.moved || pointers.size !== 1) return;
+        pointers.delete(pid);
+        gesture = null;
+        try { el.svg.releasePointerCapture?.(pid); } catch { /* already released */ }
+        beginNodePointer({ preventDefault() {}, clientX: start[0], clientY: start[1], pointerId: pid }, g.handle, true);
+        say('Picked up: drag it onto a block to move it.');
+      }, 450);
+    }
   });
   el.svg.addEventListener('pointermove', (e) => {
     if (!pointers.has(e.pointerId)) return;
@@ -984,7 +1006,7 @@ export function mountStructure(section, context) {
     } else if (gesture.type === 'pan') {
       const dx = p[0] - gesture.p0[0];
       const dy = p[1] - gesture.p0[1];
-      if (Math.hypot(dx, dy) > 3) gesture.moved = true;
+      if (Math.hypot(dx, dy) > (gesture.handle ? 8 : 3)) gesture.moved = true;
       view = { ...gesture.v0, x: gesture.v0.x + dx, y: gesture.v0.y + dy };
       applyView();
     } else if (gesture.type === 'lasso') {
@@ -1024,9 +1046,11 @@ export function mountStructure(section, context) {
     if (!pointers.has(e.pointerId)) return;
     pointers.delete(e.pointerId);
     const g = gesture;
+    if (g?.hold) clearTimeout(g.hold);
     if (pointers.size === 0) gesture = null; else if (g?.type === 'pinch') { gesture = null; return; }
     if (!g || e.type === 'pointercancel') return;
-    if (g.type === 'pan' && !g.moved) {
+    if (g.type === 'pan' && !g.moved && g.handle) select(g.handle, { ctrlKey: e.ctrlKey || e.metaKey });
+    else if (g.type === 'pan' && !g.moved) {
       const hit = deepestBlockAt(...toLayout(svgPoint(e)));
       if (hit && hit !== ROOT) select(hit, { ctrlKey: e.ctrlKey || e.metaKey }); else { selection = new Set(); render(); }
     } else if (g.type === 'lasso') finishLasso(g);

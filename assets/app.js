@@ -324,9 +324,9 @@ function partHTML(part) {
         <div class="part-fit" data-out="fit"></div>
         <div class="part-actions">
           <button type="button" class="icon" data-act="toggle" data-id="${part.id}" aria-expanded="${part.open}" aria-controls="${part.id}-body">${part.open ? 'Close' : 'Edit'}</button>
-          ${canSplit(part) ? `<button type="button" class="icon" data-act="split" data-id="${part.id}" title="One line per reference, so each can have its own values">Split</button>` : ''}
-          <button type="button" class="icon" data-act="dup" data-id="${part.id}" title="Duplicate">Copy</button>
-          <button type="button" class="icon" data-act="del" data-id="${part.id}" title="Remove">✕</button>
+          ${canSplit(part) ? `<button type="button" class="icon part-more" data-act="split" data-id="${part.id}" title="One line per reference, so each can have its own values">Split</button>` : ''}
+          <button type="button" class="icon part-more" data-act="dup" data-id="${part.id}" title="Duplicate">Copy</button>
+          <button type="button" class="icon part-more" data-act="del" data-id="${part.id}" title="Remove" aria-label="Remove ${esc(part.ref)}">✕</button>
         </div>
       </div>
       <div class="part-body" id="${part.id}-body"${part.open ? '' : ' hidden'}>${part.open ? `
@@ -338,7 +338,8 @@ function partHTML(part) {
         ${adv ? `<details class="advanced" data-id="${part.id}" data-open-key="advOpen"${part.advOpen ? ' open' : ''}><summary>Override table values</summary><div class="fields">${adv}</div></details>` : ''}
         <ul class="part-errors" data-out="errors"></ul>
         <details class="trace" data-id="${part.id}" data-open-key="traceOpen"${part.traceOpen ? ' open' : ''}><summary>Show the calculation</summary><div class="trace-body" data-out="trace"></div></details>
-        <p class="status-line">${esc(clauseOf(model))}. ${esc(model.status)}</p>` : ''}
+        <p class="status-line">${esc(clauseOf(model))}. ${esc(model.status)}</p>
+        <div class="part-foot">${canSplit(part) ? `<button type="button" data-act="split" data-id="${part.id}">Split line</button>` : ''}<button type="button" data-act="dup" data-id="${part.id}">Copy line</button><button type="button" class="part-remove" data-act="del" data-id="${part.id}">Remove line</button></div>` : ''}
       </div>
     </article>`;
 }

@@ -287,6 +287,8 @@ table.phases td.check { text-align: center; }
 .part-kind { min-width: 0; }
 .part-kind .model { font-weight: bold; }
 .part[hidden] { display: none; }
+/* On a phone, Split, Copy and Remove sit in the open card's foot, away from Edit; on a desktop, in the head. */
+.part-foot { display: none; }
 .part-kind .refs-full { font-size: 11px; font-weight: bold; overflow-wrap: anywhere; }
 .part-kind .refs-full:empty { display: none; }
 .parts-filter { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; max-width: 420px; }
@@ -547,7 +549,7 @@ body.st-dragging, body.st-dragging * { cursor: grabbing !important; user-select:
 .st-ghost { position: fixed; left: 0; top: 0; z-index: 10; pointer-events: none; background: var(--info-bg); color: #000; padding: 2px 6px; border: 1px solid #000; font-size: 11px; box-shadow: 2px 2px 0 rgba(0, 0, 0, .35); }
 
 /* Block diagram: a schematic sheet */
-#st-rbd { flex: 1 1 auto; width: 100%; min-height: 0; display: block; touch-action: none; box-shadow: var(--sunken);
+#st-rbd { flex: 1 1 auto; width: 100%; min-height: 0; display: block; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; box-shadow: var(--sunken);
   background: var(--window) radial-gradient(circle, #b4b4b4 1px, transparent 1px) 0 0 / 20px 20px; font-family: var(--ui); }
 #st-rbd:focus-visible { outline: 1px dotted #000; outline-offset: -4px; }
 #st-zoomlvl { min-width: 3.5em; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-2); padding: 2px 4px; box-shadow: var(--sunken-thin); background: var(--window); }
@@ -648,6 +650,9 @@ body.st-dragging, body.st-dragging * { cursor: grabbing !important; user-select:
   }
   .part-fit .each { white-space: nowrap; }
   .part-actions { gap: 8px; }
+  .part-head .part-more { display: none; }
+  .part-foot { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--shadow); }
+  .part-foot .part-remove { margin-left: auto; }
   .part-head > .ref { grid-area: ref; }
   .part-head > .part-kind { grid-area: kind; }
   .part-head > .qty { grid-area: qty; }
