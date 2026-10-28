@@ -98,14 +98,17 @@ export function buildStructure(saved, items, describe = (comp) => comp.ref) {
   const byRef = new Map();
   for (const { comp, result } of items) {
     const refs = expandRefs(comp.ref);
-    const whole = refs.length !== result.qty;
+    // A line whose refs do not name each part once can only be placed whole.
+    const whole = refs.length !== result.qty || new Set(refs).size !== refs.length;
     const line = { id: comp.id, refs: whole ? [comp.ref] : refs, whole, qty: result.qty, fit: result.complete ? result.fit : null, label: describe(comp), comp, result };
     lines.set(comp.id, line);
     for (const r of line.refs) if (!byRef.has(r)) byRef.set(r, comp.id);
   }
 
   const rt = { nodes: new Map(), lines, parent: new Map(), buildProblems: new Map() };
+  // Claims are per line, so a designator on two lines is not taken from both.
   const claimed = new Set();
+  const claim = (lineId, r) => `${lineId}\u0000${r}`;
 
   const addLeaves = (block, refsText) => {
     const text = String(refsText ?? '').trim();
@@ -115,10 +118,10 @@ export function buildStructure(saved, items, describe = (comp) => comp.ref) {
     const twice = [];
     for (const r of wanted) {
       if (!byRef.has(r)) unknown.push(r);
-      else if (claimed.has(r)) twice.push(r);
+      else if (claimed.has(claim(byRef.get(r), r))) twice.push(r);
       else {
-        claimed.add(r);
         const lineId = byRef.get(r);
+        claimed.add(claim(lineId, r));
         perLine.set(lineId, [...(perLine.get(lineId) ?? []), r]);
       }
     }
@@ -167,7 +170,7 @@ export function buildStructure(saved, items, describe = (comp) => comp.ref) {
   const rest = { id: REST, kind: 'block', name: 'Everything else', mode: 'series', need: null, shortPct: null, inferred: {}, proposed: null, nets: [], expanded: root.restExpanded === true, children: [], fixed: true };
   rt.nodes.set(REST, rest);
   for (const line of lines.values()) {
-    const refs = line.refs.filter((r) => !claimed.has(r));
+    const refs = line.refs.filter((r) => !claimed.has(claim(line.id, r)));
     if (refs.length) addLeaf(rest, line.id, refs);
   }
   board.children.unshift(REST);
@@ -532,11 +535,14 @@ export function selectRefs(rt, query) {
   return { ids: picked, count: picked.reduce((s, id) => s + leafPieces(rt, rt.nodes.get(id)), 0), unknown: [...want].filter((r) => !known.has(r)) };
 }
 
+// A list of refs cut to a length, at a comma so that no ref is cut in two.
+const clip = (refs, max) => (refs.length <= max ? refs : refs.slice(0, refs.lastIndexOf(',', max)));
+
 // Keep only known keys and types from a saved structure read from storage or a file.
 export function sanitizeStructure(raw) {
   const clean = (n, depth) => {
     if (!n || typeof n !== 'object' || depth > 32) return null;
-    if (n.kind === 'leaf') return { kind: 'leaf', refs: String(n.refs ?? '').slice(0, 2000) };
+    if (n.kind === 'leaf') return { kind: 'leaf', refs: clip(String(n.refs ?? ''), 200000) };
     return {
       kind: 'block',
       ...(typeof n.id === 'string' && n.id ? { id: n.id.slice(0, 80) } : {}),

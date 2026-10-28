@@ -25,7 +25,7 @@ export function parseProtel(text) {
   const first = lines.find((l) => l.trim() !== '') ?? '';
   const format = /^PROTEL\s+NETLIST\s+2/i.test(first.trim()) ? 'Protel 2.0' : 'Protel';
   const components = [];
-  const pins = new Map(); // designator -> { count, max, nets }
+  const pins = new Map(); // designator -> { count, max, nets, pins: [[pin, net], …] }
   let nets = 0;
 
   for (let i = 0; i < lines.length; i++) {
@@ -47,9 +47,10 @@ export function parseProtel(text) {
         if (dash <= 0) continue;
         const ref = token.slice(0, dash);
         const pin = token.slice(dash + 1);
-        const entry = pins.get(ref) ?? { count: 0, max: 0, nets: new Set() };
+        const entry = pins.get(ref) ?? { count: 0, max: 0, nets: new Set(), pins: [] };
         entry.count++;
         entry.nets.add(net);
+        entry.pins.push([pin, net]);
         if (/^\d+$/.test(pin)) entry.max = Math.max(entry.max, Number(pin));
         pins.set(ref, entry);
       }
@@ -64,6 +65,8 @@ export function parseProtel(text) {
     c.connectedPins = p?.count ?? 0;
     c.highestPin = p?.max ?? 0;
     c.nets = p ? [...p.nets].sort() : [];
+    c.pins = p?.pins ?? [];
+    c.units = [];
   }
   return { format, components, nets };
 }
@@ -116,6 +119,8 @@ export function parseKicad(text) {
       fields,
       dnp: props.has('dnp'),
       offBoard: props.has('exclude_from_board'),
+      // The pins of each unit: for a resistor array, the two ends of each element.
+      units: items(one(comp, 'units'), 'unit').map((u) => items(one(u, 'pins'), 'pin').map((x) => val(x, 'num'))),
     });
   }
   if (!components.length) throw new Error('No components found in the KiCad netlist.');
@@ -127,9 +132,10 @@ export function parseKicad(text) {
     for (const node of items(net, 'node')) {
       const ref = val(node, 'ref');
       const pin = val(node, 'pin');
-      const entry = pins.get(ref) ?? { count: 0, max: 0, nets: new Set() };
+      const entry = pins.get(ref) ?? { count: 0, max: 0, nets: new Set(), pins: [] };
       entry.count++;
       entry.nets.add(name);
+      entry.pins.push([pin, name]);
       if (/^\d+$/.test(pin)) entry.max = Math.max(entry.max, Number(pin));
       pins.set(ref, entry);
     }
@@ -139,6 +145,7 @@ export function parseKicad(text) {
     c.connectedPins = p?.count ?? 0;
     c.highestPin = p?.max ?? 0;
     c.nets = p ? [...p.nets].sort() : [];
+    c.pins = p?.pins ?? [];
   }
   return { format: 'KiCad', components, nets };
 }
@@ -658,20 +665,25 @@ export function compressRefs(refs) {
       if (pn !== p || nn !== n + (j + 1 - i)) break;
       j++;
     }
-    if (j - i >= 2) out.push(`${sorted[i]}–${sorted[j]}`);
-    else for (let k = i; k <= j; k++) out.push(sorted[k]);
+    // Only a range that reads back as the same designators (C08–C10, not C8 next to C09).
+    const run = sorted.slice(i, j + 1);
+    if (j - i >= 2 && expandRefs(`${sorted[i]}–${sorted[j]}`).join() === run.join()) out.push(`${sorted[i]}–${sorted[j]}`);
+    else out.push(...run);
     i = j + 1;
   }
   return out.join(', ');
 }
 
-// "C1–C3, C5" -> ["C1", "C2", "C3", "C5"]; the inverse of compressRefs.
+// "C1–C3, C5" -> ["C1", "C2", "C3", "C5"]; the inverse of compressRefs. A range
+// repeats its prefix (C1–C3, C1-C3), so a designator with a dash in it, such as an
+// Altium channel's R1-2 or R1-A, stays one part. Zero padding is kept (C08–C10).
 export function expandRefs(text) {
   const out = [];
   for (const token of String(text).split(',').map((t) => t.trim()).filter(Boolean)) {
-    const m = /^(.*?)(\d+)\s*[–-]\s*(?:\1)?(\d+)$/.exec(token);
+    const m = /^(.*?)(\d+)\s*[–-]\s*\1(\d+)$/.exec(token);
     const [from, to] = m ? [Number(m[2]), Number(m[3])] : [];
-    if (m && to >= from && to - from < 10000) for (let n = from; n <= to; n++) out.push(`${m[1]}${n}`);
+    const width = m && m[2].length > 1 && m[2][0] === '0' ? m[2].length : 0;
+    if (m && to >= from && to - from < 10000) for (let n = from; n <= to; n++) out.push(`${m[1]}${String(n).padStart(width, '0')}`);
     else out.push(token);
   }
   return out;
@@ -696,11 +708,91 @@ export function groupLines(classified) {
   return lines;
 }
 
+// Parts whose two ends can be swapped without changing the circuit.
+const TWO_ENDED = new Set(['capacitor', 'mil-capacitor', 'tantalum-maker', 'ceramic-test', 'resistor', 'mil-resistor', 'inductor', 'mil-inductive', 'mil-crystal', 'mil-fuse', 'mil-lamp']);
+// Never proposed: ICs and "Other" parts, whose pins mean too many things, and
+// connectors and sockets, since each serves its own cable or board.
+const NOT_PROPOSED = new Set(['ic', 'fixed', 'mil-connector', 'mil-socket']);
+
+// How a part is wired, for comparing it with others: two parts with the same key go to
+// the same nets pin for pin. Only pins on nets that reach a second part count. The ends
+// of a resistor, capacitor or inductor may be swapped, and a resistor array is compared
+// element by element. Null for a part with fewer than two connected nets.
+function wiringKey(c, model, reach) {
+  const pins = c.pins.filter(([, net]) => reach.get(net).size >= 2);
+  const nets = [...new Set(pins.map(([, net]) => net))].sort();
+  if (nets.length < 2) return null;
+  const netOf = new Map(pins);
+  let key;
+  if (TWO_ENDED.has(model) && c.units.length > 1 && c.units.every((u) => u.length === 2)) {
+    key = ['elements', ...c.units.map((u) => u.map((pin) => netOf.get(pin) ?? '').sort().join('\u0000')).sort()];
+  } else if (TWO_ENDED.has(model) && pins.length === 2) key = ['ends', ...nets];
+  else key = ['pins', ...pins.map(([pin, net]) => `${pin}\u0000${net}`).sort()];
+  return { key: JSON.stringify([model, key]), nets, pins };
+}
+
+// Parts of two ends joined one after another through nets that reach nothing else are
+// a string. Strings between the same two nets, made of the same kinds of part facing
+// the same way, are wired in parallel. Returns [{ nets, strings: [[refs…], …] }].
+function parallelStrings(parts, reach) {
+  const onNet = new Map();
+  for (const p of parts) for (const [, net] of p.pins) (onNet.get(net) ?? onNet.set(net, []).get(net)).push(p);
+  // A net inside a string joins exactly two parts, both of them string parts.
+  const inside = (net) => reach.get(net).size === 2 && onNet.get(net)?.length === 2;
+  const seen = new Set();
+  const found = new Map();
+  for (const start of parts) {
+    if (seen.has(start)) continue;
+    seen.add(start);
+    // Walk out from both ends; each step is [part, the net it is entered from].
+    const walk = (net) => {
+      const steps = [];
+      let from = start;
+      while (inside(net)) {
+        const next = onNet.get(net).find((p) => p !== from);
+        if (next === start || seen.has(next)) return null; // a loop
+        seen.add(next);
+        steps.push([next, net]);
+        from = next;
+        net = next.pins.find(([, n]) => n !== net)[1];
+      }
+      return { steps, end: net };
+    };
+    const left = walk(start.pins[0][1]);
+    const right = walk(start.pins[1][1]);
+    if (!left || !right || !left.steps.length && !right.steps.length || left.end === right.end) continue;
+    // In order from one end to the other, each part with the net on its near side.
+    const other = (p, net) => p.pins.find(([, n]) => n !== net)[1];
+    let chain = [...left.steps.map(([p, net]) => [p, other(p, net)]).reverse(), [start, start.pins[0][1]], ...right.steps];
+    let [a, b] = [left.end, right.end];
+    if (b < a) {
+      [a, b] = [b, a];
+      chain = chain.reverse().map(([p, net]) => [p, other(p, net)]);
+    }
+    // Series order does not matter; which way a diode faces does.
+    const kinds = chain.map(([p, net]) => (TWO_ENDED.has(p.model) ? p.model : `${p.model} from pin ${p.pins.find(([, n]) => n === net)[0]}`)).sort();
+    const key = JSON.stringify([a, b, kinds]);
+    const g = found.get(key) ?? { nets: [a, b], strings: [] };
+    g.strings.push(chain.map(([p]) => p.designator));
+    found.set(key, g);
+  }
+  return [...found.values()].filter((g) => g.strings.length >= 2);
+}
+
 // Parse a netlist and return grouped part lines plus a report.
 export function netlistToParts(text) {
   const parsed = isKicadNetlist(text) ? parseKicad(text) : parseProtel(text);
+  const fitted = parsed.components.filter((c) => !c.offBoard && !c.dnp);
+  // The fitted parts each net reaches; a net that reaches only one part carries nothing.
+  const reach = new Map();
+  for (const c of fitted) for (const [, net] of c.pins) reach.set(net, (reach.get(net) ?? new Set()).add(c.designator));
+  // A designator used twice: the two parts' pins cannot be told apart.
+  const uses = new Map();
+  for (const c of fitted) uses.set(c.designator, (uses.get(c.designator) ?? 0) + 1);
+  const duplicates = [...uses].filter(([, n]) => n > 1).map(([d]) => d);
   const classified = [];
   const parallel = new Map();
+  const stringParts = [];
   const skipped = [];
   const notFitted = [];
   for (const c of parsed.components) {
@@ -711,15 +803,35 @@ export function netlistToParts(text) {
     if (cls.skip) { skipped.push(c.designator); continue; }
     if (c.source) cls.source = Object.fromEntries(Object.entries({ value: c.value, footprint: c.footprint, ...c.source }).filter(([, v]) => v));
     classified.push({ designator: c.designator, cls });
-    // Parts of the same type connected to exactly the same nets are wired in parallel.
-    if (c.nets.length >= 2 && cls.model !== 'fixed' && cls.model !== 'ic') {
-      const pkey = JSON.stringify([cls.model, c.nets]);
-      const pg = parallel.get(pkey) ?? { nets: c.nets, refs: [] };
-      pg.refs.push(c.designator);
-      parallel.set(pkey, pg);
-    }
+    if (NOT_PROPOSED.has(cls.model) || uses.get(c.designator) > 1) continue;
+    // Parts of the same type wired pin for pin to the same nets are in parallel.
+    const w = wiringKey(c, cls.model, reach);
+    if (!w) continue;
+    const pg = parallel.get(w.key) ?? { nets: w.nets, refs: [] };
+    pg.refs.push(c.designator);
+    parallel.set(w.key, pg);
+    if (w.pins.length === 2) stringParts.push({ designator: c.designator, model: cls.model, pins: w.pins });
   }
   const lines = groupLines(classified);
+  const groups = [...parallel.values()].filter((g) => g.refs.length >= 2).map((g) => ({
+    refs: compressRefs(g.refs),
+    nets: g.nets,
+    mode: 'series',
+    need: null,
+    shortPct: null,
+    proposed: `wired in parallel: same part type connected to the same nets (${g.nets.join(', ')})`,
+  }));
+  for (const g of parallelStrings(stringParts, reach)) {
+    groups.push({
+      refs: compressRefs(g.strings.flat()),
+      nets: g.nets,
+      strings: g.strings.map(compressRefs),
+      mode: 'series',
+      need: null,
+      shortPct: null,
+      proposed: `wired in parallel: alike strings of parts in series between the same nets (${g.nets.join(', ')})`,
+    });
+  }
   return {
     format: parsed.format,
     components: parsed.components.length,
@@ -728,14 +840,9 @@ export function netlistToParts(text) {
     skippedCount: skipped.length,
     notFitted: compressRefs(notFitted),
     notFittedCount: notFitted.length,
+    duplicates: compressRefs(duplicates),
+    duplicatesCount: duplicates.length,
     lines,
-    groups: [...parallel.values()].filter((g) => g.refs.length >= 2).map((g) => ({
-      refs: compressRefs(g.refs),
-      nets: g.nets,
-      mode: 'series',
-      need: null,
-      shortPct: null,
-      proposed: `wired in parallel: same part type connected to the same nets (${g.nets.join(', ')})`,
-    })),
+    groups,
   };
 }

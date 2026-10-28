@@ -35,6 +35,8 @@ test('designators as BOMs write them', () => {
   assert.deepEqual(splitDesignators('R1;R2 R5'), ['R1', 'R2', 'R5']);
   assert.deepEqual(splitDesignators(''), []);
   assert.deepEqual(splitDesignators('TA-101, R1 - R2'), ['TA-101', 'R1', 'R2'], 'a dash inside a designator is not a range');
+  assert.deepEqual(splitDesignators('R1-1, R1-2, C1-A'), ['R1-1', 'R1-2', 'C1-A'], 'Altium channel designators are not ranges');
+  assert.deepEqual(splitDesignators('C08-C10'), ['C08', 'C09', 'C10'], 'zero padding is kept');
 });
 
 test('reading a BOM: header after a title row, not-fitted rows, quantity checks', () => {

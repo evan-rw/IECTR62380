@@ -1200,7 +1200,11 @@ $('#netlist-file').addEventListener('change', async (e) => {
   state.parts = result.lines.map((l) => makePart(l.model, l.ref, l.qty, l.params, { inferred: { ...l.inferred }, source: l.source }));
   state.structure = {
     kind: 'block', id: ROOT,
-    children: result.groups.map((g) => ({ kind: 'block', name: `${g.refs} in parallel`, mode: 'series', proposed: g.proposed, nets: g.nets, children: [{ kind: 'leaf', refs: g.refs }] })),
+    children: result.groups.map((g) => ({
+      kind: 'block', name: `${g.refs} in parallel`, mode: 'series', proposed: g.proposed, nets: g.nets,
+      // Parallel strings: one series block per string.
+      children: g.strings ? g.strings.map((refs) => ({ kind: 'block', name: `${refs} in series`, mode: 'series', children: [{ kind: 'leaf', refs }] })) : [{ kind: 'leaf', refs: g.refs }],
+    })),
   };
   if (['Untitled board', 'Example board', ''].includes(state.title)) state.title = file.name.replace(/\.[^.]+$/, '');
   renderAll();
@@ -1210,6 +1214,7 @@ $('#netlist-file').addEventListener('change', async (e) => {
   showReport(`Read ${plural(result.components, 'component')} from “${esc(file.name)}” (${esc(result.format)}, ${plural(result.nets, 'net')}) into ${plural(result.lines.length, 'line')}.
     ${result.skippedCount ? `Skipped ${result.skippedCount} mechanical items (${esc(result.skipped)}).` : ''}
     ${result.notFittedCount ? `Left out ${plural(result.notFittedCount, 'part')} marked do not populate (${esc(result.notFitted)}).` : ''}
+    ${result.duplicatesCount ? `<strong>${plural(result.duplicatesCount, 'designator is', 'designators are')} used more than once</strong> (${esc(result.duplicates)}): those parts are counted but not proposed in blocks, since their connections cannot be told apart. Annotate the schematic again to fix it.` : ''}
     <strong>${plural(board.incomplete, 'line needs', 'lines need')} input</strong> (red, “Missing”) and ${plural(guessed, 'line has', 'lines have')} guessed values (amber, “Guessed”).
     ${result.groups.length ? `Proposed ${plural(result.groups.length, 'block')} of parts wired in parallel under Reliability structure; they count in series until you mark them redundant.` : ''}
     Tick “Only parts that need attention” to work through them.`);

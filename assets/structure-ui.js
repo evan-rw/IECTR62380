@@ -888,7 +888,10 @@ export function mountStructure(section, context) {
         commit();
         say('Marked redundant. Say how many must keep working.');
         return $('#st-need', el.inspector)?.focus();
-      case 'dismiss': return ungroup(n.id);
+      case 'dismiss':
+        // Parallel strings go back to parts in series, not to loose string blocks.
+        ungroupNodes(rt, n.children.filter((c) => rt.nodes.get(c).kind === 'block' && rt.nodes.get(c).mode === 'series'));
+        return ungroup(n.id);
       case 'confirm': n.inferred = {}; inspectorKey = ''; commit(); return say('Confirmed.');
       case 'need-': case 'need+':
         n.need = clamp((n.need ?? members(rt, n.id)) + (btn.dataset.st === 'need+' ? 1 : -1), 1, members(rt, n.id));

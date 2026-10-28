@@ -50,8 +50,9 @@ export function parseDelimited(text) {
 
 // Designators as written in BOMs: "C1, C2", "C1 C2", "C1-C3", "C1–C3", "C1;C2".
 export function splitDesignators(text) {
-  // A dash after a digit is a range (R1-R5, C9 – C11); one inside a name is not (KiCad's TA-101).
-  const tokens = String(text ?? '').replace(/(\d)\s*[–-]\s*(?=[A-Za-z_]*\d)/g, '$1–').split(/[\s,;]+/).filter(Boolean);
+  // A dash between two designators with the same prefix is a range (R1-R5, C9 – C11); one
+  // inside a name is not (KiCad's TA-101, an Altium channel's R1-2 or R1-A).
+  const tokens = String(text ?? '').replace(/(?<![\w-])([A-Za-z_]+)(\d+)\s*[–-]\s*\1(?=\d)/gi, '$1$2–$1').split(/[\s,;]+/).filter(Boolean);
   return tokens.flatMap((t) => expandRefs(t)).map((r) => r.toUpperCase());
 }
 
