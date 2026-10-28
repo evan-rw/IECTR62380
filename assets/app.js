@@ -8,7 +8,7 @@ import { ROOT, sanitizeStructure, migrateGroups, meanTimeToFailure, members as s
 import { evaluateSmt, chipCandidates, flexRisks } from './smt.js';
 import { evaluateBoard, laminateOf, qualityBand } from './pth.js';
 import { LAMINATES, PTH_MODEL, SOURCES_BOARD } from './tablesboard.js';
-import { mountStructure, refreshStructure, currentStructure } from './structure-ui.js';
+import { mountStructure, refreshStructure, currentStructure, resetDiagramView } from './structure-ui.js';
 import { parseBom, bomToParts, mergeBom } from './bom.js';
 import { failureModesFor } from './failuremodes.js';
 import { evaluateCapLife, withLife, lifeInputs, LIFE_KEYS, TECHS, typeTech } from './caplife.js';
@@ -311,7 +311,7 @@ function partHTML(part) {
   const main = model.fields.filter((f) => !f.advanced).map((f) => fieldHTML(part, f, p)).join('');
   const adv = model.fields.filter((f) => f.advanced).map((f) => fieldHTML(part, f, p)).join('');
   return `
-    <article class="part" data-part="${part.id}">
+    <article class="part${part.open ? ' is-open' : ''}" data-part="${part.id}">
       <div class="part-head">
         <div class="ref"><label class="visually-hidden" for="${part.id}-ref">Reference</label>
           <input id="${part.id}-ref" type="text" value="${esc(part.ref)}" data-bind="part" data-id="${part.id}" data-key="ref" autocomplete="off"></div>
@@ -377,17 +377,35 @@ function renderPresets() {
 function renderPhases() {
   $('#phases').innerHTML = state.profile.phases.map((ph, i) => {
     const d = (key) => `data-bind="phase" data-i="${i}" data-key="${key}"`;
-    const num = (key, label, attrs = '') => `<td><input type="number" step="any" inputmode="decimal" ${attrs} aria-label="${label}, phase ${i + 1}" value="${esc(ph[key] ?? '')}" placeholder="—" ${d(key)}></td>`;
+    // t_ac can be negative: no inputmode there, since the iOS decimal keypad has no minus key.
+    const num = (key, label, attrs = '', mode = 'decimal') => `<td><input type="number" step="any"${mode ? ` inputmode="${mode}"` : ''} ${attrs} aria-label="${label}, phase ${i + 1}" value="${esc(ph[key] ?? '')}" placeholder="—" ${d(key)}></td>`;
     return `<tr>
       <td><input type="text" aria-label="Phase ${i + 1} name" value="${esc(ph.name)}" ${d('name')}></td>
-      ${num('tac', 't_ac')}${num('tau', 'τ', 'min="0" max="1"')}${num('n', 'n', 'min="0"')}${num('dT', 'ΔT', 'min="0"')}
-      <td class="check"><input type="checkbox" aria-label="Add a third of the part's temperature rise, phase ${i + 1}"${ph.addRise ? ' checked' : ''} ${d('addRise')}></td>
-      <td><button type="button" class="icon" data-act="del-phase" data-i="${i}" title="Remove phase"${state.profile.phases.length < 2 ? ' disabled' : ''}>✕</button></td>
+      ${num('tac', 't_ac', '', '')}${num('tau', 'τ', 'min="0" max="1"')}${num('n', 'n', 'min="0"')}${num('dT', 'ΔT', 'min="0"')}
+      <td class="check"><label><input type="checkbox" aria-label="Add a third of the part's temperature rise, phase ${i + 1}"${ph.addRise ? ' checked' : ''} ${d('addRise')}></label></td>
+      <td><button type="button" class="icon" data-act="del-phase" data-i="${i}" title="Remove phase" aria-label="Remove phase ${i + 1}"${state.profile.phases.length < 2 ? ' disabled' : ''}>✕</button></td>
     </tr>`;
   }).join('');
   $('#tau-off').value = state.profile.tauOff ?? '';
   $('#preset').value = state.profile.preset ?? '';
   $('#env217f').innerHTML = optionsHTML(ENVIRONMENTS.map((e) => ({ value: e.id, label: e.label })), state.profile.env217f ?? 'GB');
+  renderProfileUndo();
+}
+
+// The last part line removed, for Undo, until the list changes again.
+let removedLine = null;
+function forgetRemoved() {
+  removedLine = null;
+  $('#parts-undo').hidden = true;
+}
+
+// One step back after a preset replaced a hand-made profile: an arrow key on the
+// closed preset list is enough to replace it.
+let undoProfile = null;
+function renderProfileUndo() {
+  const bar = $('#profile-undo');
+  bar.hidden = !undoProfile;
+  bar.innerHTML = undoProfile ? `Loaded a profile from the standard in place of your ${plural(undoProfile.phases.length, 'phase')}. <button type="button" data-act="undo-profile">Undo</button>` : '';
 }
 
 // Part types grouped by method, for the Add part list and each part's type select.
@@ -590,7 +608,7 @@ function lifeRowHTML(r) {
     <td data-cell="role">${select('role', 'Drift is a failure', [{ value: 'default', label: 'Default' }, { value: 'drift', label: 'Yes' }, { value: 'hard', label: 'No' }])}</td>
     <td class="num" data-out="life"></td>
     <td class="num" data-out="fit"></td>
-    <td class="life-acts"><button type="button" class="icon" data-act="life-confirm" data-id="${part.id}" title="Confirm the guessed values" hidden>✓</button>${typeTech(part) ? '' : `<button type="button" class="icon" data-act="life-del" data-id="${part.id}" aria-label="Stop checking ${esc(part.ref)}">✕</button>`}</td>
+    <td class="life-acts"><button type="button" class="icon" data-act="life-confirm" data-id="${part.id}" title="Confirm the guessed values" aria-label="Confirm the guessed values of ${esc(part.ref)}" hidden>✓</button>${typeTech(part) ? '' : `<button type="button" class="icon" data-act="life-del" data-id="${part.id}" aria-label="Stop checking ${esc(part.ref)}">✕</button>`}</td>
   </tr>`;
 }
 
@@ -661,6 +679,8 @@ function updateCapLife(life) {
 }
 
 function renderAll() {
+  undoProfile = null;
+  forgetRemoved();
   renderBoardBar();
   renderPresets();
   renderPhases();
@@ -673,6 +693,53 @@ function renderAll() {
 }
 
 // Recompute everything and refresh outputs without touching the inputs.
+// One part card's figures and field states, from its line's result. Returns whether it has guesses.
+function paintCard(el, comp, result, phases) {
+  const model = MODELS[comp.model];
+  const p = { ...model.defaults, ...comp.params };
+  const guesses = guessCount(comp);
+  el.classList.toggle('needs-input', !result.complete);
+  el.classList.toggle('has-guesses', guesses > 0);
+  $('[data-out="desc"]', el).textContent = model.describe(p);
+  $('[data-out="flags"]', el).innerHTML = [
+    result.missing.length ? `<span class="flag missing">${result.missing.length} missing</span>` : '',
+    !result.missing.length && !result.complete ? '<span class="flag missing">check input</span>' : '',
+    guesses ? `<span class="flag guessed">${guesses} guessed</span>` : '',
+  ].join('');
+  $('[data-out="fit"]', el).innerHTML = !result.complete
+    ? '<span class="bad">Needs input</span>'
+    : `<div class="each">${fmt(result.fit)} FIT</div>${result.qty !== 1 ? `<div class="total">× ${fmt(result.qty)} = ${fmt(result.total)} FIT</div>` : ''}`;
+  $('[data-out="errors"]', el).innerHTML = result.errors.map((e) => `<li>${esc(e)}</li>`).join('');
+  // The calculation is drawn only while it is shown; opening it draws it (see the toggle listener).
+  if (comp.traceOpen) $('[data-out="trace"]', el).innerHTML = traceHTML(result, phases, failureModesFor(comp.model, p));
+  for (const wrap of el.querySelectorAll('[data-field]')) {
+    const key = wrap.dataset.field;
+    const missing = result.missing.includes(key);
+    const guessed = Boolean(comp.inferred?.[key]);
+    wrap.classList.toggle('missing', missing);
+    wrap.classList.toggle('inferred', guessed && !missing);
+    wrap.querySelector('.state-tag').textContent = missing ? 'Missing' : guessed ? 'Guessed' : '';
+    wrap.querySelector('input, select')?.setAttribute('aria-invalid', String(missing));
+    const note = wrap.querySelector('[data-guess-for]');
+    if (note) note.hidden = !guessed;
+    const confirmedNote = wrap.querySelector('[data-confirmed-for]');
+    if (confirmedNote) confirmedNote.hidden = !comp.confirmed?.[key];
+  }
+  for (const f of model.fields) {
+    if (typeof f.help !== 'function') continue;
+    const h = $(`[data-help-key="${f.key}"]`, el);
+    if (h) h.textContent = f.help(p);
+  }
+  return guesses > 0;
+}
+
+// Repaint one card from the figures last computed (opening or closing it changes no figure).
+function repaintPart(part) {
+  const el = document.querySelector(`#parts > [data-part="${part.id}"]`);
+  const item = lastFigures?.board.items.find((it) => it.comp.id === part.id);
+  if (el && item) paintCard(el, part, item.result, lastFigures.board.prof.phases);
+}
+
 function update() {
   const years = isNum(state.years) ? state.years : 0;
   // Capacitor wear-out is added to the lines whose drift counts, before anything is summed.
@@ -684,44 +751,11 @@ function update() {
   $('#profile-problems').innerHTML = problems.map((p) => `<li>${esc(p)}</li>`).join('');
 
   let guessedLines = 0;
+  // One lookup for all the cards: a document query per line grows with lines × page size.
+  const cards = new Map([...document.querySelectorAll('#parts > [data-part]')].map((c) => [c.dataset.part, c]));
   board.items.forEach(({ comp, result }) => {
-    const el = $(`[data-part="${comp.id}"]`);
-    if (!el) return;
-    const model = MODELS[comp.model];
-    const p = { ...model.defaults, ...comp.params };
-    const guesses = guessCount(comp);
-    if (guesses) guessedLines++;
-    el.classList.toggle('needs-input', !result.complete);
-    el.classList.toggle('has-guesses', guesses > 0);
-    $('[data-out="desc"]', el).textContent = model.describe(p);
-    $('[data-out="flags"]', el).innerHTML = [
-      result.missing.length ? `<span class="flag missing">${result.missing.length} missing</span>` : '',
-      !result.missing.length && !result.complete ? '<span class="flag missing">check input</span>' : '',
-      guesses ? `<span class="flag guessed">${guesses} guessed</span>` : '',
-    ].join('');
-    $('[data-out="fit"]', el).innerHTML = !result.complete
-      ? '<span class="bad">Needs input</span>'
-      : `<div class="each">${fmt(result.fit)} FIT</div>${result.qty !== 1 ? `<div class="total">× ${fmt(result.qty)} = ${fmt(result.total)} FIT</div>` : ''}`;
-    $('[data-out="errors"]', el).innerHTML = result.errors.map((e) => `<li>${esc(e)}</li>`).join('');
-    $('[data-out="trace"]', el).innerHTML = traceHTML(result, board.prof.phases, failureModesFor(comp.model, p));
-    for (const wrap of el.querySelectorAll('[data-field]')) {
-      const key = wrap.dataset.field;
-      const missing = result.missing.includes(key);
-      const guessed = Boolean(comp.inferred?.[key]);
-      wrap.classList.toggle('missing', missing);
-      wrap.classList.toggle('inferred', guessed && !missing);
-      wrap.querySelector('.state-tag').textContent = missing ? 'Missing' : guessed ? 'Guessed' : '';
-      wrap.querySelector('input, select')?.setAttribute('aria-invalid', String(missing));
-      const note = wrap.querySelector('[data-guess-for]');
-      if (note) note.hidden = !guessed;
-      const confirmedNote = wrap.querySelector('[data-confirmed-for]');
-      if (confirmedNote) confirmedNote.hidden = !comp.confirmed?.[key];
-    }
-    for (const f of model.fields) {
-      if (typeof f.help !== 'function') continue;
-      const h = $(`[data-help-key="${f.key}"]`, el);
-      if (h) h.textContent = f.help(p);
-    }
+    const el = cards.get(comp.id);
+    if (el && paintCard(el, comp, result, board.prof.phases)) guessedLines++;
   });
 
   updateCapLife(life);
@@ -778,7 +812,7 @@ function update() {
   const boundNote = partial ? `<div class="sub">Lower bound: ${leftOut} left out</div>` : '';
   // The spreadsheet reports these same figures.
   lastFigures = { board, life, smt, pcb, total, sum: board.total + wearFit, R, mtbf, redundancy, partial, leftOut, pieces, warn, guessedLines };
-  $('#summary').innerHTML = `<div class="tiles${partial ? ' partial' : ''}">
+  setHTML($('#summary'), `<div class="tiles${partial ? ' partial' : ''}">
     <div class="tile"><div class="label">${redundancy ? `Board failure rate, average over ${fmt(years)} years` : 'Board failure rate'}</div><div class="value">${ge}${fmt2(total)} FIT</div><div class="sub">${fmt(pieces)} pieces in ${state.parts.length} lines${redundancy ? ', with redundancy' : ''}</div>${boundNote}</div>
     <div class="tile bounded"><div class="label">${redundancy ? 'Mean time to failure' : 'MTBF'}</div><div class="value">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf)} h` : '—'}</div><div class="sub">${Number.isFinite(mtbf) ? `${le}${fmt2(mtbf / 8760)} years` : 'no failure rate yet'}</div></div>
     <div class="tile bounded"><div class="label">Survival over ${fmt(years)} years</div><div class="value">${le}${pct(R)}</div><div class="sub">${ge}${fmt2(1000 * (1 - R))} failures per 1000 boards</div></div>
@@ -791,11 +825,11 @@ function update() {
     ? 'The circuit board counts through its weakest plated hole size.'
     : 'The bare circuit board is not included unless its plated holes are checked under Circuit board.'}${life.rows.length
     ? ' Aluminium electrolytic capacitors include their wear-out only where drift is a failure (Electrolytic capacitor life).' : ''}${flex.length
-    ? ` Flex cracking of ${esc(flexText(flex))}, ceramic chips 1210 or larger, is not counted; see Surface-mount solder joints.` : ''} Anything not in the list is not included.</p>`;
+    ? ` Flex cracking of ${esc(flexText(flex))}, ceramic chips 1210 or larger, is not counted; see Surface-mount solder joints.` : ''} Anything not in the list is not included.</p>`);
 
   const sum = board.total + wearFit;
   const sorted = [...board.items].sort((a, b) => b.result.total - a.result.total || Number(a.result.complete) - Number(b.result.complete));
-  $('#results').innerHTML = sorted.length
+  setHTML($('#results'), sorted.length
     ? sorted.map(({ comp, result }, i) => {
       const model = MODELS[comp.model];
       // The largest contributor gets a small flame in the stylesheet.
@@ -808,11 +842,20 @@ function update() {
       + (smtFit ? `<tr class="smt-row"><td>Solder joints</td><td class="opt">Surface mount, weakest link: ${esc(smt.worst.device.label || 'unnamed device')}</td><td></td><td class="opt"></td><td class="num">${fmt(smtFit)}</td><td class="num">${sum > 0 ? `${((100 * smtFit) / sum).toFixed(1)}%` : '—'}</td></tr>` : '')
       + (redundancy ? `<tr><td colspan="4">Sum of part rates (all in series)</td><td class="num">${fmt(sum)}</td><td class="num">100%</td></tr>` : '')
       + `<tr><td><strong>${redundancy ? `Board, with redundancy (average over ${fmt(years)} years)` : 'Board'}</strong></td><td class="opt"></td><td></td><td class="opt"></td><td class="num"><strong>${fmt(total)}</strong></td><td class="num">${redundancy ? '' : '100%'}</td></tr>`
-    : '<tr><td colspan="6">No parts yet.</td></tr>';
+    : '<tr><td colspan="6">No parts yet.</td></tr>');
 }
 
 // ---------------------------------------------------------------------------
 // Files
+
+// Write markup only when it changed: the summary is a live region, re-announced on every write,
+// and rewriting the results table drops a selection in it.
+const lastHTML = new WeakMap();
+function setHTML(el, html) {
+  if (lastHTML.get(el) === html) return;
+  lastHTML.set(el, html);
+  el.innerHTML = html;
+}
 
 function download(name, type, text) {
   const a = document.createElement('a');
@@ -962,13 +1005,15 @@ document.addEventListener('input', (e) => {
   const el = e.target;
   const bind = el.dataset?.bind;
   if (!bind || el.tagName === 'SELECT' || el.type === 'checkbox') return;
-  if (bind === 'title') state.title = el.value;
-  else if (bind === 'years') state.years = numOrNull(el.value);
+  // The name feeds no figure: save it without recomputing the board.
+  if (bind === 'title') { state.title = el.value; save(); return; }
+  if (bind === 'years') state.years = numOrNull(el.value);
   else if (bind === 'tauOff') state.profile.tauOff = numOrNull(el.value);
   else if (bind === 'phase') {
     const ph = state.profile.phases[Number(el.dataset.i)];
     ph[el.dataset.key] = el.dataset.key === 'name' ? el.value : numOrNull(el.value);
     if (el.dataset.key !== 'name') markCustomProfile();
+    if (undoProfile) { undoProfile = null; renderProfileUndo(); }
   } else if (bind === 'pcb') {
     const key = el.dataset.key;
     if (key.startsWith('custom.')) state.pcb.custom[key.slice(7)] = numOrNull(el.value);
@@ -1033,7 +1078,9 @@ document.addEventListener('change', (e) => {
     state.profile.env217f = el.value;
   } else if (bind === 'preset') {
     if (!el.value) return;
+    const before = state.profile;
     state.profile = presetProfile(el.value, state.profile.env217f);
+    if (before.preset == null) undoProfile = before;
     renderPhases();
   } else if (bind === 'phase' && el.type === 'checkbox') {
     state.profile.phases[Number(el.dataset.i)].addRise = el.checked;
@@ -1065,7 +1112,14 @@ document.addEventListener('toggle', (e) => {
   const el = e.target;
   if (el.tagName !== 'DETAILS' || !el.dataset.openKey) return;
   const part = findPart(el.dataset.id);
-  if (part) { part[el.dataset.openKey] = el.open; save(); }
+  if (!part) return;
+  part[el.dataset.openKey] = el.open;
+  save();
+  if (el.dataset.openKey === 'traceOpen' && el.open && lastFigures) {
+    const item = lastFigures.board.items.find((it) => it.comp.id === part.id);
+    const model = MODELS[part.model];
+    if (item) $('[data-out="trace"]', el).innerHTML = traceHTML(item.result, lastFigures.board.prof.phases, failureModesFor(part.model, { ...model.defaults, ...part.params }));
+  }
 }, true);
 
 document.addEventListener('click', (e) => {
@@ -1073,10 +1127,13 @@ document.addEventListener('click', (e) => {
   if (!btn) return;
   const act = btn.dataset.act;
   const part = btn.dataset.id ? findPart(btn.dataset.id) : null;
+  // Set by an action whose button the redraw below replaces: where the focus goes next.
+  let refocus = null;
   const replaceBoard = (next) => {
     if (state.parts.length && !confirm('Replace the current board? Export it first if you want to keep it.')) return;
     state = next;
     $('#import-report').hidden = true;
+    resetDiagramView();
     renderAll();
     save();
   };
@@ -1091,19 +1148,28 @@ document.addEventListener('click', (e) => {
       renderPcb();
       $(`#pcb-holes [data-hole="${state.pcb.holes.length - 1}"] input`)?.focus();
       break;
-    case 'pcb-del':
-      state.pcb.holes.splice(Number(btn.dataset.i), 1);
+    case 'pcb-del': {
+      // Focus stays in the table: the row now in that place, the last row, or Add.
+      const i = Number(btn.dataset.i);
+      state.pcb.holes.splice(i, 1);
       renderPcb();
+      const dels = document.querySelectorAll('#pcb-holes [data-act="pcb-del"]');
+      (dels[i] ?? dels[dels.length - 1] ?? $('[data-act="pcb-add"]')).focus();
       break;
+    }
     case 'smt-add':
       state.smt.devices.push({ label: '', lead: null, body: null, d: null, h: null, rise: null, inferred: {} });
       renderSmt();
       $(`#smt-devices [data-smt="${state.smt.devices.length - 1}"] input`)?.focus();
       break;
-    case 'smt-del':
-      state.smt.devices.splice(Number(btn.dataset.i), 1);
+    case 'smt-del': {
+      const i = Number(btn.dataset.i);
+      state.smt.devices.splice(i, 1);
       renderSmt();
+      const dels = document.querySelectorAll('#smt-devices [data-act="smt-del"]');
+      (dels[i] ?? dels[dels.length - 1] ?? $('[data-act="smt-add"]')).focus();
       break;
+    }
     case 'smt-chips': {
       // One row per chip size and kind; rows already there keep what the user entered.
       const found = chipCandidates(state.parts);
@@ -1126,11 +1192,19 @@ document.addEventListener('click', (e) => {
       part.life = { ...part.life, confirmed: { ...part.life?.confirmed, ...inferred } };
       for (const k of Object.keys(inferred)) part.life[k] = values[k];
       lifeShown = null;
+      refocus = () => $(`#life-lines [data-life="${part.id}"] select, #life-lines [data-life="${part.id}"] input`)?.focus();
       break;
     }
-    case 'life-del':
+    case 'life-del': {
+      const i = [...document.querySelectorAll('#life-lines tr[data-life]')].indexOf(btn.closest('tr'));
       part.life = { ...part.life, listed: false };
+      refocus = () => {
+        const rows = document.querySelectorAll('#life-lines tr[data-life]');
+        const row = rows[i] ?? rows[rows.length - 1];
+        ((row && $('select, input', row)) ?? $('#life-add')).focus();
+      };
       break;
+    }
     case 'dismiss-report': $('#import-report').hidden = true; return;
     case 'export-json': download(`${fileBase()}.iec62380.json`, 'application/json', JSON.stringify(exportable(state), null, 2)); return;
     case 'export-csv': download(`${fileBase()}.csv`, 'text/csv', boardCSV()); return;
@@ -1139,16 +1213,28 @@ document.addEventListener('click', (e) => {
       state.profile.phases.push({ name: `Phase ${state.profile.phases.length + 1}`, tac: 25, tau: 0, n: 0, dT: 0, addRise: false });
       markCustomProfile();
       renderPhases();
+      $(`#phases [data-i="${state.profile.phases.length - 1}"][data-key="name"]`)?.select();
+      $(`#phases [data-i="${state.profile.phases.length - 1}"][data-key="name"]`)?.focus();
       break;
-    case 'del-phase':
-      state.profile.phases.splice(Number(btn.dataset.i), 1);
+    case 'del-phase': {
+      const i = Number(btn.dataset.i);
+      state.profile.phases.splice(i, 1);
       markCustomProfile();
       renderPhases();
+      // Focus stays in the table: the remove button now in that place, or Add phase.
+      const next = $(`#phases [data-act="del-phase"][data-i="${Math.min(i, state.profile.phases.length - 1)}"]`);
+      (next && !next.disabled ? next : $('[data-act="add-phase"]')).focus();
+      break;
+    }
+    case 'undo-profile':
+      if (undoProfile) { state.profile = undoProfile; undoProfile = null; renderPhases(); }
+      $('#preset').focus();
       break;
     case 'add-part': {
       const model = $('#add-model').value;
       const p = makePart(model, nextRef(model), 1, {}, { open: true });
       state.parts.push(p);
+      forgetRemoved();
       renderParts();
       const ref = $(`#${p.id}-ref`);
       ref?.scrollIntoView({ block: 'nearest' });
@@ -1156,35 +1242,63 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 'toggle':
+      // Opening or closing a card changes no figure: redraw that card only.
       part.open = !part.open;
       rerenderPart(part);
+      repaintPart(part);
       $(`[data-act="toggle"][data-id="${part.id}"]`)?.focus();
-      break;
+      save();
+      return;
     case 'confirm-guesses':
       part.confirmed = { ...part.confirmed, ...part.inferred };
       part.inferred = {};
       rerenderPart(part);
+      $(`[data-act="toggle"][data-id="${part.id}"]`)?.focus();
       break;
     case 'split': {
       const singles = expandRefs(part.ref).map((ref) => ({ ...clone(part), id: newId(), ref, qty: 1, open: false }));
       state.parts.splice(state.parts.indexOf(part), 1, ...singles);
+      forgetRemoved();
       renderParts();
+      $(`[data-act="toggle"][data-id="${singles[0].id}"]`)?.focus();
       break;
     }
     case 'dup': {
       const copy = { ...clone(part), id: newId(), ref: `${part.ref} copy` };
       state.parts.splice(state.parts.indexOf(part) + 1, 0, copy);
+      forgetRemoved();
       renderParts();
+      $(`#${copy.id}-ref`)?.select();
+      $(`#${copy.id}-ref`)?.focus();
       break;
     }
-    case 'del':
-      state.parts.splice(state.parts.indexOf(part), 1);
+    case 'del': {
+      // Removed at once, with Undo offered in its place.
+      const i = state.parts.indexOf(part);
+      state.parts.splice(i, 1);
+      removedLine = { part, index: i };
+      const model = MODELS[part.model];
+      $('#parts-undo').innerHTML = `Removed <b>${esc(part.ref)}</b> (${esc(model.describe({ ...model.defaults, ...part.params }))}). <button type="button" data-act="undo-del">Undo</button>`;
+      $('#parts-undo').hidden = false;
       renderParts();
+      const near = state.parts[i] ?? state.parts[i - 1];
+      (near ? $(`[data-act="toggle"][data-id="${near.id}"]`) : $('#add-model'))?.focus();
       break;
+    }
+    case 'undo-del': {
+      if (!removedLine) return;
+      const back = removedLine.part;
+      state.parts.splice(Math.min(removedLine.index, state.parts.length), 0, back);
+      forgetRemoved();
+      renderParts();
+      $(`[data-act="toggle"][data-id="${back.id}"]`)?.focus();
+      break;
+    }
     default: return;
   }
   save();
   update();
+  refocus?.();
 });
 
 $('#import-file').addEventListener('change', async (e) => {
@@ -1196,6 +1310,7 @@ $('#import-file').addEventListener('change', async (e) => {
     if (state.parts.length && !confirm(`Replace the current board with “${board.title}”?`)) return;
     state = board;
     $('#import-report').hidden = true;
+    resetDiagramView();
     renderAll();
     save();
     if (skipped.length) alert(`Skipped ${skipped.length} part(s) of unknown type: ${[...new Set(skipped)].join(', ')}`);
@@ -1226,6 +1341,7 @@ $('#netlist-file').addEventListener('change', async (e) => {
     })),
   };
   if (['Untitled board', 'Example board', ''].includes(state.title)) state.title = file.name.replace(/\.[^.]+$/, '');
+  resetDiagramView();
   renderAll();
   save();
   const board = computeBoard({ profile: state.profile, components: state.parts });
@@ -1264,6 +1380,7 @@ $('#bom-file').addEventListener('change', async (e) => {
     state.parts = result.lines.map((l) => makePart(l.model, l.ref, l.qty, l.params, { inferred: { ...l.inferred }, source: l.source }));
     state.structure = { kind: 'block', id: ROOT, children: [] };
     if (['Untitled board', 'Example board', ''].includes(state.title)) state.title = file.name.replace(/\.[^.]+$/, '');
+    resetDiagramView();
     renderAll();
     save();
     const board = computeBoard({ profile: state.profile, components: state.parts });

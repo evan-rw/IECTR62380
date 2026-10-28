@@ -6,9 +6,9 @@
 
 import {
   ROOT, REST, buildStructure, serializeStructure, evaluateStructure, reindex, isAncestor, topLevel, members, label,
-  groupNodes, ungroupNodes, moveNodes, splitLeaves, reorderNode, selectRefs,
+  groupNodes, ungroupNodes, moveNodes, splitLeaves, reorderNode, selectRefs, pieces,
 } from './structure.js';
-import { compressRefs } from './netlist.js';
+import { compressRefs, expandRefs } from './netlist.js';
 import { suggestedShortShare } from './failuremodes.js';
 import { esc } from './html.js';
 
@@ -30,8 +30,17 @@ let focusId = ROOT;
 let anchor = null;
 let visible = [];
 let match = new Set();
+// Collapsed blocks that hold a Find match, so the match shows without opening them.
+let matchIn = new Set();
 let inspectorKey = '';
 let pendingSelection = null;
+// The diagram's size, kept by its ResizeObserver: reading it while drawing would force a
+// layout of the whole page right after the tree was rebuilt.
+let pane = null;
+// What the diagram holds, so an identical redraw (a selection, a keystroke elsewhere) is skipped.
+let lastMarkup = '';
+// A redraw skipped while the diagram is hidden behind the Tree tab on a phone.
+let diagramDirty = false;
 
 // ---------------------------------------------------------------------------
 // Refresh and commit
@@ -145,11 +154,23 @@ function outdent() {
   move(selection.has(focusId) ? [...selection] : [focusId], p === REST ? ROOT : rt.parent.get(p) ?? ROOT);
 }
 
+// Select what Find names, show it and put the focus on it, so P or S comes next. No commit:
+// rebuilding would put "Everything else" back as whole lines and drop the parts split off.
 function selectMatches() {
   const found = selectRefs(rt, el.find.value);
   if (!found.ids.length) return say('No parts match.');
   match = new Set();
-  commit(found.ids);
+  matchIn = new Set();
+  // The parts split off are new nodes: work out their figures before drawing them.
+  ev = evaluateStructure(rt, lastYears);
+  selection = new Set(found.ids);
+  [anchor] = found.ids;
+  [focusId] = found.ids;
+  for (const id of found.ids) for (let p = rt.parent.get(id); p; p = rt.parent.get(p)) rt.nodes.get(p).expanded = true;
+  render(true);
+  const row = document.getElementById(`st-t-${focusId}`);
+  row?.focus();
+  row?.scrollIntoView?.({ block: 'nearest' });
   say(`Selected ${plural(found.count, 'part')}${found.unknown.length ? `; not on the board: ${found.unknown.join(', ')}` : ''}. Press P to group them as parallel, S as series.`);
 }
 
@@ -179,7 +200,8 @@ function rowHTML(n, level) {
   const isBlock = n.kind === 'block';
   const kids = isBlock && n.children.length > 0;
   const sel = selection.has(n.id);
-  const cls = ['st-row', isBlock ? 'blockrow' : 'leafrow', n.proposed ? 'proposed' : '', sel ? 'sel' : '', st.inRed ? 'inred' : '', match.has(n.id) ? 'match' : ''].join(' ');
+  const cls = ['st-row', isBlock ? 'blockrow' : 'leafrow', n.proposed ? 'proposed' : '', sel ? 'sel' : '', st.inRed ? 'inred' : '', match.has(n.id) ? 'match' : '',
+    isBlock && !n.expanded && matchIn.has(n.id) ? 'has-match' : ''].join(' ');
   const line = lineOf(n);
   const name = isBlock
     ? `<span class="st-nm">${esc(n.id === REST ? `Everything else, in series (${st.pieces})` : n.id === ROOT ? 'Board' : label(rt, n.id))}</span>`
@@ -329,7 +351,11 @@ let view = { k: 1, x: 20, y: 20 };
 let fitted = false;
 let lassoMode = false;
 const geo = new Map();
-const wrapWidth = () => Math.max(400, (el.svg.clientWidth || 640) / 0.8);
+function paneSize() {
+  if (!pane) pane = { w: el.svg.clientWidth, h: el.svg.clientHeight };
+  return pane;
+}
+const wrapWidth = () => Math.max(400, (paneSize().w || 640) / 0.8);
 
 function lay(id) {
   const n = rt.nodes.get(id);
@@ -422,8 +448,9 @@ function draw(id, L, inRed) {
   const n = rt.nodes.get(id);
   const g = geo.get(id);
   const st = ev.stats.get(id);
-  const sel = selection.has(id) ? ' sel' : '';
-  const m = match.has(id) ? ' match' : '';
+  // Selection and Find marks are classes set by paintMarks(), not part of the markup.
+  const sel = '';
+  const m = '';
   const did = esc(id);
   if (n.kind === 'leaf' || g.collapsed) {
     const leafy = n.kind === 'leaf';
@@ -483,15 +510,29 @@ function draw(id, L, inRed) {
   n.children.forEach((c) => draw(c, L, inRed || red));
 }
 
-function renderDiagram() {
+const diagramHidden = () => el.panes.dataset.tab === 'tree' && typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches;
+function renderDiagram(force = false) {
+  if (!force && diagramHidden()) { diagramDirty = true; return; }
+  diagramDirty = false;
   geo.clear();
   lay(ROOT);
   place(ROOT, 0, 0);
   const L = { frames: [], wires: [], boxes: [], labels: [] };
   draw(ROOT, L, false);
-  el.vp.innerHTML = `${L.frames.join('')}<path class="wire" d="${L.wires.join('')}"/>${L.boxes.join('')}${L.labels.join('')}`;
+  const markup = `${L.frames.join('')}<path class="wire" d="${L.wires.join('')}"/>${L.boxes.join('')}${L.labels.join('')}`;
+  if (markup !== lastMarkup) {
+    el.vp.innerHTML = markup;
+    lastMarkup = markup;
+  }
+  paintMarks();
   applyView();
   if (!fitted) fit(false);
+}
+function paintMarks() {
+  for (const node of el.vp.querySelectorAll('.frame, .st-box')) {
+    node.classList.toggle('sel', selection.has(node.dataset.id));
+    if (node.classList.contains('st-box')) node.classList.toggle('match', match.has(node.dataset.id));
+  }
 }
 
 function deepestBlockAt(lx, ly, exclude = []) {
@@ -566,8 +607,9 @@ function fit(animate) {
 function zoomTo(id) {
   for (let p = rt.parent.get(id); p; p = rt.parent.get(p)) rt.nodes.get(p).expanded = true;
   if (rt.nodes.get(id).kind === 'block') rt.nodes.get(id).expanded = true;
+  if (diagramHidden()) showTab('diagram');
   renderTree();
-  renderDiagram();
+  renderDiagram(true);
   const g = geo.get(id);
   if (!g?.shown) return;
   if (getComputedStyle(el.diagramPane).display === 'none') showTab('diagram');
@@ -669,6 +711,7 @@ function renderMoveTo() {
 function showTab(tab) {
   el.panes.dataset.tab = tab;
   el.section.querySelectorAll('[role="tab"]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+  if (tab === 'diagram' && diagramDirty && rt) renderDiagram(true);
   if (tab === 'diagram') requestAnimationFrame(() => { if (!fitted) fit(false); });
 }
 
@@ -738,7 +781,9 @@ export function mountStructure(section, context) {
     let lastW = 0;
     new ResizeObserver(() => {
       const w = el.svg.clientWidth;
-      if (w && Math.abs(w - lastW) > 40 && rt) { lastW = w; renderDiagram(); fitted = false; }
+      const h = el.svg.clientHeight;
+      if (w && h) pane = { w, h };
+      if (w && Math.abs(w - lastW) > 40 && rt) { lastW = w; lastMarkup = ''; renderDiagram(); fitted = false; }
       if (!fitted && rt) fit(false);
     }).observe(el.svg);
   }
@@ -929,18 +974,27 @@ export function mountStructure(section, context) {
     const q = e.target.value.trim();
     match = new Set();
     if (q) {
-      const want = new Set(q.split(',').map((s) => s.trim().toUpperCase()));
+      const want = new Set(expandRefs(q).map((s) => s.toUpperCase()));
       for (const n of rt.nodes.values()) {
         if (n.kind !== 'leaf' || !n.lineId) continue;
         const line = rt.lines.get(n.lineId);
         if (n.refs.some((r) => want.has(r.toUpperCase())) || line.label.toLowerCase().includes(q.toLowerCase()) || compressRefs(n.refs).toUpperCase().includes(q.toUpperCase())) match.add(n.id);
       }
     }
+    matchIn = new Set();
+    for (const id of match) for (let p = rt.parent.get(id); p; p = rt.parent.get(p)) matchIn.add(p);
+    const parts = [...match].reduce((s, id) => s + pieces(rt, id), 0);
+    say(q ? (match.size ? `${plural(parts, 'part matches', 'parts match')}; Enter selects them.` : 'No parts match.') : '');
     renderTree();
-    renderDiagram();
+    paintMarks();
   });
   el.find.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); selectMatches(); } });
   say('Try: type C1–C3 in Find and press Enter, then P. Or drag a ⠿ handle onto a block.');
+}
+
+// A new board (import, New, example) is framed whole the next time the diagram is drawn.
+export function resetDiagramView() {
+  fitted = false;
 }
 
 // For tests and the page: the current evaluation.

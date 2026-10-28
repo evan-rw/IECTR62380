@@ -61,6 +61,12 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
     await settle();
   };
   const cardFor = (ref) => $$('.part').find((p) => $('[data-key="ref"]', p).value === ref);
+  // A card's calculation is drawn when it is shown, as a user opening "Show the calculation".
+  const calcOf = (card) => {
+    const d = $('details.trace', card);
+    if (!d.open) { d.open = true; d.dispatchEvent(new window.Event('toggle')); }
+    return $('[data-out="trace"]', card);
+  };
 
   // The example board renders complete, with the provenance and safety-case caution up top.
   assert.equal($$('.part').length, 8);
@@ -146,7 +152,7 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   click($('[data-act="add-part"]'));
   assert.deepEqual($$('.field.missing', cardFor('Y1')).map((f) => f.dataset.field), ['freq']);
   typeInto($('[data-key="freq"]', cardFor('Y1')), 10);
-  assert.match($('[data-out="trace"]', cardFor('Y1')).textContent, /0\.013·f\^0\.23/);
+  assert.match(calcOf(cardFor('Y1')).textContent, /0\.013·f\^0\.23/);
   $('#add-model').value = 'mil-relay';
   click($('[data-act="add-part"]'));
   assert.ok(cardFor('K1'), 'relays are numbered K1, K2…');
@@ -249,7 +255,7 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.equal($('[data-confirmed-for="package"]', cardFor('U1')), null);
 
   // The calculation panel lists the part's failure modes from MIL-HDBK-338B.
-  assert.match($('[data-out="trace"]', cardFor('C1–C3')).textContent, /Failure modes of capacitor, ceramic: Short 49% · Change in Value 29% · Open 22%/);
+  assert.match(calcOf(cardFor('C1–C3')).textContent, /Failure modes of capacitor, ceramic: Short 49% · Change in Value 29% · Open 22%/);
 
   // Split turns a grouped line into one line per reference, keeping its values.
   const caps = cardFor('C1–C3');
@@ -367,7 +373,8 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   let under = null;
   document.elementFromPoint = () => under;
   const pointer = (el, type, x, y) => el.dispatchEvent(new window.MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 }));
-  click($('#st-t-rest .st-twisty'));
+  // Open "Everything else" (Find may already have opened it to show its matches).
+  if ($('#st-t-rest').getAttribute('aria-expanded') !== 'true') click($('#st-t-rest .st-twisty'));
   const r1Row = () => $$('#st-tree li[role="treeitem"]').find((li) => $('.st-nm b', li)?.textContent === 'R1');
   // Tree: drag R1 by its handle onto the redundant block.
   pointer($('.st-handle', r1Row()), 'pointerdown', 0, 0);

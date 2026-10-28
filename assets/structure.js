@@ -75,11 +75,33 @@ export function meanTimeToFailure(R) {
   let tMax = 1e4;
   while (R(tMax) > 1e-12 && tMax < 1e15) tMax *= 2;
   if (R(tMax) > 1e-12) return Infinity;
-  const n = 20000;
-  const h = tMax / n;
-  let s = R(0) + R(tMax);
-  for (let i = 1; i < n; i++) s += (i % 2 ? 4 : 2) * R(i * h);
-  return (s * h) / 3;
+  // Adaptive Simpson: each R(t) walks the whole tree, so sample only where the curve
+  // needs it (a few hundred points against a fixed 20 000). Sixteen panels to start, so a
+  // coarse first estimate cannot hide the shape; each panel is refined to a relative 1e-9.
+  const panels = 16;
+  const h = tMax / panels;
+  const f = Array.from({ length: 2 * panels + 1 }, (_, i) => R((i * h) / 2));
+  let coarse = 0;
+  for (let i = 0; i < panels; i++) coarse += (h / 6) * (f[2 * i] + 4 * f[2 * i + 1] + f[2 * i + 2]);
+  const eps = 1e-9 * coarse / panels;
+  const refine = (a, fa, m, fm, b, fb, whole, tol, depth) => {
+    const lm = (a + m) / 2;
+    const rm = (m + b) / 2;
+    const flm = R(lm);
+    const frm = R(rm);
+    const left = ((m - a) / 6) * (fa + 4 * flm + fm);
+    const right = ((b - m) / 6) * (fm + 4 * frm + fb);
+    const diff = left + right - whole;
+    if (depth <= 0 || Math.abs(diff) <= 15 * tol) return left + right + diff / 15;
+    return refine(a, fa, lm, flm, m, fm, left, tol / 2, depth - 1) + refine(m, fm, rm, frm, b, fb, right, tol / 2, depth - 1);
+  };
+  let sum = 0;
+  for (let i = 0; i < panels; i++) {
+    const a = i * h;
+    const whole = (h / 6) * (f[2 * i] + 4 * f[2 * i + 1] + f[2 * i + 2]);
+    sum += refine(a, f[2 * i], a + h / 2, f[2 * i + 1], a + h, f[2 * i + 2], whole, eps, 40);
+  }
+  return sum;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,8 +161,22 @@ export function buildStructure(saved, items, describe = (comp) => comp.ref) {
     rt.nodes.set(id, { id, kind: 'leaf', lineId, refs });
     block.children.push(id);
   };
+  // A saved block without an id (a fresh import) gets one from its place in the build, so
+  // every rebuild gives it the same id and a selection survives until the first save.
+  const taken = new Set();
+  const collect = (b) => {
+    if (typeof b?.id === 'string') taken.add(b.id);
+    if (Array.isArray(b?.children)) b.children.forEach(collect);
+  };
+  collect(saved);
+  let seq = 0;
+  const builtId = () => {
+    let id;
+    do id = `u${++seq}`; while (taken.has(id) || rt.nodes.has(id));
+    return id;
+  };
   const addBlock = (b, forcedId) => {
-    const id = forcedId ?? (typeof b.id === 'string' && b.id && !rt.nodes.has(b.id) && b.id !== REST ? b.id : newBlockId(rt.nodes));
+    const id = forcedId ?? (typeof b.id === 'string' && b.id && !rt.nodes.has(b.id) && b.id !== REST ? b.id : typeof b.id === 'string' && b.id ? newBlockId(rt.nodes) : builtId());
     const node = {
       id, kind: 'block',
       name: typeof b.name === 'string' ? b.name : '',

@@ -239,7 +239,8 @@ kbd {
 
 /* Tables: grid views */
 
-.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; background: var(--window); box-shadow: var(--sunken); padding: 2px; }
+/* position: relative keeps visually hidden header text inside the scroller, so it cannot widen the page. */
+.table-scroll { position: relative; overflow-x: auto; -webkit-overflow-scrolling: touch; background: var(--window); box-shadow: var(--sunken); padding: 2px; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; background: var(--window); }
 th, td { text-align: left; padding: 2px 6px; border: 1px solid var(--grid); vertical-align: middle; }
 th {
@@ -332,7 +333,11 @@ table.trace-table caption { text-align: left; font-weight: bold; padding-bottom:
 
 .part.needs-input { box-shadow: inset 4px 0 0 var(--error), var(--etched); padding-left: 5px; }
 .part.has-guesses:not(.needs-input) { box-shadow: inset 4px 0 0 var(--guess-border), var(--etched); padding-left: 5px; }
-.parts.attention-only .part:not(.needs-input):not(.has-guesses) { display: none; }
+/* An open card stays shown until it is closed, so the key that completes a line does not hide it mid-entry. */
+.undo-bar { margin: 6px 0 0; padding: 2px 6px; background: var(--info-bg); border: 1px solid #000; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.undo-bar[hidden] { display: none; }
+table.phases td.check label { display: flex; align-items: center; justify-content: center; margin: 0; min-height: 22px; }
+.parts.attention-only .part:not(.needs-input):not(.has-guesses):not(.is-open) { display: none; }
 
 .guess-bar { margin: 8px 0 0; color: #4d4300; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .source-line { margin: 0 0 8px; font-size: 11px; color: var(--text-2); overflow-wrap: anywhere; }
@@ -467,9 +472,10 @@ details.fm-details > summary { margin: 4px 0 6px; }
 .st-grow { flex: 1 1 auto; }
 .st-pane-tip { color: var(--text-2); font-size: 11px; }
 .st-pane-head input[type="search"] { width: auto; min-width: 0; }
-.st-tree-pane { flex: 1 1 auto; min-height: 200px; }
+/* The tree takes what the side panel leaves, so the panel is not squeezed. */
+.st-tree-pane { flex: 1 1 0; min-height: 200px; }
 .st-tree-scroll { overflow: auto; flex: 1 1 auto; padding: 2px; background: var(--window); box-shadow: var(--sunken); }
-.st-inspector { flex: 0 1 auto; max-height: 45%; overflow: auto; padding: 8px 10px; box-shadow: var(--etched); }
+.st-inspector { flex: 0 0 auto; max-height: 62%; overflow: auto; padding: 8px 10px; box-shadow: var(--etched); }
 .st-inspector h3 { margin: 0 0 6px; }
 .st-diagram-pane { height: var(--st-h); }
 
@@ -483,6 +489,7 @@ li[role="treeitem"]:focus-visible > .st-row { outline: 1px dotted #000; outline-
 .st-row.sel .muted, .st-row.sel .st-fit { color: var(--select-text); }
 .st-row.drop { outline: 2px solid var(--line); outline-offset: -2px; background: #dce8ff; }
 .st-row.match .st-nm { text-decoration: underline 2px #e0a000; }
+.st-row.has-match .st-nm { text-decoration: underline dotted 2px #e0a000; }
 .st-row.proposed .st-nm { font-style: italic; }
 .st-row.inred .st-fit { color: var(--gray-text); }
 .st-handle { cursor: grab; color: var(--gray-text); touch-action: none; user-select: none; text-align: center; font-size: 13px; line-height: 1; padding: 3px 0; }
@@ -573,8 +580,19 @@ body.st-dragging, body.st-dragging * { cursor: grabbing !important; user-select:
 @media (max-width: 760px) {
   body { font-size: 13px; }
   .app { margin: 0; box-shadow: none; }
-  input[type="text"], input[type="number"], input[type="search"], select { font-size: 16px; min-height: 30px; }
-  button { min-height: 30px; }
+  /* Finger-sized controls (40 px), in the same bevelled look. */
+  input[type="text"], input[type="number"], input[type="search"], select { font-size: 16px; min-height: 40px; }
+  button { min-height: 40px; }
+  button.icon { min-width: 40px; }
+  .check-label { min-height: 40px; }
+  input[type="checkbox"], input[type="checkbox"]:checked { width: 20px; height: 20px; background-size: 20px 20px; }
+  .site-nav a { display: inline-flex; align-items: center; min-height: 40px; }
+  /* The title bar's "?" keeps its look; an invisible margin makes it a 40 px target. */
+  .caption-btn { position: relative; }
+  .caption-btn::after { content: ''; position: absolute; inset: -13px -6px -13px -18px; }
+  details > summary { padding: 11px 0; }
+  button.link { padding: 13px 6px; margin: -13px -4px; }
+  .help, .guess, .desc, .flag, .state-tag, .unit { font-size: 12px; }
   .board-bar { grid-template-columns: 1fr; }
   .field.narrow { max-width: none; }
   .panel-head .field.inline { flex-direction: column; align-items: stretch; width: 100%; gap: 2px; }
@@ -585,7 +603,7 @@ body.st-dragging, body.st-dragging * { cursor: grabbing !important; user-select:
     gap: 6px;
   }
   .part-fit .each { white-space: nowrap; }
-  .part-actions { gap: 2px; }
+  .part-actions { gap: 8px; }
   .part-head > .ref { grid-area: ref; }
   .part-head > .part-kind { grid-area: kind; }
   .part-head > .qty { grid-area: qty; }
@@ -605,9 +623,27 @@ body.st-dragging, body.st-dragging * { cursor: grabbing !important; user-select:
   .st-diagram-pane { order: 2; height: 62vh; }
   .st-inspector { order: 3; max-height: none; }
   .st-panes[data-tab="tree"] .st-diagram-pane, .st-panes[data-tab="diagram"] .st-tree-pane { display: none; }
-  .st-row { grid-template-columns: 14px 13px minmax(0, 1fr) 46px; padding-left: calc(4px + var(--lvl) * 11px); }
+  /* No drag handle on a phone (Move to… does the job); the expand box gets a 40 px hit area. */
+  .st-handle { display: none; }
+  .st-row { grid-template-columns: 40px minmax(0, 1fr) 46px; min-height: 40px; padding-top: 0; padding-bottom: 0; padding-left: calc(4px + var(--lvl) * 11px); }
+  .st-twisty { align-self: stretch; display: flex; align-items: center; justify-content: center; }
+  .st-tabs [role="tab"] { min-width: 88px; }
+  .st-kn button { min-width: 40px; }
   .st-row .st-bar { display: none; }
   .st-nm { order: 1; flex-basis: 100%; }
   .st-main > :not(.st-nm) { order: 2; }
   .st-pane-tip { display: none; }
+
+  /* Wide tables keep each row's name in view while scrolled sideways, and selects show their words. */
+  :is(table.phases, table.smt-devices) th:first-child, :is(table.phases, table.smt-devices) td:first-child { position: sticky; left: 0; z-index: 1; box-shadow: 1px 0 0 var(--shadow); }
+  :is(table.phases, table.smt-devices) td:first-child { background: var(--window); }
+  :is(table.phases, table.smt-devices) th:first-child { background-color: var(--face); z-index: 2; }
+  table.smt-devices tr.worst td:first-child { background: #ffe8d8; }
+  table.phases td:first-child { min-width: 128px; }
+  table.smt-devices td:first-child { min-width: 128px; max-width: 128px; }
+  table.life-lines td:first-child { min-width: 110px; max-width: 110px; }
+  table.smt-devices select, table.life-lines select { min-width: 108px; }
+  .profile-foot .field.inline { flex-direction: column; align-items: stretch; width: 100%; gap: 2px; }
+  .profile-foot .field.inline label { white-space: normal; }
+  table.phases td.check label { min-width: 40px; min-height: 40px; }
 }
