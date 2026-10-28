@@ -9,6 +9,7 @@ import {
   DISCRETE_PACKAGES, DIODES, TRANSISTORS, CAPACITORS, RESISTORS, INDUCTORS, MISSION_PROFILES,
 } from './tables.js';
 import { MODELS_217F } from './models217f.js';
+import { MODELS_MAKER } from './modelsmaker.js';
 
 // Coefficient of the solder-joint / package thermal-cycling term.
 export const PACKAGE_K = 2.75e-3;
@@ -457,7 +458,7 @@ export const MODELS = {
   vendor: {
     label: 'Part with a vendor failure rate, rescaled',
     group: 'Vendor data',
-    clause: 'vendor data',
+    clause: 'Vendor data',
     status: 'Rescales a manufacturer\'s FIT to this mission profile. "One temperature" uses the Arrhenius law, per operating hour, weighted by working time. "IEC 62380 FIT report" rescales the die and package terms with the IEC TR 62380 formulas published in TI SLOA294A; no coefficient tables are involved.',
     defaults: { method: 'arrhenius', note: '', fit: null, tref: null, ea: null, dieFit: null, pkgFit: null, eosFit: 0, refProfile: 'auto-motor', refRise: null, tech: 'mos', power: null, rja: null },
     fields: [
@@ -544,7 +545,7 @@ export const MODELS = {
 
   fixed: {
     label: 'Other part (failure rate entered)',
-    clause: '—',
+    clause: 'Entered rate',
     status: 'No model: the failure rate is used as entered.',
     defaults: { fit: null, note: '' },
     fields: [
@@ -563,17 +564,17 @@ export const MODELS = {
 // plated-through-hole boards, crystals, fuses, lamps and optoelectronics.
 for (const m of Object.values(MODELS)) m.group ??= 'IEC TR 62380 approach';
 MODELS.fixed.group = 'Other';
-Object.assign(MODELS, MODELS_217F);
+Object.assign(MODELS, MODELS_217F, MODELS_MAKER);
 export const MODEL_GROUPS = ['IEC TR 62380 approach', 'MIL-HDBK-217F', 'Vendor data', 'Other'];
 
-// "Clause 7" for the 62380 models; 217F models already name their handbook section.
-export const clauseOf = (m) => (m.group === 'MIL-HDBK-217F' ? m.clause : `Clause ${m.clause}`);
+// "Clause 7" for the 62380 models; the others already name their handbook section or source.
+export const clauseOf = (m) => (m.group === 'IEC TR 62380 approach' ? `Clause ${m.clause}` : m.clause);
 
 // Families with no model here yet, under either method.
 export const PENDING_FAMILIES = [
   'Hybrid circuits (62380 clause 6); for the circuit board, failure modes other than plated-hole fatigue, such as conductive anodic filament growth and delamination',
   'Laser diodes, passive optics (62380 clause 9)',
-  'Aluminium solid and polymer capacitors (62380 clauses 10.6, 10.7; film, paper, mica, glass and variable capacitors, composition, power, wirewound and variable resistors, and thermistors use the MIL-HDBK-217F capacitor and resistor models)',
+  'Failure rates for aluminium solid and polymer capacitors (62380 clauses 10.6, 10.7): enter the maker\'s rate; their wear-out is checked under Electrolytic capacitor life. Film, paper, mica, glass and variable capacitors, composition, power, wirewound and variable resistors, and thermistors use the MIL-HDBK-217F capacitor and resistor models',
   'Microwave passives, SAW filters (62380 clause 13)',
   'Keyboards, displays (62380 clauses 15, 17)',
   'Varistors, arrestors (62380 clause 18)',

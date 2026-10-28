@@ -15,6 +15,7 @@
 // the first three lines of each component block.
 
 import { IC_PACKAGES } from './tables.js';
+import { aluminiumKindOf } from './caplife.js';
 
 // ---------------------------------------------------------------------------
 // Parsing
@@ -56,7 +57,7 @@ export function parseProtel(text) {
   }
 
   if (!components.length) {
-    throw new Error('No components found. Export the netlist in Protel or Protel 2 format.');
+    throw new Error('No components found. Export the netlist in KiCad, Protel or Protel 2 format.');
   }
   for (const c of components) {
     const p = pins.get(c.designator);
@@ -65,6 +66,81 @@ export function parseProtel(text) {
     c.nets = p ? [...p.nets].sort() : [];
   }
   return { format, components, nets };
+}
+
+// KiCad's own netlist (Eeschema's default export, an s-expression starting "(export"):
+// each component with its fields, symbol and DNP flag, and every net's nodes.
+function readSexpr(text) {
+  const tokens = text.match(/\(|\)|"(?:[^"\\]|\\.)*"|[^\s()"]+/g) ?? [];
+  let i = 0;
+  const read = () => {
+    const t = tokens[i++];
+    if (t !== '(') return t[0] === '"' ? t.slice(1, -1).replace(/\\(.)/g, '$1') : t;
+    const list = [];
+    while (i < tokens.length && tokens[i] !== ')') list.push(read());
+    i++;
+    return list;
+  };
+  return tokens.length ? read() : null;
+}
+
+export const isKicadNetlist = (text) => /^\s*\(export\b/.test(text.replace(/^\uFEFF/, ''));
+
+export function parseKicad(text) {
+  const root = readSexpr(text.replace(/^\uFEFF/, ''));
+  if (!Array.isArray(root) || root[0] !== 'export') throw new Error('This is not a KiCad netlist.');
+  const items = (list, key) => (list ?? []).filter((x) => Array.isArray(x) && x[0] === key);
+  const one = (list, key) => items(list, key)[0];
+  const val = (list, key) => { const x = one(list, key); return x && typeof x[1] === 'string' ? x[1] : ''; };
+  const components = [];
+  for (const comp of items(one(root, 'components'), 'comp')) {
+    const fields = {};
+    for (const f of items(one(comp, 'fields'), 'field')) {
+      const name = val(f, 'name');
+      if (name) fields[name] = f.find((x, k) => k > 0 && typeof x === 'string') ?? '';
+    }
+    const field = (re) => Object.entries(fields).find(([k]) => re.test(k.replace(/[\s._-]/g, '')))?.[1] ?? '';
+    const mpn = field(/^(MPN|MFRPN|MFRPARTNUMBER|MFRPARTNO|MANUFACTURERPARTNUMBER|MFGPN|PARTNUMBER)$/i);
+    const manufacturer = field(/^(MANUFACTURER|MFR|MFG|MANUFACTURERNAME)$/i);
+    const lib = one(comp, 'libsource');
+    const description = val(comp, 'description') || val(lib, 'description');
+    const props = new Set(items(comp, 'property').map((p) => val(p, 'name')));
+    components.push({
+      designator: val(comp, 'ref'),
+      value: val(comp, 'value'),
+      footprint: val(comp, 'footprint'),
+      // As for a BOM, the part number is read for clues and the manufacturer is not.
+      description: [description, mpn].filter(Boolean).join(' '),
+      source: { description, mpn, manufacturer },
+      symbol: lib ? `${val(lib, 'lib')}:${val(lib, 'part')}` : '',
+      fields,
+      dnp: props.has('dnp'),
+      offBoard: props.has('exclude_from_board'),
+    });
+  }
+  if (!components.length) throw new Error('No components found in the KiCad netlist.');
+  const pins = new Map();
+  let nets = 0;
+  for (const net of items(one(root, 'nets'), 'net')) {
+    nets++;
+    const name = val(net, 'name');
+    for (const node of items(net, 'node')) {
+      const ref = val(node, 'ref');
+      const pin = val(node, 'pin');
+      const entry = pins.get(ref) ?? { count: 0, max: 0, nets: new Set() };
+      entry.count++;
+      entry.nets.add(name);
+      if (/^\d+$/.test(pin)) entry.max = Math.max(entry.max, Number(pin));
+      pins.set(ref, entry);
+    }
+  }
+  for (const c of components) {
+    const p = pins.get(c.designator);
+    c.connectedPins = p?.count ?? 0;
+    c.highestPin = p?.max ?? 0;
+    c.nets = p ? [...p.nets].sort() : [];
+  }
+  return { format: 'KiCad', components, nets };
 }
 
 function parseComponentBlock(block) {
@@ -93,7 +169,7 @@ const PREFIX_MODEL = {
   D: 'diode', CR: 'diode', Z: 'diode', ZD: 'diode', DZ: 'diode', VD: 'diode', TVS: 'diode',
   Q: 'transistor', VT: 'transistor',
   C: 'capacitor', CE: 'capacitor', CT: 'capacitor',
-  R: 'resistor', RN: 'resistor', RA: 'resistor', RP: 'resistor',
+  R: 'resistor', RN: 'resistor', RA: 'resistor', RP: 'resistor', RR: 'resistor',
   L: 'inductor', FB: 'inductor', T: 'inductor',
   // MIL-HDBK-217F models
   K: 'mil-relay', RLY: 'mil-relay', RL: 'mil-relay',
@@ -105,7 +181,53 @@ const PREFIX_MODEL = {
 };
 
 // Parts with no failure rate of their own.
-const MECHANICAL = new Set(['TP', 'MH', 'H', 'FID', 'FD', 'MTG', 'HOLE', 'LOGO', 'MP', 'NT']);
+const MECHANICAL = new Set(['TP', 'MH', 'H', 'FID', 'FD', 'MTG', 'HOLE', 'LOGO', 'MP', 'NT', 'FTG', 'NUT', 'SCREW', 'WASHER', 'STANDOFF', 'SPACER']);
+// Hardware named by its value or footprint, for a designator with no electrical meaning (M702 "M.2 Screw").
+const MECHANICAL_TEXT = /MOUNTING-?HOLE|FIDUCIAL|WASHER|STANDOFF|SPACER|PLATED-?HOLE|TEST-?POINT|\bSCREW\b|\bNUT\b/;
+// Footprints that only a connector or jumper has, whatever the designator (CT101 on a pin header).
+const CONNECTOR_FOOTPRINT = /PIN-?HEADER|PIN-?SOCKET|^CONN|CONNECTOR|TERMINAL-?BLOCK/;
+// An LED footprint: KiCad's LED_SMD:LED_0603…, easyeda's LED-SMD_…, Kingbright's Duo_LED_….
+const LED_FOOTPRINT = /(?:^|[-\s])LED(?:[-\d]|$)/;
+// Part kind from the footprint library and name, for a designator that names none
+// (ABRT_SW101, OSC1, LED_RST101) or the ambiguous X (crystal or connector). KiCad's standard libraries
+// (Resistor_SMD, Crystal, Connector_Dsub, Button_Switch_SMD, …) and most others say it.
+const FOOTPRINT_KINDS = [
+  [CONNECTOR_FOOTPRINT, 'mil-connector'],
+  [/^USB|\sUSB|^DSUB|\sDSUB|^DB-?\d|^JST|^HDR-|^U-?FL/, 'mil-connector'],
+  [LED_FOOTPRINT, 'mil-opto'],
+  [/CRYSTAL|^XTAL|OSCILLATOR|^OSC-/, 'mil-crystal'],
+  [/BUTTON-?SWITCH|^SW-|^KEY-|^BUTTON|\sSW-/, 'mil-switch'],
+  [/^FUSE|\sFUSE|^F\d{4}\b/, 'mil-fuse'],
+  [/^RELAY|\sRELAY/, 'mil-relay'],
+  [/^XFMR|TRANSFORMER/, 'inductor'],
+  [/^RESISTOR|\sRESISTOR|^R-ARRAY|^R-\d{4}|^RESC\d/, 'resistor'],
+  [/^CAPACITOR|\sCAPACITOR|^C-\d{4}|^CP-|^CAPC\d/, 'capacitor'],
+  [/^INDUCTOR|\sINDUCTOR|^L-\d{4}|^INDC\d/, 'inductor'],
+];
+// …from a KiCad symbol (Device:R, Device:LED, Connector_Generic:Conn_01x04, Mechanical:MountingHole)…
+const SYMBOL_KINDS = [
+  [/^MECHANICAL:/, 'mechanical'],
+  [/^CONNECTOR(?:-GENERIC)?(?:-\w+)?:|^JUMPER:/, 'mil-connector'],
+  [/^SWITCH:/, 'mil-switch'],
+  [/^RELAY/, 'mil-relay'],
+  [/^TRANSFORMER|:TRANSFORMER/, 'inductor'],
+  [/:LED/, 'mil-opto'],
+  [/:CRYSTAL|:RESONATOR/, 'mil-crystal'],
+  [/:FUSE/, 'mil-fuse'],
+  [/^DEVICE:R(?:-|$)/, 'resistor'],
+  [/^DEVICE:CP?(?:-|$)/, 'capacitor'],
+  [/^DEVICE:(?:L|FERRITE-BEAD)(?:-|$)/, 'inductor'],
+  [/^DEVICE:D(?:-|$)/, 'diode'],
+  [/^DEVICE:Q-/, 'transistor'],
+];
+// …and from the value, when neither says anything.
+const VALUE_KINDS = [
+  [/^LED|\bLED\b/, 'mil-opto'],
+  [/\d\s*[MK]HZ|^OSC-/, 'mil-crystal'],
+  [/^SW-?PUSH|PUSH-?BUTTON|^SWITCH/, 'mil-switch'],
+  [/^XFMR|TRANSFORMER/, 'inductor'],
+  [/^CONN-|^CONN$|^DB\d+$/, 'mil-connector'],
+];
 
 // Families the calculator does not model yet, for the note on an "Other" part.
 const OTHER_FAMILY = {
@@ -145,12 +267,44 @@ const IC_PIN_PACKAGES = [
   { re: /\bSO-?(\d+)/, id: 'so' }, // digits required, so SOT and SOD don't match
 ];
 
+// IPC-7351 land-pattern names give the pitch first, then sizes in hundredths of a
+// millimetre, then the pin count: SOIC127P600X175-8N is an 8-pin SOIC, not a 127-pin
+// one; QFN50P400X400X80-25N has a 4 × 4 mm body; BGA96C80P9X16_750X1350X120 has 96
+// balls in a 9 × 16 grid on a 7.5 × 13.5 mm body.
+function ipcIcPackage(fp) {
+  let m = /^(?:SOIC|SOP)(\d+)P(\d+)X\d+-(\d+)N?/.exec(fp);
+  if (m) {
+    const [pitch, span] = [Number(m[1]) / 100, Number(m[2]) / 100];
+    return { package: pitch >= 1.2 ? 'so' : span >= 6 ? 'tssop' : 'diag-two-rows', pins: Number(m[3]) };
+  }
+  m = /^(QFN|DFN|SON)\d+P(\d+)X(\d+)(?:X\d+)?-(\d+)N?/.exec(fp);
+  if (m) return { package: m[1] === 'QFN' ? 'diag-four-sides' : 'diag-two-rows', pins: Number(m[4]), body: [Number(m[2]) / 100, Number(m[3]) / 100] };
+  m = /^SOT\d+P\d+X\d+-(\d+)N?/.exec(fp);
+  if (m) return { package: 'diag-two-rows', pins: Number(m[1]) };
+  m = /^BGA(\d+)C\d+P\d+X\d+-(\d+)X(\d+)/.exec(fp);
+  if (m) return { package: 'diag-matrix', pins: Number(m[1]), body: [Number(m[2]) / 100, Number(m[3]) / 100] };
+  return null;
+}
+
 // Guess an IC package (Tables 17a-17b) from the footprint name.
 function guessIcPackage(footprint, highestPin) {
   const fp = fpName(footprint);
   const params = {};
   const inferred = {};
   const why = `from footprint “${footprint}”`;
+  const ipc = ipcIcPackage(fp);
+  if (ipc) {
+    params.package = ipc.package;
+    params.pins = ipc.pins;
+    inferred.package = `${why} (IPC-7351 name)`;
+    inferred.pins = why;
+    if (ipc.body && ipc.package.startsWith('diag')) {
+      [params.bodyW, params.bodyL] = ipc.body;
+      inferred.bodyW = why;
+      inferred.bodyL = why;
+    }
+    return { params, inferred };
+  }
   const body = bodySize(fp);
 
   for (const { re, id } of IC_PIN_PACKAGES) {
@@ -188,7 +342,7 @@ function guessIcPackage(footprint, highestPin) {
     if (row) { params.package = row.id; inferred.package = `${why} (${fmtMm(body[0])} × ${fmtMm(body[1])} mm body)`; } else diagonal('diag-matrix');
   } else if (/QFN|MLF|LGA/.test(fp)) {
     diagonal('diag-four-sides');
-  } else if (/DFN|SON\b|MSOP|VSSOP|SOT-?23|SC-?70|TSOT/.test(fp)) {
+  } else if (/DFN|SON\b|MSOP|VSSOP|SOT-?(?:23|353|363|553|563|583|5|6)\b|SC-?70|SC-?88|TSOT/.test(fp)) {
     diagonal('diag-two-rows');
   }
   return { params, inferred };
@@ -235,6 +389,10 @@ export function parseCapacitance(value) {
 }
 
 const CHIP_SIZE = /(?:^|[^0-9])(0201|0402|0603|0805|1206|1210|1812|2010|2512)(?![0-9])/;
+// IPC-7351 chip names are metric: RESC1608X55N is an 0603 resistor, CAPC1005X55N an 0402 capacitor.
+const IPC_CHIP = /^(?:RES|CAP|IND)C(\d{4})X/;
+const METRIC_CHIP = { '0603': '0201', 1005: '0402', 1608: '0603', 2012: '0805', 3216: '1206', 3225: '1210', 4532: '1812', 5025: '2010', 6332: '2512' };
+const chipOf = (fp) => METRIC_CHIP[IPC_CHIP.exec(fp)?.[1]] ?? CHIP_SIZE.exec(fp)?.[1] ?? null;
 const CHIP_RATING = { '0201': 0.05, '0402': 0.063, '0603': 0.1, '0805': 0.125, '1206': 0.25, '1210': 0.5, '1812': 0.75, '2010': 0.75, '2512': 1 };
 
 function firstMatch(text, rules) {
@@ -247,7 +405,8 @@ const IC_FAMILY_RULES = [
   [/FLASH|\bW25Q|\bMX25|\bS25FL|\bSST2[56]|\b29[FL]\d/, 'mos-eprom'],
   [/\bDDR|SDRAM|\bDRAM/, 'mos-dram'],
   [/\bSRAM/, 'mos-sram-low'],
-  [/\bCPLD|\bMAX\s?[2-9]\d{3}|\bXC95/, 'mos-cpld'],
+  // Altera MAX families are written "MAX 7000" or EPM…; Maxim's MAX3232-style numbers are not CPLDs.
+  [/\bCPLD|\bMAX\s(?:[2-9]\d{3}|II|V|10)\b|\bEPM\d|\bXC95/, 'mos-cpld'],
   [/\bFPGA|\bXC[67]|\bEP[234]C|\bICE40|\bLFE/, 'mos-lca'],
   [/MICROCONTROLLER|MICROPROCESSOR|\bMCU\b|\bCPU\b|\bDSP|\bSTM32|\bSTM8|\bATMEGA|\bATTINY|\bATSAM|\bPIC\d|\bDSPIC|\bMSP430|\bNRF5|\bESP32|\bRP2040|\bLPC\d|\bMK[LV]?\d|\bS32K|\bTMS320/, 'mos-digital'],
   [/\b74(?:HC|HCT|AHC|LVC|LV|AC|ACT|ALVC|AUP|VHC)\d|\bCD4\d{3}/, 'mos-digital'],
@@ -256,9 +415,9 @@ const IC_FAMILY_RULES = [
 const DIODE_RULES = [
   [/\bLED\b/, 'led'],
   [/ZENER|\bBZ[XTV]|\bMMSZ|\bMM3Z|\bPLVA|\bUDZ/, 'zener-lp'],
-  [/\bTVS|\bSM[ABC]J|\bP[46]KE|\bP4SMA|\bSMF\d|\bESD|\bPESD|\bTPD\d|\bSP\d{4}/, 'tvs-lp'],
-  [/\b1N4148|\b1N914|\bBA[SVW]\d|\bBAT\d|\bLL4148/, 'signal'],
-  [/RECTIFIER|\b1N400\d|\b1N540\d|\bS[1-3][A-M]\b|\bUS1|\bES[1-3]|\bSS[1-3]\d|\bMBRS?[1-3]\d|\bB[1-3]\d0\b|\bM[1-7]\b/, 'rectifier-lp'],
+  [/\bTVS|\bSM[ABC]J|\bP[46]KE|\bP4SMA|\bSMF\d|ESD|\bTPD\d|\bSP\d{4}|\bRCLAMP|\bPUSB|\bSM712|\bD\dV\d|TRANSIL/, 'tvs-lp'],
+  [/\b1N4148|\b1N914|\bBA[SVW]\d|\bBAT\d|\bLL4148|SMALL SIGNAL|\bRB5\d\d/, 'signal'],
+  [/RECTIFIER|\b1N400\d|\b1N540\d|\b1N58\d\d|\bB58\d\d|\bS[1-3][A-M]\b|\bUS1|\bES[1-3]|\bSS[1-3]\d|\bMBRS?[1-3]\d|\bB[1-3]\d0\b|\bM[1-7]\b/, 'rectifier-lp'],
 ];
 
 const TRANSISTOR_RULES = [
@@ -290,6 +449,8 @@ const OPTO_RULES = [
 ];
 
 const POWER_PACKAGES = new Set(['to220', 'to247', 'to218', 'd2pak', 'dpak', 'isotop', 'sot32']);
+const SIGNAL_PACKAGES = new Set(['do35', 'do34', 'sod523', 'sod323', 'sod110', 'sot23', 'minimelf', 'micromelf']);
+const RECTIFIER_PACKAGES = new Set(['do41-plastic', 'sma', 'smb', 'smc', 'do220']);
 
 // Turn one netlist component into { model, params, inferred, source, note }
 // or { skip: reason } for mechanical items.
@@ -298,11 +459,25 @@ export function classifyComponent(c) {
   const source = { value: c.value, footprint: c.footprint, description: c.description };
   const text = norm(`${c.value} ${c.description}`);
   const fp = fpName(c.footprint);
+  // The footprint library, e.g. "Capacitor_Tantalum_SMD" in "Capacitor_Tantalum_SMD:CP_EIA-3528-21_Kemet-B".
+  const lib = String(c.footprint ?? '').includes(':') ? norm(String(c.footprint).split(':')[0]) : '';
+  const fpAll = `${lib} ${fp}`.trim();
+  const sym = norm(c.symbol);
   if (MECHANICAL.has(prefix)) return { skip: 'mechanical' };
 
   let model = PREFIX_MODEL[prefix] ?? 'fixed';
   const family = OTHER_FAMILY[prefix];
-  if (model === 'diode' && firstMatch(text, DIODE_RULES) === 'led') model = 'mil-opto';
+  if (!PREFIX_MODEL[prefix]) {
+    const kind = firstMatch(sym, SYMBOL_KINDS) ?? firstMatch(fpAll, FOOTPRINT_KINDS) ?? firstMatch(norm(c.value), VALUE_KINDS);
+    if (kind === 'mechanical') return { skip: 'mechanical' };
+    if (kind) model = kind;
+    // Hardware only when nothing names an electrical part: a DSUB footprint can end in "…MountingHolesOffset9.12mm".
+    else if (MECHANICAL_TEXT.test(`${text} ${fp}`) && !/TERMINAL/.test(`${text} ${fp}`)) return { skip: 'mechanical' };
+  }
+  if (['capacitor', 'resistor', 'inductor', 'diode'].includes(model) && CONNECTOR_FOOTPRINT.test(fp)) model = 'mil-connector';
+  // T is a transformer or a transistor; the part number tells which.
+  if (prefix === 'T' && firstMatch(text, TRANSISTOR_RULES)) model = 'transistor';
+  if (model === 'diode' && (firstMatch(text, DIODE_RULES) === 'led' || LED_FOOTPRINT.test(fpAll) || /:LED/.test(sym))) model = 'mil-opto';
   // Film, mica and trimmer capacitors have no IEC TR 62380 model here: use the 217F one.
   const capStyle = model === 'capacitor' ? firstMatch(`${text} ${fp}`, CAP_217F_RULES) : null;
   if (capStyle) model = 'mil-capacitor';
@@ -314,6 +489,16 @@ export function classifyComponent(c) {
   if (resStyle) model = 'mil-resistor';
   // The IEC TR 62380 inductor model here has no base rates; the 217F one does.
   if (model === 'inductor') model = 'mil-inductive';
+  // Aluminium polymer and hybrid capacitors have no failure-rate model: the maker's
+  // rate is entered, and their wear-out is checked under Electrolytic capacitor life.
+  const alKind = model === 'capacitor' ? aluminiumKindOf(`${text} ${fp}`) : null;
+  if (alKind === 'polymer' || alKind === 'hybrid') model = 'fixed';
+  // Polymer tantalum has no IEC TR 62380 model here: the makers' models, with the choice left to the user.
+  if (model === 'capacitor' && /POLYMER|POSCAP|KO-?CAP/.test(`${text} ${fp}`)) model = 'tantalum-maker';
+  // Niobium oxide (KYOCERA AVX OxiCap): AVX's catalogue model, under the same part type.
+  const nboSeries = /\bNO([JS])[A-EPRTVWY]\d{3}/.exec(`${text} ${fp}`)?.[1];
+  const niobium = model === 'capacitor' && (nboSeries || /NIOB|OXICAP/.test(`${text} ${fp}`));
+  if (niobium) model = 'tantalum-maker';
   const params = {};
   let inferred = {};
   const why = (what) => `from ${what}`;
@@ -327,11 +512,16 @@ export function classifyComponent(c) {
     inferred = { ...inferred, ...pkg.inferred };
   } else if (model === 'diode') {
     Object.assign(params, { type: null, power: null, rja: null, package: null });
-    const type = firstMatch(text, DIODE_RULES);
-    if (type) { params.type = type; inferred.type = why(`“${c.value || c.description}”`); }
+    const type = firstMatch(text, DIODE_RULES) ?? firstMatch(sym, DIODE_RULES);
+    if (type) { params.type = type; inferred.type = why(firstMatch(text, DIODE_RULES) ? `“${[c.value, c.description].filter(Boolean).join(' ')}”` : `the symbol ${c.symbol}`); }
     const pkg = guessDiscretePackage(c.footprint);
     Object.assign(params, pkg.params);
     inferred = { ...inferred, ...pkg.inferred };
+    // A Schottky named only as such: a small-signal or a rectifier part by its package.
+    if (!type && /SCHOTTKY/.test(`${text} ${sym}`) && pkg.params.package) {
+      const sized = SIGNAL_PACKAGES.has(pkg.params.package) ? 'signal' : RECTIFIER_PACKAGES.has(pkg.params.package) ? 'rectifier-lp' : null;
+      if (sized) { params.type = sized; inferred.type = `a Schottky diode in a ${pkg.params.package} package`; }
+    }
   } else if (model === 'transistor') {
     Object.assign(params, { type: null, stress: null, power: null, rja: null, package: null });
     const pkg = guessDiscretePackage(c.footprint);
@@ -351,31 +541,40 @@ export function classifyComponent(c) {
     inferred.style = why(`“${[c.value, c.description, c.footprint].filter(Boolean).join(' ')}”`);
     const cap = parseCapacitance(c.value);
     if (cap != null) { params.capacitance = cap; inferred.capacitance = why(`the value “${c.value}”`); }
+  } else if (model === 'tantalum-maker') {
+    Object.assign(params, { curve: null, v: null });
+    if (niobium) {
+      params.curve = 'avx-nbo';
+      inferred.curve = why(`“${c.value || c.description}”`);
+      params.series = nboSeries ? `NO${nboSeries}` : null;
+      const partNumber = [c.description, c.value, c.footprint].find((x) => x && /NO[JS][A-EPRTVWY]\d{3}/i.test(x));
+      if (nboSeries) inferred.series = why(`the part number in “${partNumber}”`);
+    }
   } else if (model === 'capacitor') {
     params.type = null;
-    const both = `${text} ${fp}`;
-    // Aluminium polymer and solid capacitors have no model here: leave the type to the user.
-    const polymer = /POLYMER|ALUM(?:INUM)?\s+POLY|POLY\s+ALUM|OS-?CON|POSCAP|SP-?CAP/.test(both);
-    const type = polymer ? null : firstMatch(both, [
-      [/TANT|\bTAJ|\bT49\d|\bTPS[A-E]|CASE-?[A-E]\b/, 'tantalum-solid'],
-      [/ELEC|ALUM|\bELCO|CPOL|CP-?RADIAL|\bCAPAE|RADIAL.*POL/, 'aluminium-wet'],
+    const both = `${text} ${fpAll}`;
+    const type = firstMatch(both, [
+      // KiCad's tantalum chips are CP_EIA-3528-21_Kemet-B and the like, in Capacitor_Tantalum_SMD.
+      [/TANT|\bTAJ|\bT49\d|\bTPS[A-E]|CASE-?[A-E]\b|CP-?EIA-?\d{4}/, 'tantalum-solid'],
+      // …and its electrolytics CP_Radial, CP_Axial and CP_Elec.
+      [/\bELEC(?:TROLYTIC)?\b|ALUM|\bELCO|CPOL|CP-?RADIAL|CP-?AXIAL|CP-?ELEC|\bCAPAE|RADIAL.*POL/, 'aluminium-wet'],
       [/\bC0G|\bCOG\b|\bNP0|\bNPO\b/, 'ceramic-1'],
       [/\bX[5-8][RSTP]\b|\bY5V|\bZ5U/, 'ceramic-2'],
     ]);
-    const chipText = CHIP_SIZE.test(fp) ? `the chip footprint “${c.footprint}”` : CHIP_SIZE.test(text) ? `the chip size in “${c.description || c.value}”` : null;
+    const chipText = chipOf(fp) ? `the chip footprint “${c.footprint}”` : CHIP_SIZE.test(text) ? `the chip size in “${c.description || c.value}”` : null;
     if (type) {
       params.type = type;
       inferred.type = why(`“${[c.value, c.description, c.footprint].filter(Boolean).join(' ')}”`);
-    } else if (chipText && !polymer) {
+    } else if (chipText) {
       params.type = 'ceramic-2';
       inferred.type = `assumed class II ceramic from ${chipText}; check the dielectric`;
     }
   } else if (model === 'resistor') {
     Object.assign(params, { type: null, power: null, rated: null, elements: 1 });
-    const chip = CHIP_SIZE.exec(fp)?.[1] ?? CHIP_SIZE.exec(text)?.[1];
+    const chip = chipOf(fp) ?? CHIP_SIZE.exec(text)?.[1];
     if (chip) {
       params.type = 'smd';
-      inferred.type = why(CHIP_SIZE.test(fp) ? `the chip footprint “${c.footprint}”` : `the chip size in “${c.description || c.value}”`);
+      inferred.type = why(chipOf(fp) ? `the chip footprint “${c.footprint}”` : `the chip size in “${c.description || c.value}”`);
       params.rated = CHIP_RATING[chip];
       inferred.rated = `typical rating for a ${chip} chip; check the datasheet`;
     } else if (/AXIAL|DIN-?0[2-4]\d{2}|\bR-?PTH/.test(fp)) {
@@ -388,10 +587,13 @@ export function classifyComponent(c) {
       const w = watts[0].includes('/') ? Number(watts[1]) / Number(watts[2]) : Number(watts[1]) / (watts[2] ? 1000 : 1);
       if (w > 0) { params.rated = +w.toPrecision(4); inferred.rated = why(`“${c.description || c.value}”`); }
     }
-    if (['RN', 'RA', 'RP'].includes(prefix) || /ARRAY|NETWORK|X4\b|X8\b/.test(`${text} ${fp}`)) {
+    if (['RN', 'RA', 'RP', 'RR'].includes(prefix) || /ARRAY|NETWORK|X4\b|X8\b/.test(`${text} ${fp}`)) {
       params.type = 'smd';
       inferred.type = 'resistor array';
-      params.elements = null;
+      // "9x1K", "8x10K": the number of resistors.
+      const n = /^(\d+)\s*X\s*\d/.exec(norm(c.value))?.[1];
+      params.elements = n ? Number(n) : null;
+      if (n) inferred.elements = why(`the value “${c.value}”`);
     }
   } else if (model === 'mil-inductive') {
     // Coils and beads are fixed inductors or chokes; a transformer's type cannot be told from the netlist.
@@ -419,13 +621,15 @@ export function classifyComponent(c) {
     if (type) { params.type = type; inferred.type = why(`“${[c.value, c.footprint].filter(Boolean).join(', ')}”`); }
   } else if (model === 'mil-opto') {
     Object.assign(params, { type: null, power: null, rja: null });
-    const type = prefix === 'LED' || /\bLED\b/.test(text) ? 'led' : firstMatch(text, OPTO_RULES);
-    if (type) { params.type = type; inferred.type = why(`“${c.value || c.designator}”`); }
+    const ledSymbol = /:LED/.test(sym) && !/\bLED\b/.test(text);
+    const type = prefix === 'LED' || /\bLED\b/.test(text) || LED_FOOTPRINT.test(fpAll) || ledSymbol ? 'led' : firstMatch(text, OPTO_RULES);
+    if (type) { params.type = type; inferred.type = ledSymbol ? why(`the symbol ${c.symbol}`) : why(`“${c.value || c.designator}”`); }
   } else if (model === 'mil-fuse') {
     // No inputs beyond the board's environment.
   } else {
     params.fit = null;
-    params.note = `${family ?? 'Part not modelled yet'}: ${[c.value, c.footprint].filter(Boolean).join(', ') || c.designator}`;
+    const what = alKind ? `Aluminium ${alKind} capacitor, maker's rate` : family ?? 'Part not modelled yet';
+    params.note = `${what}: ${[c.value, c.footprint].filter(Boolean).join(', ') || c.designator}`;
   }
   return { model, params, inferred, source };
 }
@@ -473,7 +677,7 @@ export function expandRefs(text) {
   return out;
 }
 
-const LINE_ORDER = ['ic', 'transistor', 'diode', 'capacitor', 'mil-capacitor', 'resistor', 'mil-resistor', 'inductor', 'mil-inductive', 'mil-opto', 'mil-relay', 'mil-ssr',
+const LINE_ORDER = ['ic', 'transistor', 'diode', 'capacitor', 'mil-capacitor', 'tantalum-maker', 'ceramic-test', 'resistor', 'mil-resistor', 'inductor', 'mil-inductive', 'mil-opto', 'mil-relay', 'mil-ssr',
   'mil-switch', 'mil-connector', 'mil-socket', 'mil-crystal', 'mil-fuse', 'mil-lamp', 'mil-pwb', 'fixed'];
 
 // Group classified parts ([{ designator, cls }]) with identical results into lines.
@@ -494,13 +698,18 @@ export function groupLines(classified) {
 
 // Parse a netlist and return grouped part lines plus a report.
 export function netlistToParts(text) {
-  const parsed = parseProtel(text);
+  const parsed = isKicadNetlist(text) ? parseKicad(text) : parseProtel(text);
   const classified = [];
   const parallel = new Map();
   const skipped = [];
+  const notFitted = [];
   for (const c of parsed.components) {
+    // Symbols that are not on the board (simulation sources, sheet notes) are not parts.
+    if (c.offBoard) continue;
+    if (c.dnp) { notFitted.push(c.designator); continue; }
     const cls = classifyComponent(c);
     if (cls.skip) { skipped.push(c.designator); continue; }
+    if (c.source) cls.source = Object.fromEntries(Object.entries({ value: c.value, footprint: c.footprint, ...c.source }).filter(([, v]) => v));
     classified.push({ designator: c.designator, cls });
     // Parts of the same type connected to exactly the same nets are wired in parallel.
     if (c.nets.length >= 2 && cls.model !== 'fixed' && cls.model !== 'ic') {
@@ -517,6 +726,8 @@ export function netlistToParts(text) {
     nets: parsed.nets,
     skipped: compressRefs(skipped),
     skippedCount: skipped.length,
+    notFitted: compressRefs(notFitted),
+    notFittedCount: notFitted.length,
     lines,
     groups: [...parallel.values()].filter((g) => g.refs.length >= 2).map((g) => ({
       refs: compressRefs(g.refs),

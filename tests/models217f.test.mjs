@@ -118,3 +118,11 @@ test('new parts of every 217F type start with their unknowns missing', () => {
   assert.deepEqual(ind('loss-area'), ['loss', 'area']);
   assert.deepEqual(ind('input-weight'), ['input', 'weight']);
 });
+
+test('capacitor style CWR: π_T as KEMET prints it in its T599 FIT tables', () => {
+  // KEMET's mission-profile tables list MIL-HDBK-217F's CWR temperature factor at ten temperatures.
+  const printed = [[20, 0.905], [40, 1.323], [60, 1.847], [75, 2.314], [85, 2.661], [90, 2.845], [105, 3.441], [130, 4.579], [140, 5.083], [150, 5.616]];
+  const phases = printed.map(([tac]) => ({ tac, tau: 0.1, n: 0, dT: 0 }));
+  const r = computeComponent({ model: 'mil-capacitor', qty: 1, params: { style: 'CWR', capacitance: 150, stress: 0.5, cr: 0.1, quality: 'M', rise: 0 } }, profile('GB', phases));
+  printed.forEach(([t, piT], i) => close(r.operating[i].piT, piT, 0.001));
+});

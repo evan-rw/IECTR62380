@@ -34,6 +34,7 @@ test('designators as BOMs write them', () => {
   assert.deepEqual(splitDesignators('C1 – C3, c7'), ['C1', 'C2', 'C3', 'C7']);
   assert.deepEqual(splitDesignators('R1;R2 R5'), ['R1', 'R2', 'R5']);
   assert.deepEqual(splitDesignators(''), []);
+  assert.deepEqual(splitDesignators('TA-101, R1 - R2'), ['TA-101', 'R1', 'R2'], 'a dash inside a designator is not a range');
 });
 
 test('reading a BOM: header after a title row, not-fitted rows, quantity checks', () => {
@@ -62,8 +63,9 @@ test('a BOM alone builds the parts, guessing from distributor descriptions', () 
   assert.deepEqual(caps.source, { value: '100nF', footprint: 'C0603', description: 'CAP CER 0.1UF 50V X7R 0603', mpn: 'GRM188R71H104KA93D', manufacturer: 'Murata' });
   // Film goes to the 217F capacitor model, with the capacitance from the value.
   assert.deepEqual([line('C4').model, line('C4').params.style, line('C4').params.capacitance], ['mil-capacitor', 'CFR', 0.1]);
-  // A polymer capacitor has no model, so its type is left for the user rather than guessed wrong.
-  assert.equal(line('C5').params.type, null);
+  // An aluminium polymer capacitor has no failure-rate model: the maker's rate is entered.
+  assert.deepEqual([line('C5').model, line('C5').params.fit], ['fixed', null]);
+  assert.equal(line('C5').params.note, 'Aluminium polymer capacitor, maker\'s rate: 100uF, CASE_D');
   // The stated rating beats the typical one for the chip size.
   const res = line('R1–R3');
   assert.deepEqual([res.model, res.params.type, res.params.rated], ['resistor', 'smd', 0.1]);

@@ -4,12 +4,14 @@
 import { ALL_TABLES, SOURCES, STATUS } from './tables.js';
 import { TABLES_217F, SOURCES_217F } from './tables217f.js';
 import { TABLES_BOARD, SOURCES_BOARD } from './tablesboard.js';
+import { TABLES_CAPLIFE, SOURCES_CAPLIFE } from './tablescaplife.js';
+import { TABLES_MAKER, SOURCES_MAKER } from './tablesmaker.js';
 import { FAILURE_MODES, FAILURE_MODE_SOURCE } from './failuremodes.js';
 import { MODELS, MODEL_GROUPS, PENDING_FAMILIES, clauseOf } from './models.js';
 import { esc } from './html.js';
 
 const $ = (sel) => document.querySelector(sel);
-const ALL_SOURCES = { ...SOURCES, ...SOURCES_217F, ...SOURCES_BOARD, failureModes: FAILURE_MODE_SOURCE };
+const ALL_SOURCES = { ...SOURCES, ...SOURCES_217F, ...SOURCES_BOARD, ...SOURCES_CAPLIFE, ...SOURCES_MAKER, failureModes: FAILURE_MODE_SOURCE };
 
 // What each source supports beyond the tables that list it.
 const OTHER_USES = {
@@ -24,7 +26,7 @@ const link = (key) => {
   return s.url ? `<a href="${esc(s.url)}" rel="noopener">${esc(s.label)}</a>` : esc(s.label);
 };
 
-const refLabel = (t) => (t.ref.startsWith('MIL-HDBK') || t.status === 'published' ? t.ref
+const refLabel = (t) => (t.ref.startsWith('MIL-HDBK') || t.status === 'published' || TABLES_CAPLIFE.includes(t) || TABLES_MAKER.includes(t) ? t.ref
   : t.status === 'excerpt' ? `IEC TR 62380 ${t.ref}` : `${t.ref} of IEC TR 62380, according to the source`);
 
 function tablesHTML(tables) {
@@ -37,7 +39,7 @@ function tablesHTML(tables) {
 }
 
 function bibliographyHTML() {
-  const tables = [...ALL_TABLES, ...TABLES_217F, ...TABLES_BOARD];
+  const tables = [...ALL_TABLES, ...TABLES_217F, ...TABLES_BOARD, ...TABLES_CAPLIFE, ...TABLES_MAKER];
   const items = Object.keys(ALL_SOURCES).map((key) => {
     const uses = [
       ...tables.filter((t) => t.sources.includes(key)).map((t) => t.title),
@@ -65,6 +67,8 @@ function failureModesHTML() {
 $('#method-tables-62380').innerHTML = tablesHTML(ALL_TABLES);
 $('#method-tables-217f').innerHTML = tablesHTML(TABLES_217F);
 $('#method-tables-board').innerHTML = tablesHTML(TABLES_BOARD);
+$('#method-tables-caplife').innerHTML = tablesHTML(TABLES_CAPLIFE);
+$('#method-tables-maker').innerHTML = tablesHTML(TABLES_MAKER);
 $('#bibliography').innerHTML = bibliographyHTML();
 $('#model-list').innerHTML = modelsHTML();
 $('#failure-mode-source').innerHTML = link('failureModes');

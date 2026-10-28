@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseProtel, classifyComponent, compressRefs, expandRefs, netlistToParts, parseCapacitance } from '../assets/netlist.js';
+import { parseProtel, parseKicad, classifyComponent, compressRefs, expandRefs, netlistToParts, parseCapacitance } from '../assets/netlist.js';
+import { bomToParts } from '../assets/bom.js';
 import { computeComponent, normaliseProfile } from '../assets/models.js';
 
 // Protel 2.0 component block in the layout gEDA/Lepton and Altium write:
@@ -132,7 +133,8 @@ test('netlist parts: what is guessed, what is missing', () => {
   const r = byRef(parts, 'R1, R2');
   assert.deepEqual([r.qty, r.params.type, r.params.rated, r.params.power], [2, 'smd', 0.1, null]);
   const rn = byRef(parts, 'RN1');
-  assert.deepEqual([rn.params.type, rn.params.elements], ['smd', null]);
+  assert.deepEqual([rn.params.type, rn.params.elements], ['smd', 4], 'four resistors, from the value “4x10k”');
+  assert.match(rn.inferred.elements, /4x10k/);
 
   const l1 = byRef(parts, 'L1');
   assert.deepEqual([l1.model, l1.params.kind, l1.params.dT], ['mil-inductive', 'coil-fixed', null], 'inductors use the 217F model, which has base rates');
@@ -195,7 +197,8 @@ test('relays, fuses, switches and optocouplers map to the MIL-HDBK-217F models',
   assert.equal(c('J2', 'SMA', 'SMA_Amphenol_132134').params.type, 'rf-coax');
   assert.equal(c('J3', 'RJ45', 'RJ45_Amphenol').params.type, 'telephone');
   assert.equal(c('Y2', '32.768kHz').params.freq, 0.032768);
-  assert.equal(c('X1', '16MHz').model, 'fixed', 'X is ambiguous between connector and crystal');
+  assert.equal(c('X1', '16MHz').model, 'mil-crystal', 'a frequency settles X');
+  assert.equal(c('X2', '').model, 'fixed', 'otherwise X is ambiguous between connector and crystal');
 });
 
 test('film, mica and trimmer capacitors go to the MIL-HDBK-217F capacitor model', () => {
@@ -223,4 +226,162 @@ test('wirewound resistors, potentiometers and thermistors go to the MIL-HDBK-217
   assert.equal(c('RT1', 'PTC polyfuse').model, 'fixed', 'a resettable fuse is not a thermistor');
   assert.equal(c('RV2', 'S14K275 varistor').model, 'fixed', 'varistors are not modelled');
   assert.equal(c('R1', '10k', 'R_0603_1608Metric').model, 'resistor', 'chip resistors stay on the 62380 model');
+});
+
+// Parts from KiCad's own demo projects (KiCad 10.0.7) that were classified wrongly.
+test('KiCad demo parts: the part type follows the part, not a stray word or prefix', () => {
+  const c = (designator, value, footprint = '', description = '') => classifyComponent({ designator, footprint, value, description });
+  // A manufacturer name is not read as a part type (jetson-agx-thor-baseboard C7, C26).
+  const csv = [
+    'Refs,Value,Footprint,Qty,Description,Manufacturer,MPN',
+    'C7,C_22u_16V_0603,antmicro-footprints:C_0603_1608Metric_EIA,1,SMD Multilayer Ceramic Capacitor,Samsung Electro-Mechanics,CL10A226MO7JZNC',
+    'C8,100nF,C_0402_1005Metric,1,"CAP CER 0.1UF 16V X7R 0402",Murata Electronics,GRM155R71C104KA88D',
+    'C9,100uF,CP_Radial_D6.3mm_P2.50mm,1,"CAP ALUM 100UF 20% 16V RADIAL",Panasonic Electronic Components,EEU-FR1C101',
+    'C10,10uF,C_0805_2012Metric,1,Electrolytic capacitor,,',
+  ].join('\n');
+  const type = (ref) => bomToParts(csv).lines.find((l) => l.ref === ref).params.type;
+  assert.equal(type('C7'), 'ceramic-2', 'assumed from the chip footprint, not aluminium from "Electro"');
+  assert.equal(type('C8'), 'ceramic-2');
+  assert.equal(type('C9'), 'aluminium-wet');
+  assert.equal(type('C10'), 'aluminium-wet');
+  // The keyword itself: "Electronics" in a netlist description is not "electrolytic".
+  assert.equal(c('C11', '100nF', 'C_0402_1005Metric', 'Murata Electronics X7R').params.type, 'ceramic-2');
+  // The manufacturer: Littelfuse makes NTC thermistors, and its name holds "fuse".
+  const ntc = bomToParts('Refs,Value,Footprint,Qty,Description,Manufacturer,MPN\nRT1,10k NTC,R_0603_1608Metric,1,NTC thermistor 10k,Littelfuse,0603N103F').lines[0];
+  assert.deepEqual([ntc.model, ntc.params.style], ['mil-resistor', 'RTH']);
+  // T is a transformer unless the part number is a transistor's (vme-wren T2, T5).
+  assert.deepEqual([c('T2', 'BSS138LT1G', 'SOT95P240X110-3N').model, c('T2', 'BSS138LT1G', 'SOT95P240X110-3N').params.type], ['transistor', 'mos-lp']);
+  assert.equal(c('T5', 'FDV301N', 'SOT95P240X110-3N').model, 'transistor');
+  assert.equal(c('T1', 'ADT2-1T', 'XFMR_MINI-CIRCUITS_CD542').model, 'mil-inductive');
+  // Maxim's MAX3430 is a transceiver, not an Altera MAX CPLD (vme-wren IC26).
+  assert.equal(c('IC26', 'MAX3430ESA', 'SOIC127P600X175-8N').params.family, null);
+  assert.equal(c('U1', 'EPM7128STC100', 'TQFP-100_14x14mm_P0.5mm').params.family, 'mos-cpld');
+  assert.equal(c('U2', 'CPLD', '', 'MAX 7000 CPLD').params.family, 'mos-cpld');
+  // A pin header or connector footprint is a connector, whatever the designator (kit-dev-coldfire CT101, openair-max CE1).
+  assert.equal(c('CT101', 'JUMPER', 'Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical').model, 'mil-connector');
+  assert.equal(c('CE1', 'HC-1.25-8PWT', 'easyeda2kicad:CONN-SMD_HC-1.25-8PWT').model, 'mil-connector');
+  // Hardware named by its value or footprint is mechanical (cm5_minima M702, M705; vme-wren B1, NUT5, SCREW1, WASHER1, FTG1).
+  assert.deepEqual(c('M702', 'M.2 Solder Nut', 'MountingHole:MountingHole_3mm_Pad'), { skip: 'mechanical' });
+  assert.deepEqual(c('M705', 'M.2 Screw'), { skip: 'mechanical' });
+  assert.deepEqual(c('B1', 'PLATED_HOLE2.7_PAD5.0', 'MTG270_500'), { skip: 'mechanical' });
+  for (const ref of ['NUT5', 'SCREW1', 'WASHER1', 'FTG1']) assert.deepEqual(c(ref, 'BOSSARD_BN628-1241427_v'), { skip: 'mechanical' }, ref);
+  // …but only for a designator with no electrical meaning: a connector with mounting holes stays a connector (jetson J18).
+  assert.equal(c('J18', 'ASP-218650-01_mounting_holes', 'ASP-218650-01_mounting_holes', 'FMC connector').model, 'mil-connector');
+  assert.equal(c('TB1', 'Screw terminal 2P', 'TerminalBlock_Phoenix_MKDS-1,5-2').model, 'mil-connector', 'a screw terminal is a connector, not hardware');
+  assert.equal(c('M1', 'Fan 12V').model, 'fixed');
+});
+
+test('KiCad demo parts: the footprint names the part when the designator does not', () => {
+  const c = (designator, value, footprint = '', description = '') => classifyComponent({ designator, footprint, value, description });
+  const kind = (...a) => c(...a).model;
+  // Designators that name no part kind (kit-dev-coldfire, vme-wren, cm5_minima, openair-max).
+  assert.equal(kind('ABRT_SW101', 'SW_PUSH', 'kit-dev-coldfire:SW_PUSH_SMALL'), 'mil-switch');
+  assert.equal(c('LED_RST101', 'LED_RED', 'LED_SMD:LED_1206_3216Metric').params.type, 'led');
+  assert.equal(kind('RCAN201', 'R', 'Resistor_SMD:R_0805_2012Metric'), 'resistor');
+  assert.equal(kind('BDM_PORT101', 'CONN_13X2', 'Connector_PinHeader_2.54mm:PinHeader_2x13_P2.54mm_Vertical'), 'mil-connector');
+  // The full KiCad name ends in "MountingHolesOffset": still a connector, not hardware.
+  assert.equal(kind('UARTCAN201', 'DB9', 'Connector_Dsub:DSUB-9_Female_Horizontal_P2.77x2.84mm_EdgePinOffset7.70mm_Housed_MountingHolesOffset9.12mm'), 'mil-connector');
+  assert.equal(kind('USB701', 'TYPEC-305-ACP16H458', 'USB-C-SMD_TYPEC-305-ACP16H458'), 'mil-connector');
+  assert.equal(kind('OSC1', 'OSC_50MHZ_EPSON_SG-8018CE', 'OSC_EPSON_SG-8018CE'), 'mil-crystal');
+  assert.equal(kind('TR1', 'XFMR_MINI-CIRCUITS_ADT2-1T', 'XFMR_MINI-CIRCUITS_CD542'), 'mil-inductive');
+  assert.equal(kind('TR2', 'ADT2-1T', 'XFMR_MINI-CIRCUITS_CD542'), 'mil-inductive', 'from the footprint alone');
+  assert.equal(kind('LV101', 'DS1818', 'Package_TO_SOT_THT:TO-92'), 'fixed', 'a TO-92 can be a transistor or an IC: left to the user');
+  // X: a crystal or a connector once the footprint or value says which (interf_u, openair-max, tiny_tapeout).
+  assert.equal(kind('X1', '8MHz', 'Crystal:Crystal_HC18-U_Horizontal'), 'mil-crystal');
+  assert.equal(kind('X1', 'SMD-5032_2P 14.7456MHZ 20PF', 'OSC-SMD_L5.0-W3.2'), 'mil-crystal');
+  assert.equal(kind('X3', 'HDMI', 'Connector_Video:HDMI_A_Molex_208658-1001_Horizontal'), 'mil-connector');
+  // LEDs under D by their footprint (cm5_minima D605, tiny_tapeout D1, stickhub D15).
+  for (const [value, fp] of [['GREEN', 'LED-SMD_L1.7-W0.6-RD'], ['Yellow', 'LED_SMD:LED_0603_1608Metric'], ['USB', 'Duo_LED_1.6x0.8_Kingbright_APHB1608']]) {
+    assert.deepEqual([c('D1', value, fp).model, c('D1', value, fp).params.type], ['mil-opto', 'led'], fp);
+  }
+  // ESD and TVS families, and Schottkys (cm5_minima, vme-wren, stickhub, jetson, openair-max, pic_programmer).
+  for (const v of ['RCLAMP0502BA', 'PUSB3F96X', '0402ESDA-MLP', 'SM712.TCT']) assert.equal(c('D1', v).params.type, 'tvs-lp', v);
+  assert.equal(c('D24', '5V', 'D_0402', 'D5V0H1B2LP-7B').params.type, 'tvs-lp');
+  assert.equal(c('D1', 'RB521S30T1G', 'D_SOD-523', 'Small Signal Schottky Diode, Single, 30 V, 200 mA').params.type, 'signal');
+  assert.equal(c('D4', 'B5817W_C7420328', 'SOD-123_L2.7-W1.6-LS3.7-FD').params.type, 'rectifier-lp');
+  assert.deepEqual([c('D10', 'SCHOTTKY', 'Diode_THT:D_DO-35_SOD27_P12.70mm_Horizontal').params.type, c('D11', 'SCHOTTKY', 'Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal').params.type], ['signal', 'rectifier-lp']);
+  // Capacitors from KiCad's footprint names (complex_hierarchy C101, cm5_minima C702).
+  assert.equal(c('C101', '47uF/63V', 'Capacitor_THT:CP_Axial_L11.0mm_D6.0mm_P18.00mm_Horizontal').params.type, 'aluminium-wet');
+  assert.equal(c('C702', '100uF', 'Capacitor_Tantalum_SMD:CP_EIA-3528-21_Kemet-B').params.type, 'tantalum-solid');
+  assert.equal(c('C56', '4.7uF', 'CP_EIA-3528-21_Kemet-B_Pad1.50x2.35mm_HandSolder').params.type, 'tantalum-solid', 'without the library name too (video C56)');
+  // Resistor arrays and their element count (interf_u RR1, video RR1).
+  assert.deepEqual([kind('RR1', '9x1K', 'Resistor_THT:R_Array_SIP10'), c('RR1', '9x1K', 'Resistor_THT:R_Array_SIP10').params.elements], ['resistor', 9]);
+  // IPC-7351 names: pins and bodies from the name, not the pitch (multichannel IC1, vme-wren IC3, IC5, IC20, IC33).
+  const pkg = (fp) => { const p = c('U1', '', fp).params; return [p.package, p.pins, p.bodyW, p.bodyL]; };
+  assert.deepEqual(pkg('SOIC127P600X175-8N'), ['so', 8, undefined, undefined]);
+  assert.deepEqual(pkg('SOP65P640X120-24N'), ['tssop', 24, undefined, undefined]);
+  assert.deepEqual(pkg('SOP65P400X130-8N'), ['diag-two-rows', 8, undefined, undefined]);
+  assert.deepEqual(pkg('QFN50P400X400X80-25N-S280'), ['diag-four-sides', 25, 4, 4]);
+  assert.deepEqual(pkg('BGA96C80P9X16_750X1350X120'), ['diag-matrix', 96, 7.5, 13.5]);
+  assert.deepEqual(pkg('SOT65P210X110-6N'), ['diag-two-rows', 6, undefined, undefined]);
+  // …and chip passives: RESC1608 is metric for an 0603 resistor.
+  assert.deepEqual([c('R5', '10k', 'RESC1608X55N').params.type, c('R5', '10k', 'RESC1608X55N').params.rated], ['smd', 0.1]);
+});
+
+// A small KiCad netlist in Eeschema's s-expression format, as KiCad 10 writes it.
+const KICAD = `(export (version "E")
+  (design (source "demo.kicad_sch") (tool "Eeschema 10.0.7"))
+  (components
+    (comp (ref "R1") (value "10k") (footprint "Resistor_SMD:R_0603_1608Metric")
+      (description "Resistor")
+      (fields (field (name "MPN") "RC0603FR-0710KL") (field (name "Manufacturer") "Yageo"))
+      (libsource (lib "Device") (part "R") (description "Resistor")))
+    (comp (ref "C1") (value "22u") (footprint "Capacitor_SMD:C_0805_2012Metric")
+      (fields (field (name "Manufacturer") "Samsung Electro-Mechanics") (field (name "MPN") "CL21A226MAQNNNE"))
+      (libsource (lib "Device") (part "C") (description "Unpolarized capacitor")))
+    (comp (ref "C2") (value "22u") (footprint "Capacitor_SMD:C_0805_2012Metric")
+      (fields (field (name "Manufacturer") "Samsung Electro-Mechanics") (field (name "MPN") "CL21A226MAQNNNE"))
+      (libsource (lib "Device") (part "C") (description "Unpolarized capacitor")))
+    (comp (ref "STATUS1") (value "GREEN") (footprint "my_lib:0603_light")
+      (libsource (lib "Device") (part "LED") (description "Light emitting diode")))
+    (comp (ref "D1") (value "15V") (footprint "Diode_SMD:D_SOD-323")
+      (libsource (lib "Device") (part "D_Zener") (description "")))
+    (comp (ref "U1") (value "LM358 \\"dual\\"") (footprint "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm")
+      (libsource (lib "Amplifier_Operational") (part "LM358") (description "Dual operational amplifier")))
+    (comp (ref "R2") (value "0R") (footprint "Resistor_SMD:R_0603_1608Metric")
+      (libsource (lib "Device") (part "R") (description "Resistor"))
+      (property (name "dnp")))
+    (comp (ref "RT1") (value "10k NTC") (footprint "Resistor_SMD:R_0603_1608Metric")
+      (fields (field (name "Manufacturer") "Littelfuse") (field (name "MPN") "0603N103F"))
+      (libsource (lib "Device") (part "Thermistor_NTC") (description "Temperature dependent resistor")))
+    (comp (ref "MK1") (value "MountingHole") (footprint "MountingHole:MountingHole_3.2mm_M3")
+      (libsource (lib "Mechanical") (part "MountingHole") (description "Mounting hole")))
+    (comp (ref "V1") (value "5V") (footprint "")
+      (libsource (lib "Simulation_SPICE") (part "VDC") (description "Voltage source"))
+      (property (name "exclude_from_board"))))
+  (nets
+    (net (code "1") (name "+5V") (class "Default")
+      (node (ref "C1") (pin "1") (pintype "passive")) (node (ref "C2") (pin "1") (pintype "passive"))
+      (node (ref "U1") (pin "8") (pintype "power_in")) (node (ref "R1") (pin "1") (pintype "passive")))
+    (net (code "2") (name "GND") (class "Default")
+      (node (ref "C1") (pin "2") (pintype "passive")) (node (ref "C2") (pin "2") (pintype "passive"))
+      (node (ref "U1") (pin "4") (pintype "power_in")) (node (ref "D1") (pin "2") (pintype "passive")))
+    (net (code "3") (name "/LED") (class "Default")
+      (node (ref "R1") (pin "2") (pintype "passive")) (node (ref "STATUS1") (pin "2") (pintype "passive")))))`;
+
+test('KiCad netlists: parts, fields, symbols, DNP and nets', () => {
+  const parsed = parseKicad(KICAD);
+  assert.equal(parsed.format, 'KiCad');
+  assert.equal(parsed.nets, 3);
+  const u1 = parsed.components.find((c) => c.designator === 'U1');
+  assert.equal(u1.value, 'LM358 "dual"', 'escaped quotes');
+  assert.deepEqual([u1.highestPin, u1.nets], [8, ['+5V', 'GND']]);
+  assert.equal(parsed.components.find((c) => c.designator === 'R1').source.mpn, 'RC0603FR-0710KL');
+
+  const r = netlistToParts(KICAD);
+  assert.deepEqual([r.components, r.nets, r.skipped, r.notFitted], [10, 3, 'MK1', 'R2']);
+  const line = (ref) => r.lines.find((l) => l.ref === ref);
+  assert.equal(r.lines.some((l) => l.ref.includes('V1')), false, 'a symbol not on the board is not a part');
+  // The manufacturer is kept for the part, but not read for its type.
+  assert.deepEqual([line('C1, C2').model, line('C1, C2').params.type, line('C1, C2').source.manufacturer], ['capacitor', 'ceramic-2', 'Samsung Electro-Mechanics']);
+  assert.equal(line('R1').source.mpn, 'RC0603FR-0710KL');
+  assert.deepEqual([line('RT1').model, line('RT1').params.style], ['mil-resistor', 'RTH'], 'Littelfuse is not a fuse');
+  // The symbol names what the designator and footprint do not: an LED, a Zener.
+  assert.deepEqual([line('STATUS1').model, line('STATUS1').params.type], ['mil-opto', 'led']);
+  assert.equal(line('D1').params.type, 'zener-lp');
+  assert.match(line('D1').inferred.type, /symbol Device:D_Zener/);
+  assert.deepEqual([line('U1').params.package, line('U1').params.pins], ['so', 8]);
+  // C1 and C2 sit on the same two nets: proposed as a parallel block.
+  assert.deepEqual(r.groups.map((g) => [g.refs, g.nets]), [['C1, C2', ['+5V', 'GND']]]);
+  assert.throws(() => netlistToParts('(export (version "E") (components))'), /No components found in the KiCad netlist/);
 });

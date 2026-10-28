@@ -371,6 +371,18 @@ table.smt-devices tr.worst td { background: #ffe8d8; }
 table.smt-devices .empty { color: var(--text-2); padding: 6px; }
 .smt-actions { margin-top: 6px; align-items: center; }
 .smt-result p { margin: 6px 0 0; }
+.flex-note { margin: 8px 0 0; }
+
+/* Electrolytic capacitor life */
+
+table.life-lines { min-width: 1040px; }
+table.life-lines td:first-child { min-width: 180px; }
+table.life-lines input[type="number"] { width: 66px; min-width: 0; }
+table.life-lines select { width: 100%; min-width: 84px; }
+table.life-lines tr.worn td { background: var(--error-bg); }
+table.life-lines .life-acts { white-space: nowrap; }
+.life-settings .field { flex-basis: 380px; }
+#life-add { max-width: 420px; }
 
 /* Results */
 
@@ -402,8 +414,9 @@ table.results tr:last-child td { background: var(--face); font-weight: bold; bor
    chip for the parts, a boot for the mission profile (a walk through the year), and an
    inspector for the reliability structure, who traces how failures travel, and arrows
    for the results, where the parts flow into the board total. The circuit board gets a
-   square of fire (reflow heat is what cracks its vias), the solder joints a bug. */
-#board-heading, #profile-heading, #parts-heading, #structure-heading, #results-heading, #pcb-heading, #smt-heading {
+   square of fire (reflow heat is what cracks its vias), the solder joints a bug, and the
+   electrolytic capacitors a bomb, since they wear out on a timer. */
+#board-heading, #profile-heading, #parts-heading, #structure-heading, #results-heading, #pcb-heading, #smt-heading, #life-heading {
   padding-left: 27px;
   background: var(--title-icon) 6px center / 16px 16px no-repeat, linear-gradient(90deg, var(--title-a), var(--title-b));
   image-rendering: pixelated;
@@ -415,6 +428,7 @@ table.results tr:last-child td { background: var(--face); font-weight: bold; bor
 #results-heading { --title-icon: url(art/arrows.svg); }
 #pcb-heading { --title-icon: url(art/fire-square.svg); }
 #smt-heading { --title-icon: url(art/bug.svg); }
+#life-heading { --title-icon: url(art/bomb.svg); }
 /* An empty board: parts arrive from the schematic. */
 .parts .empty {
   display: flex; align-items: center; min-height: 64px; padding-left: 76px;

@@ -19,6 +19,10 @@ export const STATUS = {
   handbook: 'Read from the handbook',
   // Circuit-board data: a published model, or a manufacturer's data sheet.
   published: 'From a published paper or data sheet',
+  // Capacitor life: one maker's rule, applied to every maker's parts.
+  maker: 'One maker\'s published rule, used for all makers\' parts',
+  // Tantalum: a maker's curve recovered from its published chart.
+  chart: 'Read from a maker\'s published chart',
 };
 
 export const SOURCES = {
@@ -351,12 +355,12 @@ export const CAPACITORS = {
   ref: 'Clause 10',
   status: 'single',
   sources: ['kicad', 'pmcTantalum'],
-  note: 'Equation (3) of the Micromachines paper states the same tantalum λ0 = 0.4 and k = 3.8 × 10⁻³, but its worked example does not follow it, so it is weak support. Film capacitors (10.1), aluminium solid and polymer (10.6–10.7), variable ceramic (10.8) and NTC thermistors (10.9) are pending.',
+  note: 'Equation (3) of the Micromachines paper states the same tantalum λ0 = 0.4 and k = 3.8 × 10⁻³, but its worked example does not follow it, so it is weak support. Film capacitors (10.1), aluminium solid and polymer (10.6–10.7), variable ceramic (10.8) and NTC thermistors (10.9) are pending; aluminium polymer and hybrid parts take the maker\'s failure rate, and every aluminium capacitor\'s wear-out is checked with the makers\' life rules.',
   rows: [
     { id: 'ceramic-1', label: 'Ceramic, class I (defined temperature coefficient)', clause: '10.2', l0: 0.05, k: 3.3e-3, ea: EA.CAP_CERAMIC, tRef: 303 },
     { id: 'ceramic-2', label: 'Ceramic, class II', clause: '10.3', l0: 0.15, k: 3.3e-3, ea: EA.CAP_CERAMIC, tRef: 303 },
     { id: 'tantalum-solid', label: 'Tantalum, solid electrolyte', clause: '10.4', l0: 0.4, k: 3.8e-3, ea: EA.CAP_TANTALUM, tRef: 303 },
-    { id: 'aluminium-wet', label: 'Aluminium, non-solid electrolyte (life expectancy not checked)', clause: '10.5', l0: 1.3, k: 1.4e-3, ea: EA.BIPOLAR, tRef: 313 },
+    { id: 'aluminium-wet', label: 'Aluminium, non-solid electrolyte', clause: '10.5', l0: 1.3, k: 1.4e-3, ea: EA.BIPOLAR, tRef: 313 },
   ],
 };
 

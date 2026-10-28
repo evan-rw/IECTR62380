@@ -28,6 +28,8 @@
         <li><strong>IEC TR 62380 approach.</strong> None of the values were taken from the standard: the IEC's licence for purchased copies does not allow using them in software. The mission profiles are published excerpts of it, from the free preview and TI's application note SLOA294A. The other coefficients were copied from one open-source project, Kicad-Space-Reliability, and have not been checked against the standard. The integrated-circuit formula matches the one TI publishes.</li>
         <li><strong>MIL-HDBK-217F.</strong> A US Department of Defense handbook cleared for public release. Values were read from its scanned pages (Notice 2 where it replaces a page) and cross-checked against RAMSTK or the scan's text, as each table says. It is older (1991–1995) and generally more pessimistic than the 62380 approach.</li>
         <li><strong>Vendor data.</strong> Failure rates you enter from a manufacturer, rescaled to your mission profile with the Arrhenius law or the 62380 formula. No coefficient tables are involved.</li>
+        <li><strong>Electrolytic capacitor life.</strong> The aluminium capacitor makers' own published life rules (Nippon Chemi-Con, Nichicon, Rubycon, Cornell Dubilier, KEMET, Vishay, Panasonic), with a NASA report on polymer capacitors. A rule three or more makers publish counts as corroborated.</li>
+        <li><strong>Tantalum and ceramic capacitors, makers' models.</strong> For tantalum, a choice of KEMET's polymer model, NASA's conservative polymer values and Vishay's MnO₂ chart, because they disagree by up to 1000 × and no three agree. For ceramic, the life-test method Murata, Samsung, Knowles, AVX and NASA publish. Board-flex limits from AEC-Q200 and the makers.</li>
         <li><strong>Failure modes.</strong> MIL-HDBK-338B Table 7.8-1, a public-release reproduction of the Reliability Analysis Center's FMD-91 (1991).</li>
       </ul>
       <p class="hint">Results are rough estimates and not suitable as evidence for an ISO 26262 or IEC 61508 safety case.</p>
@@ -35,13 +37,17 @@
 
     <section class="panel" aria-labelledby="tables-heading">
       <h2 id="tables-heading">Coefficient tables</h2>
-      <p class="hint">“Published excerpt” means copied from a public excerpt of the standard. “Two or more independent sources agree” means at least two independent sources give the same values. “Single source” means one source so far. “Read from the handbook” means a MIL-HDBK-217F table read from the handbook's own pages, with no second transcription to compare against.</p>
+      <p class="hint">“Published excerpt” means copied from a public excerpt of the standard. “Two or more independent sources agree” means at least two independent sources give the same values. “Single source” means one source so far. “Read from the handbook” means a MIL-HDBK-217F table read from the handbook's own pages, with no second transcription to compare against. “From a published paper or data sheet”, “One maker's published rule” and “Read from a maker's published chart” mark the circuit-board and capacitor data.</p>
       <h3>IEC TR 62380 approach</h3>
       <div id="method-tables-62380"></div>
       <h3>MIL-HDBK-217F</h3>
       <div id="method-tables-217f"></div>
       <h3>Circuit board</h3>
       <div id="method-tables-board"></div>
+      <h3>Electrolytic capacitor life</h3>
+      <div id="method-tables-caplife"></div>
+      <h3>Tantalum and ceramic capacitors, makers' models</h3>
+      <div id="method-tables-maker"></div>
     </section>
 
     <section class="panel" aria-labelledby="bib-heading">

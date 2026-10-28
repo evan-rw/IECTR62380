@@ -5,12 +5,14 @@ import { ENVIRONMENTS, SMT_217F } from './tables217f.js';
 import { MISSION_PROFILES } from './tables.js';
 import { netlistToParts, expandRefs, compressRefs } from './netlist.js';
 import { ROOT, sanitizeStructure, migrateGroups, meanTimeToFailure, members as structureMembers, label as structureLabel } from './structure.js';
-import { evaluateSmt, chipCandidates } from './smt.js';
+import { evaluateSmt, chipCandidates, flexRisks } from './smt.js';
 import { evaluateBoard, laminateOf, qualityBand } from './pth.js';
 import { LAMINATES, PTH_MODEL, SOURCES_BOARD } from './tablesboard.js';
 import { mountStructure, refreshStructure, currentStructure } from './structure-ui.js';
 import { parseBom, bomToParts, mergeBom } from './bom.js';
 import { failureModesFor } from './failuremodes.js';
+import { evaluateCapLife, withLife, lifeInputs, LIFE_KEYS, TECHS, typeTech } from './caplife.js';
+import { LIFE_RULES, END_OF_LIFE } from './tablescaplife.js';
 import { esc } from './html.js';
 
 const STORAGE_KEY = 'iec62380.board.v1';
@@ -19,6 +21,7 @@ const REF_PREFIX = {
   ic: 'U', diode: 'D', transistor: 'Q', capacitor: 'C', resistor: 'R', inductor: 'L', fixed: 'X',
   'mil-relay': 'K', 'mil-ssr': 'K', 'mil-switch': 'SW', 'mil-connector': 'J', 'mil-socket': 'XU',
   'mil-pwb': 'PCB', 'mil-crystal': 'Y', 'mil-fuse': 'F', 'mil-lamp': 'DS', 'mil-opto': 'D', 'mil-capacitor': 'C', 'mil-resistor': 'R', 'mil-inductive': 'L', vendor: 'U',
+  'tantalum-maker': 'C', 'ceramic-test': 'C',
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -65,11 +68,34 @@ const emptyPcb = () => ({
   ...Object.fromEntries(PCB_NUMBERS.map((k) => [k, null])), holes: [],
 });
 
+// Electrolytic capacitor life: whether drift is a failure by default, and the polymer rule.
+const emptyCapLife = () => ({ defaultRole: null, polymerRule: 'majority' });
+
 function emptyBoard() {
   return {
     format: FORMAT, version: 2, title: 'Untitled board', years: 10, profile: presetProfile('geo-permanent'), parts: [],
-    structure: { kind: 'block', id: ROOT, children: [] }, smt: emptySmt(), pcb: emptyPcb(),
+    structure: { kind: 'block', id: ROOT, children: [] }, smt: emptySmt(), pcb: emptyPcb(), caplife: emptyCapLife(),
   };
+}
+
+function sanitizeCapLife(raw) {
+  return {
+    defaultRole: ['drift', 'hard'].includes(raw?.defaultRole) ? raw.defaultRole : null,
+    polymerRule: raw?.polymerRule === 'slow' ? 'slow' : 'majority',
+  };
+}
+
+// A line's life inputs; anything not entered is guessed or left blank.
+const LIFE_CHOICES = { tech: TECHS, rated: ['dc', 'ripple'], ripple: ['none', 'ratio', 'rise'], role: ['default', 'drift', 'hard'] };
+function sanitizeLife(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  for (const [k, opts] of Object.entries(LIFE_CHOICES)) if (opts.includes(raw[k])) out[k] = raw[k];
+  for (const k of ['hours', 'temp', 'ratio', 'rise', 'rise0']) if (isNum(raw[k])) out[k] = raw[k];
+  if (typeof raw.listed === 'boolean') out.listed = raw.listed;
+  const confirmed = Object.fromEntries(Object.entries(raw.confirmed ?? {}).filter(([k, v]) => LIFE_KEYS.includes(k) && typeof v === 'string'));
+  if (Object.keys(confirmed).length) out.confirmed = confirmed;
+  return Object.keys(out).length ? out : null;
 }
 
 function sanitizePcb(raw) {
@@ -143,7 +169,11 @@ function sanitize(raw) {
     const source = p.source && typeof p.source === 'object'
       ? Object.fromEntries(['value', 'footprint', 'description', 'mpn', 'manufacturer'].filter((k) => p.source[k]).map((k) => [k, str(p.source[k])]))
       : null;
-    parts.push({ id: newId(), ref: str(p.ref), qty: isNum(p.qty) ? p.qty : 1, model: p.model, params, inferred, confirmed, source, open: Boolean(p.open), advOpen: Boolean(p.advOpen), traceOpen: Boolean(p.traceOpen) });
+    const life = sanitizeLife(p.life);
+    parts.push({
+      id: newId(), ref: str(p.ref), qty: isNum(p.qty) ? p.qty : 1, model: p.model, params, inferred, confirmed, source,
+      ...(life ? { life } : {}), open: Boolean(p.open), advOpen: Boolean(p.advOpen), traceOpen: Boolean(p.traceOpen),
+    });
   }
   const phases = raw.profile.phases.map((ph) => ({
     name: str(ph?.name),
@@ -169,6 +199,7 @@ function sanitize(raw) {
       structure,
       smt: sanitizeSmt(raw.smt),
       pcb: sanitizePcb(raw.pcb),
+      caplife: sanitizeCapLife(raw.caplife),
     },
     skipped,
   };
@@ -178,15 +209,17 @@ function exportable(board) {
   return {
     format: FORMAT, version: 2, title: board.title, years: board.years,
     profile: board.profile,
-    parts: board.parts.map(({ ref, qty, model, params, inferred, confirmed, source }) => ({
+    parts: board.parts.map(({ ref, qty, model, params, inferred, confirmed, source, life }) => ({
       ref, qty, model, params,
       ...(Object.keys(inferred ?? {}).length ? { inferred } : {}),
       ...(Object.keys(confirmed ?? {}).length ? { confirmed } : {}),
       ...(source ? { source } : {}),
+      ...(life ? { life } : {}),
     })),
     structure: board.structure,
     smt: board.smt,
     pcb: board.pcb,
+    caplife: board.caplife,
   };
 }
 
@@ -511,6 +544,120 @@ function updateSmt(smt) {
     + (s.devices.length && smt.problems.length ? `<ul class="problems">${smt.problems.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : '');
 }
 
+// Large ceramic chips crack when the board bends; no model counts it, so the page says so.
+const flexText = (flex) => flex.map((f) => `${f.ref} (${f.code})`).join(', ');
+function updateFlex(flex) {
+  const note = $('#smt-flex');
+  note.hidden = !flex.length;
+  note.innerHTML = flex.length
+    ? `<b>Flex cracking:</b> ${esc(flexText(flex))} ${flex.length > 1 ? 'are ceramic chips' : 'is a ceramic chip'} 1210 or larger. Ceramic chips crack when the board bends, from depanelling, screws, connectors or test fixtures, and the larger the chip the sooner; no failure rate here counts it. Standard terminations are tested to 2 mm of bend over a 90 mm span, soft (flexible) terminations to 5 mm. Keep these parts away from board edges, break lines, screws and connectors, lay them parallel to a break line, or choose soft-termination parts. Lines whose text says soft or flexible terminations are not listed.`
+    : '';
+}
+
+// ---------------------------------------------------------------------------
+// Electrolytic capacitor life
+
+const LIFE_CELLS = ['tech', 'hours', 'temp', 'rated', 'ripple', 'ratio', 'rise', 'rise0', 'role'];
+const TECH_OPTIONS = [{ value: 'wet', label: 'Wet' }, { value: 'polymer', label: 'Polymer' }, { value: 'hybrid', label: 'Hybrid' }];
+const ROLE_SHORT = { drift: 'yes', hard: 'no' };
+const LIFE_MODELS = ['capacitor', 'mil-capacitor', 'fixed', 'vendor'];
+const pctWorn = (f) => (f >= 0.995 ? 'all' : f < 1e-4 ? 'under 0.01 %' : `${fmt2(f * 100)} %`);
+const describePart = (part) => MODELS[part.model].describe({ ...MODELS[part.model].defaults, ...part.params });
+// In the life table a line is named by what was imported for it, else by its part type.
+const lifeLineText = (part) => [part.source?.value, part.source?.description].filter(Boolean).join(' · ') || describePart(part);
+// The table is rebuilt only when its rows or their cells change, so typing is not interrupted.
+let lifeShown = null;
+const lifeSignature = (life) => life.rows.map((r) => `${r.part.id}:${r.values.ripple}:${r.values.rated}:${typeTech(r.part) ?? ''}`).join('|');
+
+function lifeRowHTML(r) {
+  const { part, values: v } = r;
+  const data = (key) => `data-bind="life" data-id="${part.id}" data-key="${key}"`;
+  const num = (key, label) => `<input type="number" min="0" step="any" inputmode="decimal" aria-label="${label}" ${data(key)} value="${v[key] ?? ''}">`;
+  const select = (key, label, opts) => `<select aria-label="${label}" ${data(key)}>${optionsHTML(opts, v[key])}</select>`;
+  const valueKey = v.ripple === 'ratio' ? 'ratio' : v.ripple === 'rise' ? 'rise' : null;
+  const dash = '<span class="muted">—</span>';
+  return `<tr data-life="${part.id}">
+    <td><b data-out="ref">${esc(part.ref)}</b> <span class="muted" data-out="desc"></span></td>
+    <td data-cell="tech" title="${esc(Object.values(LIFE_RULES.rules).map((r) => r.label).join('; '))}">${select('tech', 'Kind', TECH_OPTIONS)}</td>
+    <td data-cell="hours">${num('hours', 'Rated life, hours')}</td>
+    <td data-cell="temp">${num('temp', 'Rated temperature, °C')}</td>
+    <td data-cell="rated">${select('rated', 'Rated life is with', [{ value: 'dc', label: 'Voltage' }, { value: 'ripple', label: 'Ripple' }])}</td>
+    <td data-cell="ripple">${select('ripple', 'Ripple heating', [{ value: 'none', label: 'None' }, { value: 'ratio', label: 'Current' }, { value: 'rise', label: 'Rise' }])}</td>
+    <td data-cell="${valueKey ?? 'value'}">${valueKey ? num(valueKey, valueKey === 'ratio' ? 'Ripple current over the rated ripple' : 'Measured rise above ambient, °C') : dash}</td>
+    <td data-cell="rise0">${v.ripple === 'ratio' || v.rated === 'ripple' ? num('rise0', 'Rise at rated ripple, °C') : dash}</td>
+    <td data-cell="role">${select('role', 'Drift is a failure', [{ value: 'default', label: 'Default' }, { value: 'drift', label: 'Yes' }, { value: 'hard', label: 'No' }])}</td>
+    <td class="num" data-out="life"></td>
+    <td class="num" data-out="fit"></td>
+    <td class="life-acts"><button type="button" class="icon" data-act="life-confirm" data-id="${part.id}" title="Confirm the guessed values" hidden>✓</button>${typeTech(part) ? '' : `<button type="button" class="icon" data-act="life-del" data-id="${part.id}" aria-label="Stop checking ${esc(part.ref)}">✕</button>`}</td>
+  </tr>`;
+}
+
+function renderCapLife(life) {
+  const focus = document.activeElement?.closest?.('#life-lines') ? { id: document.activeElement.dataset.id, key: document.activeElement.dataset.key } : null;
+  $('#life-role').value = state.caplife.defaultRole ?? '';
+  $('#life-polymer').value = state.caplife.polymerRule;
+  $('#life-lines').innerHTML = life.rows.length
+    ? life.rows.map(lifeRowHTML).join('')
+    : '<tr><td colspan="12" class="empty">No aluminium electrolytic capacitors yet. Wet aluminium lines appear here by themselves, as do lines whose description says aluminium, polymer or hybrid; add any other line below.</td></tr>';
+  lifeShown = lifeSignature(life);
+  if (focus) $(`#life-lines [data-id="${focus.id}"][data-key="${focus.key}"]`)?.focus();
+}
+
+// Outputs only, so typing is not interrupted.
+function updateCapLife(life) {
+  if (lifeSignature(life) !== lifeShown) renderCapLife(life);
+  const s = state.caplife;
+  const roleField = $('#life-role').closest('.field');
+  const roleMissing = !s.defaultRole && life.rows.some((r) => r.values.role === 'default');
+  roleField.classList.toggle('missing', roleMissing);
+  $('.state-tag', roleField).textContent = roleMissing ? 'Missing' : '';
+  for (const r of life.rows) {
+    const row = $(`#life-lines [data-life="${r.part.id}"]`);
+    if (!row) continue;
+    $('[data-out="ref"]', row).textContent = r.part.ref;
+    $('[data-out="desc"]', row).textContent = lifeLineText(r.part);
+    for (const key of LIFE_CELLS) {
+      const cell = $(`[data-cell="${key}"]`, row);
+      if (!cell) continue;
+      cell.classList.toggle('missing', r.missing.includes(key));
+      cell.classList.toggle('inferred', Boolean(r.inferred[key]));
+      const control = $('input, select', cell);
+      if (control) control.title = r.inferred[key] ? `Guessed ${r.inferred[key]}` : r.confirmed[key] ? `Guessed ${r.confirmed[key]}; confirmed` : '';
+    }
+    $('[data-key="role"] option[value="default"]', row).textContent = `Default${s.defaultRole ? ` (${ROLE_SHORT[s.defaultRole]})` : ''}`;
+    $('[data-act="life-confirm"]', row).hidden = !Object.keys(r.inferred).length;
+    row.classList.toggle('worn', Boolean(r.lifeComplete && r.wornOut));
+    $('[data-out="life"]', row).textContent = r.lifeComplete ? `${fmt2(r.alphaHours / 8760)} y${r.capped ? ' (cap)' : ''}` : '—';
+    $('[data-out="fit"]', row).innerHTML = !r.lifeComplete || !r.role ? '<span class="bad">Missing</span>'
+      : r.role === 'hard' ? '<span class="muted">not counted</span>' : fmt(r.fitEach);
+    row.title = r.lifeComplete
+      ? `${r.phases.map((ph) => `${ph.label}: ${fmt(ph.ambient)} °C${r.rise ? ` + ${fmt(r.rise)} °C ripple heating` : ''}, life ${fmt2(ph.hours)} h`).join('; ')}. ${pctWorn(r.fraction)} worn out by the end of the mission. End of life: ${END_OF_LIFE.criteria[r.values.tech]}.`
+      : '';
+  }
+  const lines = [];
+  const counted = life.rows.filter((r) => life.byPart.has(r.part.id));
+  if (counted.length) {
+    const sum = counted.reduce((t, r) => t + r.fitEach * r.part.qty, 0);
+    lines.push(`${plural(counted.length, 'line counts', 'lines count')} wear-out: <b>${fmt(sum)} FIT</b>, averaged over the ${fmt(state.years)}-year mission and added to ${counted.length > 1 ? 'their lines' : 'its line'}.`);
+  }
+  for (const r of life.wornOut) {
+    lines.push(`<b>${esc(r.part.ref)}</b> reaches end of life after ${fmt2(r.alphaHours / 8760)} years, before the end of the mission (${pctWorn(r.fraction)} worn out by then)${r.role === 'hard' ? '; not counted, since only shorts and opens matter for it' : ''}.`);
+  }
+  for (const r of life.rows.filter((x) => x.lifeComplete && x.hot)) {
+    lines.push(`<b>${esc(r.part.ref)}</b> runs above its rated temperature in some phase, where the makers' rules do not apply.`);
+  }
+  if (life.pending) lines.push(`${plural(life.pending, 'line needs', 'lines need')} input (red) before ${life.pending > 1 ? 'their' : 'its'} wear-out can count.`);
+  $('#life-result').innerHTML = (lines.length ? `<p>${lines.join(' ')}</p>` : '')
+    + (life.problems.length ? `<ul class="problems">${life.problems.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : '');
+  // Other capacitor lines, and lines with a rate entered by hand, can be checked too.
+  const add = $('#life-add');
+  if (document.activeElement !== add) {
+    const others = state.parts.filter((p) => LIFE_MODELS.includes(p.model) && !life.rows.some((r) => r.part === p));
+    add.innerHTML = `<option value="">${others.length ? 'Choose a line…' : 'No other capacitor lines'}</option>${others.map((p) => `<option value="${p.id}">${esc(p.ref)}: ${esc(describePart(p))}</option>`).join('')}`;
+    add.disabled = !others.length;
+  }
+}
+
 function renderAll() {
   renderBoardBar();
   renderPresets();
@@ -519,12 +666,16 @@ function renderAll() {
   renderParts();
   renderPcb();
   renderSmt();
+  lifeShown = null;
   update();
 }
 
 // Recompute everything and refresh outputs without touching the inputs.
 function update() {
-  const board = computeBoard({ profile: state.profile, components: state.parts });
+  const years = isNum(state.years) ? state.years : 0;
+  // Capacitor wear-out is added to the lines whose drift counts, before anything is summed.
+  const life = evaluateCapLife(state.parts, state.caplife, state.profile, years);
+  const board = withLife(computeBoard({ profile: state.profile, components: state.parts }), life);
   const problems = profileProblems(state.profile);
 
   $('#tau-summary').innerHTML = `τ<sub>on</sub> = <b>${fmt(board.prof.tauOn)}</b>, τ<sub>off</sub> = <b>${fmt(board.prof.tauOff)}</b>${state.profile.tauOff == null ? ' (1 − τ<sub>on</sub>)' : ''}`;
@@ -571,13 +722,15 @@ function update() {
     }
   });
 
-  const years = isNum(state.years) ? state.years : 0;
+  updateCapLife(life);
   const structure = refreshStructure(board.items, years);
   // With redundant blocks the board figures are averages over the mission.
   const redundancy = structure.redundancy;
   // Surface-mount solder joints: the weakest device's rate over the design life, in series with the rest.
   const smt = evaluateSmt(state.smt, state.profile, years);
   updateSmt(smt);
+  const flex = flexRisks(state.parts);
+  updateFlex(flex);
   const smtFit = state.smt.include && smt.worst ? smt.fit : 0;
   const smtPending = state.smt.include && state.smt.devices.length > 0 && (smt.incomplete > 0 || smt.problems.length > 0);
   // Circuit board: the weakest plated-hole size, likewise.
@@ -603,16 +756,23 @@ function update() {
       ? `${plural(smt.incomplete, 'surface-mount device needs', 'surface-mount devices need')} input; until then the weakest link is taken from the others.`
       : 'The surface-mount check needs input; the total leaves it out.');
   }
+  if (life.pending) warn.push(`${plural(life.pending, 'capacitor life check needs', 'capacitor life checks need')} input; the total leaves ${life.pending > 1 ? 'their' : 'its'} wear-out out.`);
+  if (life.wornOut.length) warn.push(`${plural(life.wornOut.length, 'capacitor line reaches', 'capacitor lines reach')} end of life before the end of the mission; see Electrolytic capacitor life.`);
   const guessedGroups = [...structure.red].filter((id) => currentBlock(id)?.inferred?.shortPct).length;
   if (guessedLines) warn.push(`${plural(guessedLines, 'line uses', 'lines use')} guessed values; check and confirm them.`);
+  if (life.guessed) warn.push(`${plural(life.guessed, 'capacitor life uses', 'capacitor lives use')} guessed values; check and confirm them.`);
   if (guessedGroups) warn.push(`${plural(guessedGroups, 'redundant block uses', 'redundant blocks use')} a guessed share of failures; check and confirm ${guessedGroups > 1 ? 'them' : 'it'}.`);
   // While lines are left out, the total is only a lower bound, so MTBF and
   // survival are upper bounds; say so and show fewer digits.
-  const partial = board.incomplete > 0 || smtPending || pcbPending;
+  const partial = board.incomplete > 0 || smtPending || pcbPending || life.pending > 0;
   const ge = partial ? '≥ ' : '';
   const le = partial ? '≤ ' : '';
   const pct = (r) => `${(r * 100).toFixed(r > 0.999 ? 3 : 1)}%`;
-  const leftOut = [board.incomplete ? plural(board.incomplete, 'line') : '', pcbPending ? 'the circuit board' : '', smtPending ? (smtWaiting ? plural(smt.incomplete, 'surface-mount device') : 'the surface-mount check') : ''].filter(Boolean).join(', ');
+  const leftOut = [
+    board.incomplete ? plural(board.incomplete, 'line') : '', pcbPending ? 'the circuit board' : '',
+    smtPending ? (smtWaiting ? plural(smt.incomplete, 'surface-mount device') : 'the surface-mount check') : '',
+    life.pending ? plural(life.pending, 'capacitor wear-out') : '',
+  ].filter(Boolean).join(', ');
   const boundNote = partial ? `<div class="sub">Lower bound: ${leftOut} left out</div>` : '';
   $('#summary').innerHTML = `<div class="tiles${partial ? ' partial' : ''}">
     <div class="tile"><div class="label">${redundancy ? `Board failure rate, average over ${fmt(years)} years` : 'Board failure rate'}</div><div class="value">${ge}${fmt2(total)} FIT</div><div class="sub">${fmt(pieces)} pieces in ${state.parts.length} lines${redundancy ? ', with redundancy' : ''}</div>${boundNote}</div>
@@ -625,7 +785,9 @@ function update() {
     ? 'Surface-mount solder joints count once more through their weakest device (MIL-HDBK-217F 16.2), on top of the IEC TR 62380 package terms, which already include joint fatigue for the parts they model.'
     : 'Solder joints are part of each IEC TR 62380 component\'s package term; MIL-HDBK-217F parts need the surface-mount check for theirs.'} ${pcbFit
     ? 'The circuit board counts through its weakest plated hole size.'
-    : 'The bare circuit board is not included unless its plated holes are checked under Circuit board.'} Anything not in the list is not included.</p>`;
+    : 'The bare circuit board is not included unless its plated holes are checked under Circuit board.'}${life.rows.length
+    ? ' Aluminium electrolytic capacitors include their wear-out only where drift is a failure (Electrolytic capacitor life).' : ''}${flex.length
+    ? ` Flex cracking of ${esc(flexText(flex))}, ceramic chips 1210 or larger, is not counted; see Surface-mount solder joints.` : ''} Anything not in the list is not included.</p>`;
 
   const sum = board.total + wearFit;
   const sorted = [...board.items].sort((a, b) => b.result.total - a.result.total || Number(a.result.complete) - Number(b.result.complete));
@@ -636,7 +798,7 @@ function update() {
       const top = i === 0 && sorted.length > 1 && result.complete && result.total > 0;
       const share = sum > 0 ? (100 * result.total) / sum : 0;
       const each = result.complete ? fmt(result.fit) : '<span class="bad">Missing</span>';
-      return `<tr${top ? ' class="top"' : ''}><td>${esc(comp.ref)}</td><td class="opt">${esc(model.describe({ ...model.defaults, ...comp.params }))}</td><td class="num">${fmt(result.qty)}</td><td class="num opt">${each}</td><td class="num">${result.complete ? fmt(result.total) : '—'}</td><td class="num">${result.complete ? `${share.toFixed(1)}%` : '—'}</td></tr>`;
+      return `<tr${top ? ' class="top"' : ''}><td>${esc(comp.ref)}</td><td class="opt">${esc(model.describe({ ...model.defaults, ...comp.params }))}${result.wearOut ? ', with wear-out' : ''}</td><td class="num">${fmt(result.qty)}</td><td class="num opt">${each}</td><td class="num">${result.complete ? fmt(result.total) : '—'}</td><td class="num">${result.complete ? `${share.toFixed(1)}%` : '—'}</td></tr>`;
     }).join('')
       + (pcbFit ? `<tr class="smt-row"><td>Circuit board</td><td class="opt">Plated holes, weakest: ${esc(pcb.worst.hole.label || 'unnamed hole size')}</td><td></td><td class="opt"></td><td class="num">${fmt(pcbFit)}</td><td class="num">${sum > 0 ? `${((100 * pcbFit) / sum).toFixed(1)}%` : '—'}</td></tr>` : '')
       + (smtFit ? `<tr class="smt-row"><td>Solder joints</td><td class="opt">Surface mount, weakest link: ${esc(smt.worst.device.label || 'unnamed device')}</td><td></td><td class="opt"></td><td class="num">${fmt(smtFit)}</td><td class="num">${sum > 0 ? `${((100 * smtFit) / sum).toFixed(1)}%` : '—'}</td></tr>` : '')
@@ -668,7 +830,9 @@ function csvCell(v) {
 }
 
 function boardCSV() {
-  const board = computeBoard({ profile: state.profile, components: state.parts });
+  const years = isNum(state.years) ? state.years : 0;
+  const life = evaluateCapLife(state.parts, state.caplife, state.profile, years);
+  const board = withLife(computeBoard({ profile: state.profile, components: state.parts }), life);
   const rows = [['Ref', 'Part type', 'Description', 'Qty', 'Lambda each (FIT)', 'Lambda total (FIT)', 'Share (%)', 'Breakdown (FIT)', 'Problems', 'Guessed values', 'Confirmed guesses', 'Manufacturer', 'MPN']];
   for (const { comp, result } of board.items) {
     const model = MODELS[comp.model];
@@ -682,7 +846,7 @@ function boardCSV() {
       result.errors.join(' '), labels(comp.inferred), labels(comp.confirmed), comp.source?.manufacturer ?? '', comp.source?.mpn ?? '',
     ]);
   }
-  const smt = evaluateSmt(state.smt, state.profile, isNum(state.years) ? state.years : 0);
+  const smt = evaluateSmt(state.smt, state.profile, years);
   if (state.smt.devices.length) {
     rows.push(['Solder joints', 'Surface mount (MIL-HDBK-217F 16.2), weakest link', smt.worst ? smt.worst.device.label : '', '', '',
       smt.worst ? smt.fit : '', '', '', [...smt.problems, smt.incomplete ? `${smt.incomplete} devices need input.` : ''].filter(Boolean).join(' '),
@@ -691,13 +855,23 @@ function boardCSV() {
       rows.push([`  ${r.device.label}`, 'Surface-mount device', `${r.device.lead ?? ''} ${r.device.body ?? ''}, d ${r.device.d ?? ''} mm`, '', '', r.complete ? r.fit : '', '', '', r.complete ? '' : `Missing: ${r.missing.join(', ')}`, '', '', '', '']);
     }
   }
-  const pcb = evaluateBoard(state.pcb, state.profile, isNum(state.years) ? state.years : 0);
+  const pcb = evaluateBoard(state.pcb, state.profile, years);
   if (state.pcb.holes.length) {
     rows.push(['Circuit board', 'Plated-hole fatigue (IPC-TR-579), weakest hole size', pcb.worst ? pcb.worst.hole.label : '', '', '',
       pcb.worst ? pcb.fit : '', '', '', [...pcb.problems, pcb.incomplete ? `${pcb.incomplete} hole sizes need input.` : ''].filter(Boolean).join(' '), '', '', '', '']);
     for (const r of pcb.holes) {
       rows.push([`  ${r.hole.label}`, 'Plated hole', `drill ${r.hole.drill ?? ''} mm, plating ${r.hole.plating ?? ''} µm`, '', '', r.complete && !r.cracked ? r.fit : '', '', '',
         r.cracked ? 'Cracks during assembly' : r.complete ? '' : `Missing: ${r.missing.join(', ')}`, '', '', '', '']);
+    }
+  }
+  if (life.rows.length) {
+    rows.push(['Capacitor life', 'Aluminium electrolytic wear-out (makers\' rules)', '', '', '', '', '', '', life.problems.join(' '), '', '', '', '']);
+    for (const r of life.rows) {
+      const v = r.values;
+      rows.push([`  ${r.part.ref}`, `Capacitor life, ${v.tech ?? 'kind missing'}`, `${v.hours ?? '?'} h at ${v.temp ?? '?'} °C; life ${r.lifeComplete ? `${+(r.alphaHours / 8760).toPrecision(3)} years` : 'not worked out'}`,
+        r.part.qty, life.byPart.has(r.part.id) ? r.fitEach : '', life.byPart.has(r.part.id) ? r.fitEach * r.part.qty : '', '', '',
+        [r.missing.length ? `Missing: ${r.missing.join(', ')}` : '', r.role === 'hard' ? 'Not counted: only shorts and opens matter' : '', r.lifeComplete && r.wornOut ? 'Reaches end of life before the end of the mission' : ''].filter(Boolean).join('. '),
+        Object.keys(r.inferred).join('; '), Object.keys(r.confirmed).join('; '), '', '']);
     }
   }
   const smtFit = (state.smt.include && smt.worst ? smt.fit : 0) + (state.pcb.include && pcb.worst ? pcb.fit : 0);
@@ -754,6 +928,12 @@ function nextRef(model) {
   return `${prefix}${max + 1}`;
 }
 
+// A capacitor life value the user entered: no longer a guess, confirmed or not.
+function setLife(part, key, value) {
+  part.life = { ...part.life, [key]: value };
+  if (part.life.confirmed?.[key]) delete part.life.confirmed[key];
+}
+
 // An edited value is the user's own, no longer a guess, confirmed or not.
 function clearGuess(part, key) {
   if (part.inferred?.[key]) delete part.inferred[key];
@@ -783,6 +963,8 @@ document.addEventListener('input', (e) => {
     const key = el.dataset.key;
     dev[key] = key === 'label' ? el.value : numOrNull(el.value);
     if (dev.inferred?.[key]) { delete dev.inferred[key]; el.removeAttribute('title'); }
+  } else if (bind === 'life') {
+    setLife(findPart(el.dataset.id), el.dataset.key, numOrNull(el.value));
   } else if (bind === 'part') {
     const part = findPart(el.dataset.id);
     const key = el.dataset.key;
@@ -804,7 +986,7 @@ document.addEventListener('change', (e) => {
     $('#parts').classList.toggle('attention-only', el.checked);
     return;
   }
-  if (!bind) return;
+  if (!bind && el.id !== 'life-add') return;
   if (bind === 'pcb' && (el.tagName === 'SELECT' || el.type === 'checkbox')) {
     if (el.type === 'checkbox') state.pcb.include = el.checked;
     else state.pcb.laminate = el.value || null;
@@ -820,6 +1002,15 @@ document.addEventListener('change', (e) => {
     // Leaded parts use the handbook's 8-mil joint height, so the row's cells change.
     $(`#smt-devices [data-smt="${i}"]`).outerHTML = smtRowHTML(dev, i);
     $(`#smt-devices [data-smt="${i}"] [data-key="${el.dataset.key}"]`)?.focus();
+  } else if (bind === 'life' && el.tagName === 'SELECT') {
+    setLife(findPart(el.dataset.id), el.dataset.key, el.value || null);
+  } else if (bind === 'caplife') {
+    state.caplife[el.dataset.key] = el.value || null;
+    state.caplife.polymerRule ??= 'majority';
+  } else if (el.id === 'life-add') {
+    const part = findPart(el.value);
+    if (part) part.life = { ...part.life, listed: true };
+    el.blur();
   } else if (bind === 'env217f') {
     state.profile.env217f = el.value;
   } else if (bind === 'preset') {
@@ -911,6 +1102,17 @@ document.addEventListener('click', (e) => {
         : 'No chip capacitors or resistors with a size code (such as 0603) in their footprint or description.';
       break;
     }
+    case 'life-confirm': {
+      // The guesses become the line's own values, with the reasons kept on record.
+      const { values, inferred } = lifeInputs(part);
+      part.life = { ...part.life, confirmed: { ...part.life?.confirmed, ...inferred } };
+      for (const k of Object.keys(inferred)) part.life[k] = values[k];
+      lifeShown = null;
+      break;
+    }
+    case 'life-del':
+      part.life = { ...part.life, listed: false };
+      break;
     case 'dismiss-report': $('#import-report').hidden = true; return;
     case 'export-json': download(`${fileBase()}.iec62380.json`, 'application/json', JSON.stringify(exportable(state), null, 2)); return;
     case 'export-csv': download(`${fileBase()}.csv`, 'text/csv', boardCSV()); return;
@@ -1007,6 +1209,7 @@ $('#netlist-file').addEventListener('change', async (e) => {
   const guessed = state.parts.filter((p) => guessCount(p)).length;
   showReport(`Read ${plural(result.components, 'component')} from “${esc(file.name)}” (${esc(result.format)}, ${plural(result.nets, 'net')}) into ${plural(result.lines.length, 'line')}.
     ${result.skippedCount ? `Skipped ${result.skippedCount} mechanical items (${esc(result.skipped)}).` : ''}
+    ${result.notFittedCount ? `Left out ${plural(result.notFittedCount, 'part')} marked do not populate (${esc(result.notFitted)}).` : ''}
     <strong>${plural(board.incomplete, 'line needs', 'lines need')} input</strong> (red, “Missing”) and ${plural(guessed, 'line has', 'lines have')} guessed values (amber, “Guessed”).
     ${result.groups.length ? `Proposed ${plural(result.groups.length, 'block')} of parts wired in parallel under Reliability structure; they count in series until you mark them redundant.` : ''}
     Tick “Only parts that need attention” to work through them.`);

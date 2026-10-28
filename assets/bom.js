@@ -50,7 +50,8 @@ export function parseDelimited(text) {
 
 // Designators as written in BOMs: "C1, C2", "C1 C2", "C1-C3", "C1–C3", "C1;C2".
 export function splitDesignators(text) {
-  const tokens = String(text ?? '').replace(/\s*[–-]\s*/g, '–').split(/[\s,;]+/).filter(Boolean);
+  // A dash after a digit is a range (R1-R5, C9 – C11); one inside a name is not (KiCad's TA-101).
+  const tokens = String(text ?? '').replace(/(\d)\s*[–-]\s*(?=[A-Za-z_]*\d)/g, '$1–').split(/[\s,;]+/).filter(Boolean);
   return tokens.flatMap((t) => expandRefs(t)).map((r) => r.toUpperCase());
 }
 
@@ -108,13 +109,14 @@ export function parseBom(text) {
   };
 }
 
-// The same guessing as the netlist import, with the MPN and manufacturer added to the text it reads.
+// The same guessing as the netlist import, with the MPN added to the text it reads. The
+// manufacturer is left out: names such as "Samsung Electro-Mechanics" read as a part type.
 function classify(designator, item) {
   const cls = classifyComponent({
     designator,
     value: item.value,
     footprint: item.footprint,
-    description: [item.description, item.mpn, item.manufacturer].filter(Boolean).join(' '),
+    description: [item.description, item.mpn].filter(Boolean).join(' '),
   });
   if (cls.skip) return cls;
   const source = { value: item.value, footprint: item.footprint, description: item.description, mpn: item.mpn, manufacturer: item.manufacturer };

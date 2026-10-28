@@ -5,6 +5,7 @@
 // the interface, converted to the handbook's mils inside.
 
 import { SMT_217F, ENVIRONMENTS } from './tables217f.js';
+import { FLEX } from './tablesmaker.js';
 
 const MM_PER_MIL = 0.0254;
 const HOURS_PER_YEAR = 8760;
@@ -113,14 +114,14 @@ export const chipCodeOf = (text) => CHIP_CODE.exec(String(text ?? '').split(':')
 export function chipCandidates(parts) {
   const groups = new Map();
   for (const part of parts) {
-    const isCap = part.model === 'capacitor' || part.model === 'mil-capacitor';
+    const isCap = ['capacitor', 'mil-capacitor', 'tantalum-maker', 'ceramic-test'].includes(part.model);
     const isRes = part.model === 'resistor' || part.model === 'mil-resistor';
     if (!isCap && !isRes) continue;
     const src = part.source ?? {};
     const code = chipCodeOf(src.footprint) ?? chipCodeOf(src.description) ?? chipCodeOf(src.value);
     if (!code) continue;
     // Tantalum chips are moulded in plastic; ceramic capacitors and thick-film resistors have ceramic bodies.
-    const tantalum = part.params?.type === 'tantalum-solid' || ['CSR', 'CWR'].includes(part.params?.style);
+    const tantalum = part.model === 'tantalum-maker' || part.params?.type === 'tantalum-solid' || ['CSR', 'CWR'].includes(part.params?.style);
     const body = tantalum ? 'plastic' : 'ceramic';
     const kind = tantalum ? 'tantalum chip' : isCap ? 'ceramic chip capacitor' : 'chip resistor';
     const auto = `chip-${code}-${tantalum ? 'tantalum' : isCap ? 'capacitor' : 'resistor'}`;
@@ -142,4 +143,24 @@ export function chipCandidates(parts) {
       rise: 'a chip passive: self-heating taken as 0',
     },
   }));
+}
+
+// Ceramic chip capacitors large enough to crack when the board bends, unless
+// their text says they have soft (flexible) terminations. No rate model counts
+// flex cracks, so these are flagged rather than charged.
+const SOFT_TERMINATION = /SOFT|FLEX|\bF[TF]-?CAP|\bGCJ/;
+const CERAMIC_STYLES = ['CK', 'CKR', 'CC', 'CDR'];
+export function flexRisks(parts) {
+  const risks = [];
+  for (const part of parts) {
+    const p = part.params ?? {};
+    const ceramic = (part.model === 'capacitor' && /^ceramic/.test(p.type ?? ''))
+      || (part.model === 'mil-capacitor' && CERAMIC_STYLES.includes(p.style)) || part.model === 'ceramic-test';
+    if (!ceramic) continue;
+    const src = part.source ?? {};
+    const code = chipCodeOf(src.footprint) ?? chipCodeOf(src.description) ?? chipCodeOf(src.value);
+    const text = [src.value, src.description, src.footprint, p.note].filter(Boolean).join(' ').toUpperCase();
+    if (FLEX.sizes.includes(code) && !SOFT_TERMINATION.test(text)) risks.push({ ref: part.ref, code });
+  }
+  return risks;
 }

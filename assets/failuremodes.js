@@ -137,6 +137,9 @@ export function deviceTypeFor(model, p = {}) {
     case 'mil-lamp': return 'Lamp/Light';
     case 'mil-opto': return p.type ? (/led$/.test(p.type) ? 'Optoelectronic LED' : 'Optoelectronic Sensor') : null;
     case 'mil-capacitor': return CAPACITORS_217F.styles.find((r) => r.id === p.style)?.fm ?? null;
+    // Niobium oxide fails to a high resistance (KYOCERA AVX); MIL-HDBK-338B has no row for it.
+    case 'tantalum-maker': return p.curve === 'avx-nbo' ? null : 'Capacitor, Tantalum';
+    case 'ceramic-test': return 'Capacitor, Ceramic';
     case 'mil-resistor': return RESISTORS_217F.styles.find((r) => r.id === p.style)?.fm ?? null;
     case 'mil-inductive': return INDUCTIVE_217F.kinds.find((r) => r.id === p.kind)?.fm ?? null;
     default: return null;

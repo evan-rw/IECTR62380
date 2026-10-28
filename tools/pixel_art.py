@@ -217,6 +217,40 @@ def bug(size=16):
     return pixel
 
 
+# A round bomb with a lit fuse, for the capacitors that wear out on a timer:
+# a dark body with a gray highlight, a metal cap at the top right, and a spark.
+def bomb(size=16):
+    import math
+    pixel = [[None] * size for _ in range(size)]
+    cx, cy, r = 7.0, 9.4, 5.4
+    for y in range(size):
+        for x in range(size):
+            d = math.hypot(x + 0.5 - cx, y + 0.5 - cy)
+            if d <= r:
+                pixel[y][x] = '#2c2c34'
+                if math.hypot(x + 0.5 - 5.0, y + 0.5 - 7.2) <= 1.9:
+                    pixel[y][x] = '#8c8c98'
+    pixel[6][4] = '#e4e4ec'
+    # The cap the fuse comes out of.
+    for x, y in ((10, 3), (11, 3), (10, 4), (11, 4), (12, 4), (11, 5)):
+        pixel[y][x] = '#9a9aa4'
+    pixel[3][10] = '#d0d0d8'
+    # A one-pixel black outline around body and cap.
+    for y in range(size):
+        for x in range(size):
+            if pixel[y][x] is None and any(0 <= y + j < size and 0 <= x + i < size and pixel[y + j][x + i] not in (None, '#000000')
+                                           for i, j in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                pixel[y][x] = '#000000'
+    # The fuse, and its spark.
+    for x, y in ((12, 2), (13, 1)):
+        pixel[y][x] = '#d8a860'
+    for x, y in ((14, 0), (15, 1), (13, 0), (15, 0)):
+        pixel[y][x] = '#ff7a00'
+    pixel[0][14] = '#ffd83a'
+    pixel[1][14] = '#fff6c8'
+    return pixel
+
+
 def flame_square(size=16):
     """A square of fire, twisted so its corners curl: red-orange outside, a yellow ring, a dark red heart."""
     import math
@@ -312,6 +346,7 @@ def main():
         'arrows': arrows(),
         'bug': bug(),
         'fire-square': flame_square(),
+        'bomb': bomb(),
         'portal-floor': portal_on_floor(),
     }
     for name, pixel in pieces.items():

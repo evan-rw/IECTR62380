@@ -7,6 +7,8 @@ import { JSDOM } from 'jsdom';
 import { ALL_TABLES, SOURCES } from '../assets/tables.js';
 import { TABLES_217F, SOURCES_217F } from '../assets/tables217f.js';
 import { TABLES_BOARD, SOURCES_BOARD } from '../assets/tablesboard.js';
+import { TABLES_CAPLIFE, SOURCES_CAPLIFE } from '../assets/tablescaplife.js';
+import { TABLES_MAKER, SOURCES_MAKER } from '../assets/tablesmaker.js';
 import { FAILURE_MODES } from '../assets/failuremodes.js';
 import { MODELS, PENDING_FAMILIES } from '../assets/models.js';
 
@@ -26,14 +28,20 @@ test('the data sources page lists every table, source, model and failure mode', 
   assert.equal($$('#method-tables-62380 tbody tr').length, ALL_TABLES.length);
   assert.equal($$('#method-tables-217f tbody tr').length, TABLES_217F.length);
   assert.equal($$('#method-tables-board tbody tr').length, TABLES_BOARD.length);
+  assert.equal($$('#method-tables-caplife tbody tr').length, TABLES_CAPLIFE.length);
+  assert.equal($$('#method-tables-maker tbody tr').length, TABLES_MAKER.length);
+  assert.match($('#method-tables-maker').textContent, /Vishay white paper 40292, Fig\. 1.*Read from a maker's published chart/s);
   assert.match($('#method-tables-board').textContent, /IPC-TR-579 model \(1988\)/);
+  assert.match($('#method-tables-caplife').textContent, /Nippon Chemi-Con Technical Note, equations 17 and 18.*One maker's published rule/s);
   assert.match($('#method-tables-217f').textContent, /MIL-HDBK-217F Notice 2, section 13\.1/);
   assert.match($('#method-tables-62380').textContent, /Table 16 of IEC TR 62380, according to the source/);
 
   // Every source appears once in the bibliography, linked, with what it was used for.
   const bib = $$('#bibliography li');
-  assert.equal(bib.length, Object.keys(SOURCES).length + Object.keys(SOURCES_217F).length + Object.keys(SOURCES_BOARD).length + 1);
+  assert.equal(bib.length, Object.keys(SOURCES).length + Object.keys(SOURCES_217F).length + Object.keys(SOURCES_BOARD).length + Object.keys(SOURCES_CAPLIFE).length + Object.keys(SOURCES_MAKER).length + 1);
+  assert.match($('#src-nasaApc').textContent, /Polymer capacitors: the slower rule/);
   assert.match($('#src-isola370hr').textContent, /Laminates: glass transition and z-axis expansion/);
+  assert.match($('#src-knowles').textContent, /life-test acceleration.*60 % upper bound.*n = 3, E_a = 1\.0 eV/s);
   for (const li of bib) {
     assert.ok(li.querySelector('a[href^="https://"]'), li.id);
     assert.match(li.textContent, /Used for: /, li.id);

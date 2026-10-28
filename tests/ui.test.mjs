@@ -112,14 +112,21 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
     click($('[data-act="add-part"]'));
   }
   const refs = $$('.part [data-key="ref"]').map((i) => i.value);
-  assert.deepEqual(refs.slice(8), ['U4', 'D5', 'Q3', 'C22', 'R31', 'L1', 'U5', 'X1'], 'numbering continues past ranges like D1–D4');
-  assert.match(warn(), /7 part lines need more input/, 'all but the capacitor');
+  assert.deepEqual(refs.slice(8), ['U4', 'D5', 'Q3', 'C22', 'R31', 'L1', 'U5', 'C23', 'C24', 'X1'], 'numbering continues past ranges like D1–D4');
+  assert.match(warn(), /9 part lines need more input/, 'all but the capacitor');
   fill(cardFor('U4'), { count: 1000, power: 0.1, rja: 50 });
   fill(cardFor('D5'), { power: 0.01, rja: 300 });
   fill(cardFor('Q3'), { stress: 0.5, power: 0.05, rja: 300 });
   fill(cardFor('R31'), { power: 0.01, rated: 0.1 });
   fill(cardFor('L1'), { l0: 1, ploss: 0.1, area: 0.04 });
   fill(cardFor('U5'), { fit: 10, tref: 55, ea: 0.7, power: 0.1, rja: 50 });
+  // The makers' tantalum and ceramic models ask for their constants only once a curve or electrode is chosen.
+  assert.deepEqual($$('.field.missing', cardFor('C23')).map((f) => f.dataset.field), ['curve', 'v']);
+  choose($('[data-key="curve"]', cardFor('C23')), 'kemet-polymer');
+  assert.deepEqual($$('.field.missing', cardFor('C23')).map((f) => f.dataset.field), ['capacitance', 'v', 'vr']);
+  fill(cardFor('C23'), { capacitance: 150, v: 3.3, vr: 6.3 });
+  choose($('[data-key="electrode"]', cardFor('C24')), 'entered');
+  fill(cardFor('C24'), { n: 2.1, ea: 1.2, hours: 77000, failures: 0, vTest: 100, tTest: 125, v: 25 });
   fill(cardFor('X1'), { fit: 25 });
   assert.equal(warn(), '');
 
@@ -487,6 +494,18 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.match($('.source-line', asVendor).textContent, /Footprint: R_0603_1608Metric/);
   choose($('[data-bind="part-model"]', asVendor), 'resistor');
   assert.equal($('.part-kind .model', cardFor('R1')).textContent.trim().startsWith('Resistor'), true);
+
+  // A KiCad netlist: recognised by its format, with a do-not-populate part left out and reported.
+  const kicad = `(export (version "E") (components
+    (comp (ref "R1") (value "10k") (footprint "Resistor_SMD:R_0603_1608Metric") (libsource (lib "Device") (part "R") (description "Resistor")))
+    (comp (ref "R2") (value "0R") (footprint "Resistor_SMD:R_0603_1608Metric") (libsource (lib "Device") (part "R") (description "Resistor")) (property (name "dnp"))))
+    (nets (net (code "1") (name "VCC") (node (ref "R1") (pin "1"))) (net (code "2") (name "GND") (node (ref "R1") (pin "2")))))`;
+  alerted = '';
+  await pick('#netlist-file', { name: 'kicad.net', arrayBuffer: async () => new TextEncoder().encode(kicad).buffer });
+  assert.equal(alerted, '');
+  assert.deepEqual($$('.part [data-key="ref"]').map((i) => i.value), ['R1']);
+  assert.match($('#import-report').textContent, /Read 2 components from “kicad.net” \(KiCad, 2 nets\) into 1 line/);
+  assert.match($('#import-report').textContent, /Left out 1 part marked do not populate \(R2\)/);
 
   assert.deepEqual(errors, []);
 });

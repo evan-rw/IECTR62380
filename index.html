@@ -103,7 +103,7 @@
           <button type="button" class="primary" data-act="add-part">Add part</button>
         </div>
       </div>
-      <p class="hint">Import a Protel or Protel 2 netlist to start from a schematic, a BOM (CSV) to start from a parts list, or both: a BOM imported after a netlist adds part numbers and descriptions to the matching lines and improves their guesses. Values the files cannot supply are marked <span class="tag-missing">Missing</span> and the part is left out of the total until they are filled in. Values the importer worked out from footprints, part names and descriptions are marked <span class="tag-guessed">Guessed</span> until you change or confirm them.</p>
+      <p class="hint">Import a KiCad, Protel or Protel 2 netlist to start from a schematic, a BOM (CSV) to start from a parts list, or both: a BOM imported after a netlist adds part numbers and descriptions to the matching lines and improves their guesses. Values the files cannot supply are marked <span class="tag-missing">Missing</span> and the part is left out of the total until they are filled in. Values the importer worked out from footprints, part names and descriptions are marked <span class="tag-guessed">Guessed</span> until you change or confirm them.</p>
       <div id="import-report" class="import-report" role="status" hidden></div>
       <label class="check-label"><input type="checkbox" id="attention-only"> Only parts that need attention</label>
       <div id="parts" class="parts"></div>
@@ -189,6 +189,51 @@
         <span id="smt-status" class="muted" role="status"></span>
       </div>
       <div id="smt-result" class="smt-result" aria-live="polite"></div>
+      <p id="smt-flex" class="flex-note" hidden></p>
+    </section>
+
+    <section class="panel" id="caplife" aria-labelledby="life-heading">
+      <h2 id="life-heading">Electrolytic capacitor life</h2>
+      <p class="hint">Aluminium electrolytic capacitors wear out: a wet one's electrolyte slowly dries, a polymer one's polymer degrades. Each line is worked out from its rated life with the makers' published rules: wet and hybrid capacitors last twice as long for every 10 °C cooler, polymer ones ten times as long for every 20 °C, and ripple heating shortens the life. Below 40 °C the life is worked out at 40 °C, and no life is taken as longer than 15 years. End of life is a drift limit (capacitance down, ESR up), so it counts as a failure only where drift matters in the circuit: filters, regulator outputs (an LDO can go unstable outside its ESR range), timing and hold-up. Where only shorts and opens matter, such as bulk storage with margin, the life is still checked and you are warned if it is shorter than the mission. Wear-out times spread around the calculated life as Cornell Dubilier publishes (mean 1.2 ×, deviation 0.1 ×), so a capacitor that outlasts the mission adds almost nothing, and the share worn out by the end of the mission is counted as an average rate over it.</p>
+      <div class="smt-settings life-settings">
+        <div class="field" data-field="defaultRole"><label for="life-role">Drift is a failure, unless a line says otherwise <span class="state-tag"></span></label>
+          <select id="life-role" data-bind="caplife" data-key="defaultRole">
+            <option value="">Choose…</option>
+            <option value="drift">Yes: filters, regulator outputs, timing, hold-up</option>
+            <option value="hard">No: only shorts and opens matter</option>
+          </select></div>
+        <div class="field"><label for="life-polymer">Polymer life rule</label>
+          <select id="life-polymer" data-bind="caplife" data-key="polymerRule">
+            <option value="majority">×10 for every 20 °C cooler (Panasonic, Nichicon, KEMET, Vishay)</option>
+            <option value="slow">×2 for every 10 °C cooler (Chemi-Con; closer to NASA's measurements)</option>
+          </select></div>
+      </div>
+      <div class="table-scroll">
+        <table class="smt-devices life-lines">
+          <thead>
+            <tr>
+              <th scope="col">Line</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Rated life <span class="unit">h</span></th>
+              <th scope="col">at <span class="unit">°C</span></th>
+              <th scope="col">Rated with</th>
+              <th scope="col">Ripple heating</th>
+              <th scope="col">I/I<sub>rated</sub> <span class="unit">or rise, °C</span></th>
+              <th scope="col">ΔT₀ <span class="unit">°C, rise at rated ripple</span></th>
+              <th scope="col">Drift is a failure</th>
+              <th scope="col" class="num">Life</th>
+              <th scope="col" class="num">λ <span class="unit">FIT each</span></th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="life-lines"></tbody>
+        </table>
+      </div>
+      <div class="toolbar smt-actions">
+        <label for="life-add">Check another line</label>
+        <select id="life-add"></select>
+      </div>
+      <div id="life-result" class="smt-result" aria-live="polite"></div>
     </section>
 
     <section class="panel" id="structure" aria-labelledby="structure-heading">

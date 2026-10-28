@@ -105,6 +105,8 @@ const COMPLETE = {
   'mil-resistor': { style: 'RW', power: 1, rated: 5 },
   'mil-inductive': { kind: 'coil-fixed', dT: 20 },
   vendor: { fit: 10, tref: 55, ea: 0.7, power: 0.1, rja: 50 },
+  'tantalum-maker': { curve: 'nasa-polymer', v: 5, vr: 10, rate: 0.5, refV: 10, refT: 105 },
+  'ceramic-test': { electrode: 'pme', hours: 77000, failures: 0, vTest: 100, tTest: 125, v: 25 },
 };
 
 test('every model gives a finite, non-negative rate for every preset', () => {
