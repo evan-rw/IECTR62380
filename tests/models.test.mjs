@@ -107,6 +107,7 @@ const COMPLETE = {
   vendor: { fit: 10, tref: 55, ea: 0.7, power: 0.1, rja: 50 },
   'tantalum-maker': { curve: 'nasa-polymer', v: 5, vr: 10, rate: 0.5, refV: 10, refT: 105 },
   'ceramic-test': { electrode: 'pme', hours: 77000, failures: 0, vTest: 100, tTest: 125, v: 25 },
+  'life-test': { hours: 722000, failures: 0, tTest: 125, power: 0.01, rja: 150 },
 };
 
 test('every model gives a finite, non-negative rate for every preset', () => {

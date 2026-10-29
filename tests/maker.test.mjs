@@ -1,5 +1,5 @@
-// Makers' tantalum and ceramic capacitor models, checked against the makers'
-// printed tables and examples (see assets/tablesmaker.js for the sources).
+// Makers' tantalum and ceramic capacitor models and semiconductor life tests, checked
+// against the makers' printed tables and examples (see assets/tablesmaker.js for the sources).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -280,4 +280,71 @@ test('TDK FAQ 0107 Table 1: its k values are the 60 % and 90 % failure bounds', 
       assert.ok(r === 0 && conf === '0.6' ? near(ours, 0.917, 0.001) : matchesPrinted(ours, k), `${conf} r=${r}: ${ours} vs ${k}`);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Semiconductor life test (HTOL)
+
+const LIFE = { hours: 1e6, failures: 0, tTest: 125, ea: 0.7, confidence: '60', afV: 1, power: 0, rja: 0 };
+
+test('TI SNAA391: its χ² table, and 7,859 oscillators for 1000 h give 1.5 FIT at 55 °C and 0.3 FIT at 35 °C', () => {
+  const chi2 = { 0.6: ['1.833', '4.045', '6.211', '8.351'], 0.9: ['4.605', '7.779', '10.645', '13.362'] };
+  for (const [conf, row] of Object.entries(chi2)) {
+    row.forEach((x, r) => assert.ok(matchesPrinted(2 * failureBound(r, Number(conf)), x), `${conf} r=${r}: ${2 * failureBound(r, Number(conf))} vs ${x}`));
+  }
+  // TI rounds k to 8.6 × 10⁻⁵ (AF 78.6 at 55 °C); with 8.617 × 10⁻⁵ and +273.15 the AF is 77.7 and both rates print the same.
+  const ti = { ...LIFE, hours: 7859 * 1000 };
+  assert.ok(matchesPrinted(rate('life-test', ti, at(55)).fit, '1.5'));
+  assert.ok(matchesPrinted(rate('life-test', ti, at(35)).fit, '0.3'));
+});
+
+test('SiTime AN10025: 3,307,000 device-hours at 90 % give 696.3 FIT in the test and 0.88 FIT at 30 °C', () => {
+  assert.ok(matchesPrinted(2 * failureBound(0, 0.9), '4.6'));
+  const fit0 = (failureBound(0, 0.9) / 3307000) * 1e9;
+  assert.ok(matchesPrinted(fit0, '696.3'));
+  // SiTime's own constants: k = 8.63 × 10⁻⁵, whole kelvins (403 K in the test, 303 K in use), and a
+  // gate-oxide voltage factor exp(γ·ΔV/t_ox) with γ = 3.88, t_ox = 32 Å, 3.6 V against 3.3 V.
+  const afV = Math.exp((3.88 * (3.6 - 3.3)) / 32);
+  const theirs = fit0 / (Math.exp((0.7 / 8.63e-5) * (1 / 303 - 1 / 403)) * afV);
+  assert.ok(matchesPrinted(theirs, '0.88'), String(theirs));
+  // With 8.617 × 10⁻⁵ and +273.15 the part type comes out 1 % lower.
+  const st = { ...LIFE, hours: 3307000, tTest: 130, confidence: '90', afV };
+  const ours = rate('life-test', st, at(30)).fit;
+  assert.ok(near(ours, 0.88, 0.015) && ours < theirs, String(ours));
+  // The junction rise is power × R_JA: SiTime's 5 °C as 0.05 W × 100 °C/W over a 25 °C board.
+  assert.ok(near(rate('life-test', { ...st, power: 0.05, rja: 100 }, at(25)).fit, ours, 1e-9));
+});
+
+test('SiTime RR-32: the hours printed beside its 0.65 FIT give 3.4 FIT', () => {
+  // 722 parts × 1000 h at 125 °C, no failures, 90 %, 0.7 eV, derated to 25 °C, all as the report states. The note
+  // its 0.65 FIT refers to is not in the file; that is why the part type takes device-hours, not a quoted FIT.
+  assert.ok(matchesPrinted(rate('life-test', { ...LIFE, hours: 722000, confidence: '90' }, at(25)).fit, '3.4'));
+});
+
+test('a life test: blank inputs are Missing, bad ones are errors, a failure raises the bound', () => {
+  // E_a starts at 0.7 eV, the value all three makers use (the owner's choice, 2026-10-28).
+  assert.deepEqual(rate('life-test', {}, at(40)).missing, ['hours', 'failures', 'tTest', 'power', 'rja']);
+  assert.deepEqual(rate('life-test', LIFE, at(40)).errors, []);
+  assert.match(rate('life-test', { ...LIFE, failures: 0.5 }, at(40)).errors.join(' '), /whole number/);
+  assert.match(rate('life-test', { ...LIFE, afV: 0.9 }, at(40)).errors.join(' '), /below 1/);
+  assert.match(rate('life-test', { ...LIFE, hours: 0 }, at(40)).errors.join(' '), /above 0/);
+  const ratio = rate('life-test', { ...LIFE, failures: 1 }, at(40)).fit / rate('life-test', LIFE, at(40)).fit;
+  assert.ok(near(ratio, failureBound(1) / failureBound(0), 1e-9), String(ratio));
+  // MIL-HDBK-338B has no row for an oscillator module, so no failure modes are suggested.
+  assert.equal(failureModesFor('life-test', LIFE), null);
+});
+
+test('oscillator modules import as a maker\'s life test; crystals stay 217F crystal units', () => {
+  const cls = (c) => classifyComponent({ value: '', footprint: '', symbol: '', description: '', ...c });
+  // KiCad's Oscillator library, a vendor library's symbol and description, a TCXO by name, and an OSC designator (vme-wren).
+  assert.equal(cls({ designator: 'X1', value: '20MHz', footprint: 'Oscillator:Oscillator_SMD_ECS_2520MV-xxx-xx-4Pin_2.5x2.0mm' }).model, 'life-test');
+  assert.equal(cls({ designator: 'Y1', value: 'Oscillator_100MHz_NX', symbol: 'antmicroOscillators:Oscillator', description: '100 MHz XO (Standard) HCSL Oscillator' }).model, 'life-test');
+  assert.equal(cls({ designator: 'Y4', value: '26MHz', description: 'TCXO 26 MHz 0.5 ppm' }).model, 'life-test');
+  const osc = cls({ designator: 'OSC1', value: 'OSC_50MHZ_EPSON_SG-8018CE', footprint: 'ICs And Semiconductors SMD:OSC_EPSON_SG-8018CE' });
+  assert.equal(osc.model, 'life-test');
+  assert.match(osc.params.note, /^Oscillator module, maker's life test: OSC_50MHZ_EPSON_SG-8018CE/);
+  // Crystals, including EasyEDA's two-pin crystal in a footprint it names OSC-SMD (openair-max X1).
+  assert.equal(cls({ designator: 'Y1', value: '32.768KHz', footprint: 'Crystal:Crystal_SMD_3215-2Pin_3.2x1.5mm', symbol: 'Device:Crystal_Small' }).model, 'mil-crystal');
+  assert.equal(cls({ designator: 'X1', value: 'SMD-5032_2P 14.7456MHZ 20PF 20PPM', footprint: 'easyeda2kicad:OSC-SMD_L5.0-W3.2' }).model, 'mil-crystal');
+  assert.equal(cls({ designator: 'Y2', value: '12.0MHz', footprint: 'Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm', description: '12 MHz ±10ppm Crystal 8pF 120 Ohms 4-SMD' }).model, 'mil-crystal');
 });

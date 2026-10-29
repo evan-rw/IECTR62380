@@ -282,7 +282,7 @@ test('KiCad demo parts: the footprint names the part when the designator does no
   // The full KiCad name ends in "MountingHolesOffset": still a connector, not hardware.
   assert.equal(kind('UARTCAN201', 'DB9', 'Connector_Dsub:DSUB-9_Female_Horizontal_P2.77x2.84mm_EdgePinOffset7.70mm_Housed_MountingHolesOffset9.12mm'), 'mil-connector');
   assert.equal(kind('USB701', 'TYPEC-305-ACP16H458', 'USB-C-SMD_TYPEC-305-ACP16H458'), 'mil-connector');
-  assert.equal(kind('OSC1', 'OSC_50MHZ_EPSON_SG-8018CE', 'OSC_EPSON_SG-8018CE'), 'mil-crystal');
+  assert.equal(kind('OSC1', 'OSC_50MHZ_EPSON_SG-8018CE', 'OSC_EPSON_SG-8018CE'), 'life-test', 'an oscillator module, not a bare crystal');
   assert.equal(kind('TR1', 'XFMR_MINI-CIRCUITS_ADT2-1T', 'XFMR_MINI-CIRCUITS_CD542'), 'mil-inductive');
   assert.equal(kind('TR2', 'ADT2-1T', 'XFMR_MINI-CIRCUITS_CD542'), 'mil-inductive', 'from the footprint alone');
   assert.equal(kind('LV101', 'DS1818', 'Package_TO_SOT_THT:TO-92'), 'fixed', 'a TO-92 can be a transistor or an IC: left to the user');

@@ -227,6 +227,8 @@ const SYMBOL_KINDS = [
   [/^DEVICE:D(?:-|$)/, 'diode'],
   [/^DEVICE:Q-/, 'transistor'],
 ];
+// A crystal oscillator or MEMS oscillator module rather than a bare crystal, from the symbol, footprint, value or description.
+const OSCILLATOR_TEXT = /OSCILLATOR|\b(?:XO|[TVO]CXO)\b/;
 // …and from the value, when neither says anything.
 const VALUE_KINDS = [
   [/^LED|\bLED\b/, 'mil-opto'],
@@ -506,6 +508,10 @@ export function classifyComponent(c) {
   const nboSeries = /\bNO([JS])[A-EPRTVWY]\d{3}/.exec(`${text} ${fp}`)?.[1];
   const niobium = model === 'capacitor' && (nboSeries || /NIOB|OXICAP/.test(`${text} ${fp}`));
   if (niobium) model = 'tantalum-maker';
+  // An oscillator module is a crystal plus an IC, not 217F's crystal unit: the maker's life test.
+  // EasyEDA names two-pin crystal footprints OSC-SMD, so the footprint prefix alone is not enough.
+  const oscillator = model === 'mil-crystal' && (prefix === 'OSC' || OSCILLATOR_TEXT.test(`${sym} ${fpAll} ${text}`));
+  if (oscillator) model = 'life-test';
   const params = {};
   let inferred = {};
   const why = (what) => `from ${what}`;
@@ -633,6 +639,8 @@ export function classifyComponent(c) {
     if (type) { params.type = type; inferred.type = ledSymbol ? why(`the symbol ${c.symbol}`) : why(`“${c.value || c.designator}”`); }
   } else if (model === 'mil-fuse') {
     // No inputs beyond the board's environment.
+  } else if (model === 'life-test') {
+    params.note = `Oscillator module, maker's life test: ${[c.value, c.footprint].filter(Boolean).join(', ') || c.designator}`;
   } else {
     params.fit = null;
     const what = alKind ? `Aluminium ${alKind} capacitor, maker's rate` : family ?? 'Part not modelled yet';
@@ -690,7 +698,7 @@ export function expandRefs(text) {
 }
 
 const LINE_ORDER = ['ic', 'transistor', 'diode', 'capacitor', 'mil-capacitor', 'tantalum-maker', 'ceramic-test', 'resistor', 'mil-resistor', 'inductor', 'mil-inductive', 'mil-opto', 'mil-relay', 'mil-ssr',
-  'mil-switch', 'mil-connector', 'mil-socket', 'mil-crystal', 'mil-fuse', 'mil-lamp', 'mil-pwb', 'fixed'];
+  'mil-switch', 'mil-connector', 'mil-socket', 'mil-crystal', 'life-test', 'mil-fuse', 'mil-lamp', 'mil-pwb', 'fixed'];
 
 // Group classified parts ([{ designator, cls }]) with identical results into lines.
 export function groupLines(classified) {
@@ -710,9 +718,9 @@ export function groupLines(classified) {
 
 // Parts whose two ends can be swapped without changing the circuit.
 const TWO_ENDED = new Set(['capacitor', 'mil-capacitor', 'tantalum-maker', 'ceramic-test', 'resistor', 'mil-resistor', 'inductor', 'mil-inductive', 'mil-crystal', 'mil-fuse', 'mil-lamp']);
-// Never proposed: ICs and "Other" parts, whose pins mean too many things, and
-// connectors and sockets, since each serves its own cable or board.
-const NOT_PROPOSED = new Set(['ic', 'fixed', 'mil-connector', 'mil-socket']);
+// Never proposed: ICs, oscillator modules and "Other" parts, whose pins mean too many
+// things, and connectors and sockets, since each serves its own cable or board.
+const NOT_PROPOSED = new Set(['ic', 'life-test', 'fixed', 'mil-connector', 'mil-socket']);
 
 // How a part is wired, for comparing it with others: two parts with the same key go to
 // the same nets pin for pin. Only pins on nets that reach a second part count. The ends

@@ -125,6 +125,22 @@ export const SOURCES_MAKER = {
     label: 'Murata, "What kind of layout helps prevent chip MLCCs from cracking?"',
     url: 'https://article.murata.com/en-eu/article/layout-helps-prevent-chip-mlcc-from-cracking',
   },
+  tiSnaa391: {
+    label: 'Texas Instruments, "High Reliable BAW Oscillator MTBF and FIT Rate Calculations", application note SNAA391, June 2023, pp. 2–4',
+    url: 'https://www.ti.com/lit/pdf/snaa391',
+  },
+  sitimeAn10025: {
+    label: 'SiTime, "Reliability Calculations for SiTime Oscillators", application note SiT-AN10025 rev. 2.0, March 2015, pp. 2–3',
+    url: 'https://www.sitime.com/sites/default/files/hiddenresources/AN10025-SiTime-Reliability-Calculations_SIT.pdf',
+  },
+  sitimeRr32: {
+    label: 'SiTime, reliability report RR-32 rev. A13 (SiT1408, SiT1602, SiT8008), February 2022, p. 1',
+    url: 'https://www.sitime.com/sites/default/files/RR32-SiT1408-SiT1602-SiT8008-Product-Qualification-Report.pdf',
+  },
+  vishay72559: {
+    label: 'Vishay Siliconix, "Silicon Technology Reliability", document 72559, revision 29-Jul-08',
+    url: 'https://www.vishay.com/docs/72559/72559.pdf',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -246,4 +262,18 @@ export const FLEX = {
   sizes: ['1210', '1808', '1812', '1825', '2220', '2225'],
 };
 
-export const TABLES_MAKER = [TANT_KEMET, TANT_VISHAY, TANT_AVX, TANT_NASA, MLCC_ACCEL, MLCC_BOUND, MLCC_PME, FLEX];
+// ---------------------------------------------------------------------------
+// Semiconductor life test (HTOL): oscillators, ICs, modules
+
+export const LIFE_TEST = {
+  id: 'life-test',
+  title: 'Failure rate from a maker\'s high-temperature life test (HTOL): χ² bound and Arrhenius',
+  ref: 'The JESD85 method as TI, SiTime and Vishay Siliconix print it',
+  status: 'corroborated',
+  sources: ['tiSnaa391', 'sitimeAn10025', 'vishay72559', 'sitimeRr32'],
+  note: 'λ = χ²(CL, 2r + 2) / (2 · device-hours · AF_T · AF_V) · 10⁹, AF_T = exp[(E_a/k)(1/T − 1/T_test)], kelvin = °C + 273.15. TI prints it at 60 % confidence and 0.7 eV: 7,859 BAW oscillators for 1,000 h at 125 °C with no failures give 1.5 FIT at 55 °C and 0.3 FIT at 35 °C. Vishay Siliconix uses the same 60 % and 0.7 eV. SiTime uses 90 % and a gate-oxide voltage factor (1.04 for 3.6 V against 3.3 V): 3,307,000 device-hours at a 130 °C junction give 0.88 FIT at 30 °C, reproduced here to 1 % (SiTime rounds k to 8.63 × 10⁻⁵ and uses +273). Device-hours are entered rather than a quoted FIT, because quoted figures can rest on data the report does not show: SiTime\'s RR-32 quotes 0.65 FIT for a group whose own hours give 2–3 FIT.',
+  confidences: [0.6, 0.9],
+  ea: 0.7,
+};
+
+export const TABLES_MAKER = [TANT_KEMET, TANT_VISHAY, TANT_AVX, TANT_NASA, MLCC_ACCEL, MLCC_BOUND, MLCC_PME, FLEX, LIFE_TEST];

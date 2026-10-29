@@ -124,8 +124,8 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
     click($('[data-act="add-part"]'));
   }
   const refs = $$('.part [data-key="ref"]').map((i) => i.value);
-  assert.deepEqual(refs.slice(8), ['U4', 'D5', 'Q3', 'C22', 'R31', 'L1', 'U5', 'C23', 'C24', 'X1'], 'numbering continues past ranges like D1–D4');
-  assert.match(warn(), /9 part lines need more input/, 'all but the capacitor');
+  assert.deepEqual(refs.slice(8), ['U4', 'D5', 'Q3', 'C22', 'R31', 'L1', 'U5', 'C23', 'C24', 'U6', 'X1'], 'numbering continues past ranges like D1–D4');
+  assert.match(warn(), /10 part lines need more input/, 'all but the capacitor');
   fill(cardFor('U4'), { count: 1000, power: 0.1, rja: 50 });
   fill(cardFor('D5'), { power: 0.01, rja: 300 });
   fill(cardFor('Q3'), { stress: 0.5, power: 0.05, rja: 300 });
@@ -139,6 +139,9 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   fill(cardFor('C23'), { capacitance: 150, v: 3.3, vr: 6.3 });
   choose($('[data-key="electrode"]', cardFor('C24')), 'entered');
   fill(cardFor('C24'), { n: 2.1, ea: 1.2, hours: 77000, failures: 0, vTest: 100, tTest: 125, v: 25 });
+  // A maker's life test starts at 0.7 eV, 60 % confidence and no voltage acceleration; everything else is asked for.
+  assert.deepEqual($$('.field.missing', cardFor('U6')).map((f) => f.dataset.field), ['hours', 'failures', 'tTest', 'power', 'rja']);
+  fill(cardFor('U6'), { hours: 722000, failures: 0, tTest: 125, power: 0.01, rja: 150 });
   fill(cardFor('X1'), { fit: 25 });
   assert.equal(warn(), '');
 

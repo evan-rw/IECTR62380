@@ -23,7 +23,7 @@ const REF_PREFIX = {
   ic: 'U', diode: 'D', transistor: 'Q', capacitor: 'C', resistor: 'R', inductor: 'L', fixed: 'X',
   'mil-relay': 'K', 'mil-ssr': 'K', 'mil-switch': 'SW', 'mil-connector': 'J', 'mil-socket': 'XU',
   'mil-pwb': 'PCB', 'mil-crystal': 'Y', 'mil-fuse': 'F', 'mil-lamp': 'DS', 'mil-opto': 'D', 'mil-capacitor': 'C', 'mil-resistor': 'R', 'mil-inductive': 'L', vendor: 'U',
-  'tantalum-maker': 'C', 'ceramic-test': 'C',
+  'tantalum-maker': 'C', 'ceramic-test': 'C', 'life-test': 'U',
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);

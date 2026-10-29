@@ -1,4 +1,5 @@
-// Makers' failure-rate models for tantalum, niobium oxide and ceramic capacitors. Same model
+// Makers' failure-rate models for tantalum, niobium oxide and ceramic capacitors, and
+// makers' semiconductor life tests (oscillators, ICs, modules). Same model
 // interface as models.js (fields, defaults, describe, compute(p, prof) ->
 // { fit, parts, values, operating, cycling, errors }).
 //
@@ -6,7 +7,7 @@
 // by working time like the vendor model: Σ λ(T_i)·τ_i / (τ_on + τ_off).
 // Dormant phases add nothing.
 
-import { TANT_KEMET, TANT_VISHAY, TANT_AVX, TANT_NASA, MLCC_BOUND, MLCC_PME } from './tablesmaker.js';
+import { TANT_KEMET, TANT_VISHAY, TANT_AVX, TANT_NASA, MLCC_BOUND, MLCC_PME, LIFE_TEST } from './tablesmaker.js';
 import { CAPACITORS_217F, ENVIRONMENTS } from './tables217f.js';
 
 const BOLTZMANN_EV = 8.617e-5;
@@ -403,6 +404,64 @@ export const MODELS_MAKER = {
         operating: w.rows,
         cycling: [],
         tempLabel: 'T',
+        operatingLabel: 'AF',
+        errors,
+      };
+    },
+  },
+
+  // Oscillator modules, and any IC or module whose maker publishes its life test.
+  'life-test': {
+    label: 'Oscillator, IC or module, maker\'s life test',
+    group: 'Vendor data',
+    clause: 'Maker\'s qualification life test (HTOL)',
+    status: 'Turns a maker\'s high-temperature operating life test into a rate: the upper bound on the failures seen, at the chosen confidence, divided by the device-hours and by the Arrhenius acceleration from the junction in use to the junction in the test. The method (JESD85) is printed by TI, SiTime and Vishay. Use it for crystal oscillators (XO, TCXO, VCXO, OCXO), MEMS oscillators, and any IC or module with a public qualification report. A bare two-pin crystal stays a MIL-HDBK-217F quartz crystal.',
+    defaults: { note: '', hours: null, failures: null, tTest: null, ea: LIFE_TEST.ea, confidence: '60', afV: 1, power: null, rja: null },
+    fields: [
+      { key: 'note', label: 'Part and source', type: 'text', wide: true },
+      { key: 'hours', label: 'Device-hours on test', unit: 'h', type: 'number', min: 0, step: 'any', required: true, help: 'Parts tested × hours each, from the maker\'s qualification report: 722 parts for 1000 h is 722,000. Add only groups tested at the same temperature.' },
+      { key: 'failures', label: 'Failures in the test', type: 'number', min: 0, step: 1, required: true },
+      { key: 'tTest', label: 'Junction temperature in the test', unit: '°C', type: 'number', step: 'any', required: true, help: 'Usually the 125 °C chamber; SiTime adds the die\'s own 5 °C. When a report gives "equivalent device-hours" at a use temperature (Vishay), enter those hours with that temperature here.' },
+      { key: 'ea', label: 'Activation energy E_a', unit: 'eV', type: 'number', min: 0, step: 'any', required: true, help: 'Starts at 0.7 eV, the value TI, SiTime and Vishay use; change it if the maker\'s report states another. A smaller value gives a higher, more cautious rate.' },
+      {
+        key: 'confidence', label: 'Confidence', type: 'select', required: true,
+        options: LIFE_TEST.confidences.map((c) => ({ value: String(c * 100), label: `${c * 100} %${c === 0.6 ? ' (TI, Vishay, the usual level)' : ' (SiTime; higher rate)'}` })),
+        help: 'With no failures, 60 % counts 0.92 failures and 90 % counts 2.30.',
+      },
+      { key: 'afV', label: 'Voltage acceleration in the test', type: 'number', min: 1, step: 'any', required: true, help: 'The maker\'s voltage factor when the test ran above the working supply (SiTime: 1.04 for 3.6 V against 3.3 V). 1 if the report states none, which gives the higher rate.' },
+      { key: 'power', label: 'Dissipated power P', unit: 'W', type: 'number', min: 0, step: 'any', required: true, help: 'Supply voltage × supply current; a few milliwatts for most oscillators.' },
+      { key: 'rja', label: 'Thermal resistance R_JA', unit: '°C/W', type: 'number', min: 0, step: 'any', required: true, help: 'Junction to ambient, mounted. ΔT_j = R_JA × P.' },
+    ],
+    describe: (p) => p.note || 'Maker\'s life test',
+    compute(p, prof) {
+      const errors = [];
+      const { hours, failures, tTest, ea, afV } = p;
+      const conf = Number(p.confidence) / 100;
+      if (isNum(hours) && !(hours > 0)) errors.push('The device-hours must be above 0.');
+      if (isNum(failures) && (failures < 0 || !Number.isInteger(failures))) errors.push('The failure count must be a whole number.');
+      if (isNum(afV) && afV < 1) errors.push('The voltage acceleration cannot be below 1.');
+      const ok = !errors.length && LIFE_TEST.confidences.includes(conf) && [hours, failures, tTest, ea, afV].every(isNum);
+      const m = ok ? failureBound(failures, conf) : 0;
+      const testFit = ok ? (m / hours) * 1e9 : 0;
+      const dTj = (p.rja || 0) * (p.power || 0);
+      const w = weighted(prof, (t) => {
+        if (!ok) return { fit: 0, factor: 0 };
+        const af = afV * arrhenius(ea, t, tTest, 273.15);
+        return { fit: testFit / af, factor: af };
+      }, (ph) => ph.tac + dTj);
+      return {
+        fit: w.fit,
+        parts: [['Operating', w.fit]],
+        values: [
+          ['Failures counted', ok ? fmtE(m) : '—', ok ? `χ²(${conf}, ${2 * failures + 2})/2 for ${failures} seen` : ''],
+          ['Rate at test conditions', ok ? `${fmtE(testFit)} FIT` : '—', ok ? `at a ${fmtE(tTest)} °C junction` : ''],
+          ['ΔT_j', fmtE(dTj), '°C = R_JA × P'],
+          ['AF', `${isNum(afV) && afV !== 1 ? `${fmtE(afV)} × ` : ''}exp{E_a/k × [1/(T_j + 273.15) − 1/(T_test + 273.15)]}`, `E_a = ${isNum(ea) ? fmtE(ea) : '—'} eV; per phase, below`],
+          ['Σ λ·τ_i / (τ_on + τ_off)', fmtE(w.fit), 'FIT; λ = rate at test conditions ÷ AF'],
+        ],
+        operating: w.rows,
+        cycling: [],
+        tempLabel: 'T_j',
         operatingLabel: 'AF',
         errors,
       };
