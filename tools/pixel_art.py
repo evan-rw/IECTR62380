@@ -298,6 +298,44 @@ def portal():
     return pixel
 
 
+# A site engineer in a hard hat and safety vest, arms up, arriving through the portal:
+# importing a netlist brings the parts in from the schematic. '.' shows the portal.
+ENGINEER = {
+    'grid': [
+        '.....KKKKKK.....',
+        '.KK.KYYYYYYK.KK.',
+        'KFFKKYWYYYYKKFFK',
+        'KFFKyyyyyyyyKFFK',
+        '.KNNKFFFFFFKNNK.',
+        '.KNNKFEFFEFKNNK.',
+        '.KNNKFFMMFFKNNK.',
+        '..KNNKKKKKKNNK..',
+        '...KNOOOOOONK...',
+        '...KOOONNOOOK...',
+        '...KSSSNNSSSK...',
+        '...KOOONNOOOK...',
+        '...KbbbbbbbbK...',
+        '....KPPKKPPK....',
+        '....KPPKKPPK....',
+        '...KDDDKKDDDK...',
+    ],
+    'colours': {
+        'K': '#141414', 'Y': '#ffd83a', 'W': '#fff6c8', 'y': '#c89a00', 'F': '#d89a68', 'E': '#141414', 'M': '#7a3a20',
+        'N': '#24307a', 'O': '#ff7a00', 'S': '#e8e8e8', 'b': '#5a3a10', 'P': '#5a5a64', 'D': '#3a2a1a',
+    },
+}
+
+
+def engineer_on_portal():
+    """16×16: the engineer over the one-pixel-ring portal."""
+    pixel = portal()
+    for y, row in enumerate(from_grid(ENGINEER)):
+        for x, colour in enumerate(row):
+            if colour:
+                pixel[y][x] = colour
+    return pixel
+
+
 def portal_on_floor():
     """64×64: the portal at three times the size, on four gray floor tiles."""
     size, tile = 64, 32
@@ -348,6 +386,7 @@ def main():
         'fire-square': flame_square(),
         'bomb': bomb(),
         'portal-floor': portal_on_floor(),
+        'engineer': engineer_on_portal(),
     }
     for name, pixel in pieces.items():
         assert all(len(row) == len(pixel[0]) for row in pixel), name

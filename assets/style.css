@@ -426,6 +426,7 @@ table.results tr:last-child td { background: var(--face); font-weight: bold; bor
 
 .site-nav a::before,
 [data-act="confirm-guesses"]::before,
+[data-act="import-netlist"]::before,
 .st-ghost::before,
 .st-row.drop .st-nm::before {
   content: ""; display: inline-block; width: 16px; height: 16px; vertical-align: middle;
@@ -438,6 +439,8 @@ table.results tr:last-child td { background: var(--face); font-weight: bold; bor
 #results tr.top > td:first-child { padding-right: 26px; background: url(art/flame.svg) right 5px center / 16px 16px no-repeat; image-rendering: pixelated; }
 /* Confirming locks the guessed values in. */
 [data-act="confirm-guesses"]::before { background-image: url(art/key.svg); }
+/* Importing a netlist: an engineer arrives through the portal with the schematic's parts. */
+[data-act="import-netlist"]::before { background-image: url(art/engineer.svg); }
 /* Drag and drop in the structure tree: a portal on the item and on where it lands. */
 .st-ghost::before, .st-row.drop .st-nm::before { background-image: url(art/portal.svg); }
 /* Title-bar icons, where 1990s windows put theirs: a circuit board for the board, a
