@@ -255,12 +255,14 @@ const isIcSocket = (s) => /SOCKET|\bZIF\b/.test(s) && (IC_SOCKET_PACKAGE.test(s)
 // A VR designator on a regulator's package is a voltage regulator, not a potentiometer (kit-dev-coldfire VR201).
 const REGULATOR_PACKAGE = /TO-?263|TO-?220|TO-?252|D2?-?PAK|SOT-?223|SOT-?23-5|SOIC|MSOP|\bSOP|QFN|DFN|\bSON/;
 
+// Designators of an assembly, module or power supply.
+const MODULE_PREFIXES = new Set(['A', 'MODULE', 'MOD', 'PS', 'PSU']);
+
 // Families the calculator does not model yet, for the note on an "Other" part.
 const OTHER_FAMILY = {
   X: 'Connector or crystal: choose Connector or Quartz crystal instead if you know which',
   JP: 'Jumper: a pin header with a shunt is a connector; a solder jumper has no failure rate of its own',
   W: 'Wire link or jumper: a pin header with a shunt is a connector; a wire link or solder jumper has no failure rate of its own',
-  A: 'Assembly or module: enter the maker\'s rate, or use the maker\'s life test', MODULE: 'Module: enter the maker\'s rate, or use the maker\'s life test',
   BT: 'Battery (62380 clause 19)', B: 'Battery (62380 clause 19)', BAT: 'Battery or battery holder (62380 clause 19)',
   DS: 'LED or display (62380 clauses 9, 17)',
   RV: 'Varistor or potentiometer (62380 clauses 18, 11)', VR: 'Potentiometer or regulator',
@@ -539,6 +541,10 @@ export function classifyComponent(c) {
   // EasyEDA names two-pin crystal footprints OSC-SMD, so the footprint prefix alone is not enough.
   const oscillator = model === 'mil-crystal' && (prefix === 'OSC' || OSCILLATOR_TEXT.test(`${sym} ${fpAll} ${text}`));
   if (oscillator) model = 'life-test';
+  // A module or power supply takes its maker's MTBF (Jetson's A3, CM5's Module301); hardware on these
+  // designators (Jetson's A1, an M.2 placeholder) was skipped above, and a symbol with no footprint
+  // (a simulation block such as XSPICE's MULTIPLIER) is not a module.
+  if (model === 'fixed' && MODULE_PREFIXES.has(prefix) && fp) model = 'vendor';
   const params = {};
   let inferred = {};
   const why = (what) => `from ${what}`;
@@ -676,6 +682,8 @@ export function classifyComponent(c) {
     if (type) { params.type = type; inferred.type = ledSymbol ? why(`the symbol ${c.symbol}`) : why(`“${c.value || c.designator}”`); }
   } else if (model === 'mil-fuse') {
     // No inputs beyond the board's environment.
+  } else if (model === 'vendor') {
+    Object.assign(params, { method: 'mtbf', note: `Module or power supply, maker's MTBF: ${[c.value, c.footprint].filter(Boolean).join(', ') || c.designator}` });
   } else if (model === 'life-test') {
     params.note = `Oscillator module, maker's life test: ${[c.value, c.footprint].filter(Boolean).join(', ') || c.designator}`;
   } else {

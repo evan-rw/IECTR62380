@@ -8,6 +8,8 @@ import {
   EA, IC_FAMILIES, IC_PACKAGES, CTE_SUBSTRATES, CTE_PACKAGES, EOS,
   DISCRETE_PACKAGES, DIODES, TRANSISTORS, CAPACITORS, RESISTORS, INDUCTORS, MISSION_PROFILES,
 } from './tables.js';
+import { ENVIRONMENTS } from './tables217f.js';
+import { VENDOR_MTBF } from './tablesmaker.js';
 import { MODELS_217F } from './models217f.js';
 import { MODELS_MAKER } from './modelsmaker.js';
 
@@ -152,6 +154,89 @@ export function missingFields(model, p) {
 }
 
 const fmtE = (x) => (x === 0 ? '0' : Math.abs(x) >= 0.01 && Math.abs(x) < 1e5 ? String(+x.toPrecision(4)) : x.toExponential(3));
+
+// ---------------------------------------------------------------------------
+// A maker's MTBF (or FIT) for a module or power supply, kept with its method, environment
+// and temperature. Never converted between methods or environments (VENDOR_MTBF).
+
+const MTBF_STATISTICS = [
+  { value: 'mean', label: 'One predicted figure (a mean)' },
+  { value: 'bound', label: 'An upper bound at a stated confidence' },
+  { value: 'demonstrated', label: 'Demonstrated in a test, or from field data' },
+];
+const MTBF_POINTS = [
+  { value: 'ambient', label: 'Ambient air' },
+  { value: 'case', label: 'Case or baseplate' },
+  { value: 'board', label: 'Circuit board (T_pcb)' },
+  { value: 'unstated', label: 'No temperature stated' },
+];
+const envLabel = (id) => ENVIRONMENTS.find((e) => e.id === id)?.label ?? id;
+const isMtbf = (p) => p.method === 'mtbf';
+const mtbfScaled = (p) => isMtbf(p) && p.refPoint != null && p.refPoint !== 'unstated';
+const mtbfSecond = (p) => (p.rateUnit === 'fit' ? p.statedFit2 : p.mtbfHours2);
+
+function vendorMtbf(p, prof) {
+  const k = 8.617e-5;
+  const errors = [];
+  const notices = [];
+  const perFit = p.rateUnit === 'fit';
+  const toFit = (x) => (perFit ? x : 1e9 / x);
+  const stated = perFit ? p.statedFit : p.mtbfHours;
+  const second = mtbfSecond(p);
+  const scaled = mtbfScaled(p);
+  if (isNum(stated) && !(stated > 0)) errors.push('The stated figure must be above 0.');
+  // The temperature law: fitted from a second figure on the same data sheet, or the entered E_a.
+  let ea = p.moduleEa;
+  let fitted = false;
+  if (scaled && isNum(second) && isNum(stated) && stated > 0 && isNum(p.tStated) && isNum(p.tStated2)) {
+    if (!(second > 0)) errors.push('The second figure must be above 0.');
+    else if (p.tStated2 === p.tStated) errors.push('The two figures need different temperatures.');
+    else {
+      ea = (k * Math.log(toFit(second) / toFit(stated))) / (1 / (p.tStated + 273.15) - 1 / (p.tStated2 + 273.15));
+      fitted = true;
+      if (!(ea >= 0)) errors.push('The two figures do not get worse with temperature; check them.');
+    }
+  }
+  const ok = !errors.length && isNum(stated) && (!scaled || (isNum(p.tStated) && isNum(ea)));
+  const base = ok ? toFit(stated) : 0;
+  const rise = p.refPoint === 'case' || p.refPoint === 'board' ? p.pointRise || 0 : 0;
+  const denom = prof.tauOn + prof.tauOff;
+  let total = 0;
+  const rows = [];
+  prof.phases.forEach((ph, i) => {
+    if (!(ph.tau > 0)) return;
+    const t = ph.tac + rise;
+    const factor = ok && scaled ? Math.exp((ea / k) * (1 / (p.tStated + 273.15) - 1 / (t + 273.15))) : 1;
+    total += factor * ph.tau;
+    rows.push({ phase: i, t, piT: factor, tau: ph.tau });
+  });
+  const weight = denom > 0 ? total / denom : 0;
+  if (p.statedEnv && p.statedEnv !== 'unstated' && p.statedEnv !== prof.env217f) {
+    notices.push(`Stated for ${envLabel(p.statedEnv)}; this board is ${envLabel(prof.env217f)}. The figure is not converted: makers' own figures put ground, fixed at 1.7–2× and ground, mobile at 3–9× the ground, benign rate.`);
+  }
+  const method = VENDOR_MTBF.methods.find((m) => m.id === p.predMethod)?.label ?? '—';
+  const env = p.statedEnv === 'unstated' ? 'environment not stated' : p.statedEnv ? envLabel(p.statedEnv) : '—';
+  const statistic = p.statistic === 'bound' ? `an upper bound at ${isNum(p.confidence) ? fmtE(p.confidence) : '—'} % confidence, used as stated`
+    : p.statistic === 'demonstrated' ? 'demonstrated' : 'one predicted figure';
+  const point = MTBF_POINTS.find((o) => o.value === p.refPoint)?.label.toLowerCase() ?? '—';
+  return {
+    fit: base * weight,
+    parts: [['Rescaled', base * weight]],
+    values: [
+      ['Stated', !ok ? '—' : perFit ? `${fmtE(stated)} FIT` : `MTBF ${fmtE(stated)} h = ${fmtE(base)} FIT`, `${method}; ${env}; ${statistic}`],
+      ['Temperature law', !scaled ? 'none: no temperature stated, so the figure is used as it is'
+        : `E_a = ${isNum(ea) ? fmtE(ea) : '—'} eV${fitted ? ', fitted from the two figures' : ''}`,
+      scaled ? `at ${point} ${isNum(p.tStated) ? fmtE(p.tStated) : '—'} °C${rise ? `; that point runs ${fmtE(rise)} °C above board ambient here` : ''}` : ''],
+      ['Σ AF·τ_i / (τ_on + τ_off)', fmtE(weight), 'AF = exp{E_a/k × [1/(T_ref + 273.15) − 1/(T + 273.15)]}'],
+    ],
+    operating: rows,
+    cycling: [],
+    tempLabel: 'T',
+    operatingLabel: 'AF',
+    errors,
+    notices,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Models. Each has a field list the UI renders, defaults, and compute(p, prof)
@@ -471,14 +556,33 @@ export const MODELS = {
     label: 'Part with a vendor failure rate, rescaled',
     group: 'Vendor data',
     clause: 'Vendor data',
-    status: 'Rescales a manufacturer\'s FIT to this mission profile. "One temperature" uses the Arrhenius law, per operating hour, weighted by working time. "IEC 62380 FIT report" rescales the die and package terms with the IEC TR 62380 formulas published in TI SLOA294A; no coefficient tables are involved.',
-    defaults: { method: 'arrhenius', note: '', fit: null, tref: null, ea: null, dieFit: null, pkgFit: null, eosFit: 0, refProfile: 'auto-motor', refRise: null, tech: 'mos', power: null, rja: null },
+    status: 'Rescales a manufacturer\'s FIT to this mission profile. "One temperature" uses the Arrhenius law, per operating hour, weighted by working time. "IEC 62380 FIT report" rescales the die and package terms with the IEC TR 62380 formulas published in TI SLOA294A; no coefficient tables are involved. "MTBF from a data sheet" keeps a module\'s or power supply\'s MTBF with its prediction method, environment and temperature, converts neither method nor environment, and rescales for temperature with E_a fitted from two figures on the sheet, or 0.3 eV from makers\' own figures for whole units.',
+    defaults: {
+      method: 'arrhenius', note: '', fit: null, tref: null, ea: null, dieFit: null, pkgFit: null, eosFit: 0, refProfile: 'auto-motor', refRise: null, tech: 'mos', power: null, rja: null,
+      rateUnit: 'mtbf-h', mtbfHours: null, statedFit: null, predMethod: null, statedEnv: null, statistic: 'mean', confidence: null,
+      refPoint: null, tStated: null, pointRise: null, mtbfHours2: null, statedFit2: null, tStated2: null, moduleEa: VENDOR_MTBF.ea,
+    },
     fields: [
       { key: 'method', label: 'Vendor data', type: 'select', required: true, wide: true, options: [
         { value: 'arrhenius', label: 'Failure rate at one temperature (qualification or reliability report)' },
         { value: 'report62380', label: 'IEC 62380 FIT report: die and package FIT at a stated mission profile' },
+        { value: 'mtbf', label: 'MTBF from a data sheet (module, power supply, converter)' },
       ] },
       { key: 'note', label: 'Part and source', type: 'text', wide: true },
+      { key: 'rateUnit', label: 'Stated as', type: 'select', required: true, show: isMtbf, options: [{ value: 'mtbf-h', label: 'MTBF in hours' }, { value: 'fit', label: 'Failure rate in FIT' }] },
+      { key: 'mtbfHours', label: 'Stated MTBF', unit: 'h', type: 'number', min: 0, step: 'any', required: true, show: (p) => isMtbf(p) && p.rateUnit !== 'fit', help: 'As printed: 7,976 kh is 7,976,000 h; 7.74 Mh is 7,740,000 h.' },
+      { key: 'statedFit', label: 'Stated failure rate', unit: 'FIT', type: 'number', min: 0, step: 'any', required: true, show: (p) => isMtbf(p) && p.rateUnit === 'fit' },
+      { key: 'predMethod', label: 'Prediction method', type: 'select', required: true, wide: true, show: isMtbf, options: VENDOR_MTBF.methods.map((m) => ({ value: m.id, label: m.label })), help: 'Printed next to the figure. Methods are not comparable: for the same unit 217F gives a 2–5× shorter MTBF than SR-332.' },
+      { key: 'statedEnv', label: 'Environment it is stated for', type: 'select', required: true, show: isMtbf, options: [...ENVIRONMENTS.map((e) => ({ value: e.id, label: e.label })), { value: 'unstated', label: 'Not stated' }], help: 'Usually ground, benign. It is not converted to the board\'s environment.' },
+      { key: 'statistic', label: 'The figure is', type: 'select', required: true, show: isMtbf, options: MTBF_STATISTICS, help: 'Most data sheets give one predicted figure. A bound is used as stated, not converted to a mean.' },
+      { key: 'confidence', label: 'Confidence of the bound', unit: '%', type: 'number', min: 0, max: 100, step: 'any', required: true, show: (p) => isMtbf(p) && p.statistic === 'bound' },
+      { key: 'refPoint', label: 'Its temperature is measured at', type: 'select', required: true, show: isMtbf, options: MTBF_POINTS },
+      { key: 'tStated', label: 'Stated temperature', unit: '°C', type: 'number', step: 'any', required: true, show: mtbfScaled },
+      { key: 'pointRise', label: 'That point\'s rise above board ambient, in this design', unit: '°C', type: 'number', min: 0, step: 'any', required: true, show: (p) => isMtbf(p) && (p.refPoint === 'case' || p.refPoint === 'board'), help: 'A module\'s case or board runs warmer than the air around it: measured, or from its data sheet\'s derating.' },
+      { key: 'mtbfHours2', label: 'Second MTBF, if the sheet gives one', unit: 'h', type: 'number', min: 0, step: 'any', show: (p) => mtbfScaled(p) && p.rateUnit !== 'fit', help: 'At another temperature: E_a is then fitted from the two figures.' },
+      { key: 'statedFit2', label: 'Second failure rate, if the sheet gives one', unit: 'FIT', type: 'number', min: 0, step: 'any', show: (p) => mtbfScaled(p) && p.rateUnit === 'fit', help: 'At another temperature: E_a is then fitted from the two figures.' },
+      { key: 'tStated2', label: 'At temperature', unit: '°C', type: 'number', step: 'any', required: true, show: (p) => mtbfScaled(p) && isNum(mtbfSecond(p)) },
+      { key: 'moduleEa', label: 'Activation energy E_a', unit: 'eV', type: 'number', min: 0, step: 'any', required: true, show: (p) => mtbfScaled(p) && !isNum(mtbfSecond(p)), help: 'Starts at 0.3 eV, from makers\' own two-temperature figures for whole modules and supplies (0.16–0.41 eV). The IC value, 0.7 eV, would overstate the temperature effect several times.' },
       { key: 'fit', label: 'Vendor failure rate', unit: 'FIT', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.method === 'arrhenius' },
       { key: 'tref', label: 'At junction temperature', unit: '°C', type: 'number', step: 'any', required: true, show: (p) => p.method === 'arrhenius', help: 'The temperature the vendor states the rate at, often 55 °C.' },
       { key: 'ea', label: 'Activation energy', unit: 'eV', type: 'number', min: 0, step: 'any', required: true, show: (p) => p.method === 'arrhenius', help: 'Use the vendor\'s value; 0.7 eV is common for ICs.' },
@@ -490,10 +594,11 @@ export const MODELS = {
       { key: 'tech', label: 'Die technology', type: 'select', required: true, show: (p) => p.method === 'report62380', options: [
         { value: 'mos', label: 'MOS (A = 3480 K)' }, { value: 'bipolar', label: 'Bipolar (A = 4640 K)' },
       ] },
-      ...thermalFields.map((f) => ({ ...f, label: `${f.label}, in this design` })),
+      ...thermalFields.map((f) => ({ ...f, label: `${f.label}, in this design`, show: (p) => !isMtbf(p) })),
     ],
-    describe: (p) => p.note || (p.method === 'report62380' ? 'Vendor IEC 62380 FIT report, rescaled' : 'Vendor failure rate, rescaled'),
+    describe: (p) => p.note || (p.method === 'report62380' ? 'Vendor IEC 62380 FIT report, rescaled' : isMtbf(p) ? 'Maker\'s MTBF, rescaled' : 'Vendor failure rate, rescaled'),
     compute(p, prof) {
+      if (isMtbf(p)) return vendorMtbf(p, prof);
       const dTj = (p.rja || 0) * (p.power || 0);
       if (p.method === 'report62380') {
         const ref = normaliseProfile({ phases: byId(MISSION_PROFILES, p.refProfile).phases });

@@ -319,8 +319,8 @@ test('KiCad demo parts: the footprint names the part when the designator does no
 });
 
 test('KiCad demo parts that used to import as "Other part"', () => {
-  // The demo boards' own values, footprints, symbols and descriptions (2026-10-28). Of 45 such parts, 8 are left:
-  // modules, batteries, LV101 and two jumpers that may be pin headers.
+  // The demo boards' own values, footprints, symbols and descriptions (2026-10-28). Of 45 such parts, 5 are left:
+  // batteries, LV101 and two jumpers that may be pin headers.
   const c = (designator, value, footprint = '', extra = {}) => classifyComponent({ designator, value, footprint, description: '', symbol: '', ...extra });
   const kind = (...a) => { const r = c(...a); return r.skip ? `skip: ${r.skip}` : [r.model, r.params.type ?? r.params.style].filter(Boolean).join(' / '); };
   // A footprint rule for the start of a name also sees a footprint behind a library prefix (openair-max).
@@ -354,8 +354,12 @@ test('KiCad demo parts that used to import as "Other part"', () => {
   // Sheet metal and placeholders are mechanical (vme-wren SFP cages, Jetson's "mechanical model" of an M.2 card).
   assert.equal(kind('Cage1', 'TYCO_1761014-3', 'TYCO THD:TYCO_1761014-3', { description: 'SFP TYCO_1761014-3' }), 'skip: mechanical');
   assert.equal(kind('A1', 'Mech_M2_2280_H2.5mm', 'antmicro-footprints:Mech_M2_2280_H2.5mm', { description: 'Mechanical model for M2 2280 2.5mm module' }), 'skip: mechanical');
-  // Modules take the maker's figure.
-  assert.match(c('A3', 'Jetson-Thor-AGX-T5000', 'antmicro-footprints:Module_Jetson-Thor-AGX-T5000').params.note, /^Assembly or module: enter the maker's rate/);
+  // Modules take the maker's MTBF (Jetson's A3, CM5's Module301); a simulation block on A with no footprint does not.
+  const jetson = c('A3', 'Jetson-Thor-AGX-T5000', 'antmicro-footprints:Module_Jetson-Thor-AGX-T5000');
+  assert.deepEqual([jetson.model, jetson.params.method], ['vendor', 'mtbf']);
+  assert.match(jetson.params.note, /^Module or power supply, maker's MTBF: Jetson-Thor-AGX-T5000/);
+  assert.equal(c('Module301', 'ComputeModule5-CM5', 'CM5IO:Raspberry-Pi-5-Compute-Module_GPIO').model, 'vendor');
+  assert.equal(c('A1', 'MULTIPLIER', '', { symbol: 'XSPICE_BasicAnalog:MULTIPLIER' }).model, 'fixed');
 });
 
 // A small KiCad netlist in Eeschema's s-expression format, as KiCad 10 writes it.

@@ -13,6 +13,7 @@ import { parseBom, bomToParts, mergeBom } from './bom.js';
 import { failureModesFor } from './failuremodes.js';
 import { evaluateCapLife, withLife, lifeInputs, LIFE_KEYS, TECHS, typeTech } from './caplife.js';
 import { LIFE_RULES, END_OF_LIFE } from './tablescaplife.js';
+import { VENDOR_MTBF } from './tablesmaker.js';
 import { esc } from './html.js';
 import { xlsx } from './xlsx.js';
 import { boardSheets } from './report.js';
@@ -337,6 +338,7 @@ function partHTML(part) {
         ${guessCount(part) ? `<p class="guess-bar">Amber fields were guessed from the netlist. <button type="button" data-act="confirm-guesses" data-id="${part.id}">Confirm guesses</button></p>` : ''}
         ${adv ? `<details class="advanced" data-id="${part.id}" data-open-key="advOpen"${part.advOpen ? ' open' : ''}><summary>Override table values</summary><div class="fields">${adv}</div></details>` : ''}
         <ul class="part-errors" data-out="errors"></ul>
+        <ul class="part-notices" data-out="notices"></ul>
         <details class="trace" data-id="${part.id}" data-open-key="traceOpen"${part.traceOpen ? ' open' : ''}><summary>Show the calculation</summary><div class="trace-body" data-out="trace"></div></details>
         <p class="status-line">${esc(clauseOf(model))}. ${esc(model.status)}</p>
         <div class="part-foot">${canSplit(part) ? `<button type="button" data-act="split" data-id="${part.id}">Split line</button>` : ''}<button type="button" data-act="dup" data-id="${part.id}">Copy line</button><button type="button" class="part-remove" data-act="del" data-id="${part.id}">Remove line</button></div>` : ''}
@@ -785,7 +787,7 @@ const paintedAs = new WeakMap();
 function paintCard(el, comp, result, phases, profileKey = JSON.stringify(phases)) {
   const guesses = guessCount(comp);
   const key = JSON.stringify([comp.ref, comp.model, comp.qty, comp.params, Object.keys(comp.inferred ?? {}), Object.keys(comp.confirmed ?? {}),
-    result.complete, result.fit, result.total, result.qty, result.missing, result.errors, result.wearOut, profileKey]);
+    result.complete, result.fit, result.total, result.qty, result.missing, result.errors, result.notices, result.wearOut, profileKey]);
   if (paintedAs.get(el) === key) return guesses > 0;
   paintedAs.set(el, key);
   const model = MODELS[comp.model];
@@ -804,6 +806,9 @@ function paintCard(el, comp, result, phases, profileKey = JSON.stringify(phases)
     ? '<span class="bad">Needs input</span>'
     : `<div class="each">${fmt(result.fit)} FIT</div>${result.qty !== 1 ? `<div class="total">× ${fmt(result.qty)} = ${fmt(result.total)} FIT</div>` : ''}`);
   putHTML($('[data-out="errors"]', el), result.errors.map((e) => `<li>${esc(e)}</li>`).join(''));
+  // Notices do not leave the line out of the total (a maker's MTBF stated for another environment).
+  const notices = $('[data-out="notices"]', el);
+  if (notices) putHTML(notices, (result.notices ?? []).map((n) => `<li>${esc(n)}</li>`).join(''));
   // Only open cards have a calculation panel (closed cards are just their head).
   const trace = $('[data-out="trace"]', el);
   if (trace) putHTML(trace, traceHTML(result, phases, failureModesFor(comp.model, p)));
@@ -882,6 +887,10 @@ function update() {
   const warnPanel = new Map();
   if (problems.length) warn.push('The mission profile has problems (see above).');
   if (board.incomplete) warn.push(`${plural(board.incomplete, 'part line needs', 'part lines need')} more input; the total leaves ${board.incomplete > 1 ? 'them' : 'it'} out.`);
+  // Makers' MTBFs by different prediction methods are summed but not comparable.
+  const mtbfMethods = [...new Set(board.items.filter((it) => it.comp.model === 'vendor' && it.comp.params?.method === 'mtbf' && it.result.complete)
+    .map((it) => VENDOR_MTBF.methods.find((m) => m.id === it.comp.params.predMethod)?.family).filter(Boolean))];
+  if (mtbfMethods.length > 1) warn.push(`Makers' MTBFs here come from different prediction methods (${mtbfMethods.join(', ')}), which are not comparable: for the same unit MIL-HDBK-217F gives a 2–5× shorter MTBF than Telcordia SR-332.`);
   // With some devices complete, the weakest link so far is counted; the rest may be worse.
   const smtWaiting = smtPending && smt.worst && !smt.problems.length;
   if (pcb.cracked) warn.push(`${plural(pcb.cracked, 'plated hole size is', 'plated hole sizes are')} predicted to crack during assembly; see Circuit board.`);
@@ -1557,9 +1566,14 @@ $('#netlist-file').addEventListener('change', async (e) => {
   save();
   const board = computeBoard({ profile: state.profile, components: state.parts });
   const guessed = state.parts.filter((p) => guessCount(p)).length;
+  // One module drawn as several symbols (CM5's Module301 and Module302) would be rated twice.
+  const moduleLines = new Map();
+  for (const l of result.lines.filter((x) => x.model === 'vendor' && x.source?.value)) moduleLines.set(l.source.value, [...(moduleLines.get(l.source.value) ?? []), l.ref]);
+  const splitModules = [...moduleLines].filter(([, refs]) => refs.length > 1).map(([value, refs]) => `${refs.join(', ')} (${value})`);
   showReport(`Read ${plural(result.components, 'component')} from “${esc(file.name)}” (${esc(result.format)}, ${plural(result.nets, 'net')}) into ${plural(result.lines.length, 'line')}.
     ${result.skippedCount ? `Skipped ${plural(result.skippedCount, 'part')} with no failure rate to count, such as holes, test points and solder jumpers (${esc(result.skipped)}).` : ''}
     ${result.notFittedCount ? `Left out ${plural(result.notFittedCount, 'part')} marked do not populate (${esc(result.notFitted)}).` : ''}
+    ${splitModules.length ? `Modules with the same value on several lines: ${esc(splitModules.join('; '))}. If one module is drawn as several symbols, enter its MTBF on one line and remove the others.` : ''}
     ${result.duplicatesCount ? `<strong>${plural(result.duplicatesCount, 'designator is', 'designators are')} used more than once</strong> (${esc(result.duplicates)}): those parts are counted but not proposed in blocks, since their connections cannot be told apart. Annotate the schematic again to fix it.` : ''}
     <strong>${plural(board.incomplete, 'line needs', 'lines need')} input</strong> (red, “Missing”) and ${plural(guessed, 'line has', 'lines have')} guessed values (amber, “Guessed”).
     ${result.groups.length ? `Proposed ${plural(result.groups.length, 'block')} of parts wired in parallel under Reliability structure; they count in series until you mark them redundant.` : ''}`);

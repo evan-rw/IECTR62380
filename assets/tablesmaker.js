@@ -3,6 +3,8 @@
 // one maker's (or NASA's) published model, offered as a choice because they
 // disagree by up to 1000 × at derated voltage; the ceramic life-test method is
 // corroborated.
+// Also: the semiconductor life-test method (oscillators, ICs, modules) and how a
+// maker's MTBF for a module or power supply is read.
 
 export const SOURCES_MAKER = {
   kemT52x: {
@@ -141,6 +143,46 @@ export const SOURCES_MAKER = {
     label: 'Vishay Siliconix, "Silicon Technology Reliability", document 72559, revision 29-Jul-08',
     url: 'https://www.vishay.com/docs/72559/72559.pdf',
   },
+  recomR78e: {
+    label: 'RECOM, R-78E-0.5 data sheet, rev. 9/2025, p. 2 (MTBF to MIL-HDBK-217F, G.B., at +25 °C and +70 °C)',
+    url: 'https://recom-power.com/pdf/Innoline/R-78E-0.5.pdf',
+  },
+  vicorReliability: {
+    label: 'Vicor, "Reliability Data" (MIL-HDBK-217F MTBF at baseplate 25, 50 and 65 °C in G.B., G.F., A.I.C. and N.S.)',
+    url: 'https://vicorpower.com/quality-center/reliability-data',
+  },
+  tdkCus400m: {
+    label: 'TDK-Lambda, "CUS400M Reliability Data", 260624 issue 2, p. R-1 (Telcordia SR-332 Issue 4, 90 % confidence, 20–70 °C)',
+    url: 'https://www.emea.lambda.tdk.com/dk/KB/CUS400M-Reliability-Data-.pdf',
+  },
+  tdkCus30m: {
+    label: 'TDK-Lambda, "CUS30M Reliability Data", CA851-57-01, p. R-1 (Telcordia SR-332 Issue 3, ground benign, 25 and 40 °C)',
+    url: 'https://www.emea.lambda.tdk.com/fr-en/KB/CUS30M-Reliability-Data.pdf',
+  },
+  tdkVega: {
+    label: 'TDK-Lambda, Vega Customer Applications Manual section 7, "MTBF", 69211 issue 4 (MIL-HDBK-217F and Telcordia SR-332 at 0–50 °C)',
+    url: 'https://emea.lambda.tdk.com/nl/KB/Vega-MTBF-to-MIL-217F-Application-Note.pdf',
+  },
+  meanwellLrs100: {
+    label: 'Mean Well, LRS-100 specification, p. 2 (MTBF by Telcordia SR-332 and by MIL-HDBK-217F)',
+    url: 'https://www.meanwell.com/Upload/PDF/LRS-100/LRS-100-SPEC.PDF',
+  },
+  zveiMtbf: {
+    label: 'ZVEI, "Mythos MTBF", guidance for switch-mode power supplies, revised November 2023, pp. 9, 13',
+    url: 'https://block.eu/fileadmin/BLOCK_in_der_Presse/MTBF_SMPS_Final_2023-Nov_revised.pdf',
+  },
+  flexDn002: {
+    label: 'Flex Power Modules, Design Note 002, "Reliability aspects on power supplies", rev. A, 2023, p. 3',
+    url: 'https://flex.com/downloads/dn002-power-supply-reliability-aspects',
+  },
+  congatecB7xd: {
+    label: 'congatec, CTN 20190517 001, conga-B7XD MTBF calculation, pp. 2–3 (Telcordia SR-332 Issue 3; G.B., G.F. and G.M.)',
+    url: 'https://www.congatec.com/fileadmin/user_upload/Documents/Datasheets/CTN/CTN_20190517_001.pdf',
+  },
+  rpiCm5: {
+    label: 'Raspberry Pi, Compute Module 5 data sheet RP-008180-DS-7, section 4.5, Table 10 (MTBF in G.B. and G.M.)',
+    url: 'https://datasheets.raspberrypi.com/cm5/cm5-datasheet.pdf',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -276,4 +318,25 @@ export const LIFE_TEST = {
   ea: 0.7,
 };
 
-export const TABLES_MAKER = [TANT_KEMET, TANT_VISHAY, TANT_AVX, TANT_NASA, MLCC_ACCEL, MLCC_BOUND, MLCC_PME, FLEX, LIFE_TEST];
+// ---------------------------------------------------------------------------
+// A maker's MTBF for a module or power supply
+
+export const VENDOR_MTBF = {
+  id: 'vendor-mtbf',
+  title: 'Modules and power supplies: a maker\'s MTBF, with its method, environment and temperature',
+  ref: 'Makers\' data sheets and reliability reports; ZVEI and Flex guidance',
+  status: 'corroborated',
+  sources: ['recomR78e', 'vicorReliability', 'tdkCus400m', 'tdkCus30m', 'zveiMtbf', 'flexDn002', 'meanwellLrs100', 'tdkVega', 'congatecB7xd', 'rpiCm5'],
+  note: 'A data-sheet MTBF is a prediction by a named method at one temperature and one environment, and the page keeps all three with the figure. Methods are not converted: for the same unit MIL-HDBK-217F gives a 4.9× shorter MTBF than Telcordia SR-332 (Mean Well LRS-100) or 4.2× (TDK-Lambda Vega, 40 °C), and ZVEI\'s example is 26 FIT by SN 29500 against 101 FIT by 217F. Environments are not converted either: makers\' own pairs put ground fixed at 1.74–2× ground benign (congatec, Vicor) and ground mobile at 3.2–8.9× (congatec, Raspberry Pi). Temperature: a second figure from the same sheet fits E_a; otherwise 0.3 eV, from makers\' two-temperature figures for whole units: RECOM 0.25 eV (25 → 70 °C), Vicor 0.16 eV (baseplate 25 → 65 °C), TDK-Lambda CUS400M 0.32–0.39 eV (40–70 °C) and CUS30M 0.37 eV (25 → 40 °C), ZVEI\'s chart about 0.33 eV, Flex\'s "doubles every 15–20 °C" 0.31–0.41 eV near 40 °C. The 0.7 eV used for ICs would overstate the temperature effect for a whole module several times. A two-temperature fit reproduces Vicor\'s middle figure to 0.1 %: 2,309 kh at 50 °C from its 25 and 65 °C values, printed 2,307 kh. A stated confidence bound is kept as the user enters it, not converted.',
+  ea: 0.3,
+  methods: [
+    { id: '217f-count', label: 'MIL-HDBK-217F, parts count', family: 'MIL-HDBK-217F' },
+    { id: '217f-stress', label: 'MIL-HDBK-217F, parts stress', family: 'MIL-HDBK-217F' },
+    { id: 'sr332', label: 'Telcordia SR-332 (Bellcore)', family: 'Telcordia SR-332' },
+    { id: 'sn29500', label: 'Siemens SN 29500 or IEC 61709', family: 'SN 29500 / IEC 61709' },
+    { id: 'field', label: 'Demonstrated in a test, or from field data', family: 'test or field data' },
+    { id: 'unstated', label: 'Not stated' },
+  ],
+};
+
+export const TABLES_MAKER = [TANT_KEMET, TANT_VISHAY, TANT_AVX, TANT_NASA, MLCC_ACCEL, MLCC_BOUND, MLCC_PME, FLEX, LIFE_TEST, VENDOR_MTBF];

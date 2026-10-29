@@ -219,3 +219,38 @@ test('vendor IEC 62380 report rescaled to another profile matches the IC model r
   close(moved.parts[0][1], atGeo.parts[0][1]);
   close(moved.parts[1][1], atGeo.parts[1][1]);
 });
+
+test('vendor MTBF from a data sheet: RECOM and Vicor printed figures, the 0.3 eV default, no scaling without a temperature', () => {
+  const at = (t, env) => normaliseProfile({ phases: [{ tac: t, tau: 1 }], tauOff: 0, ...(env ? { env217f: env } : {}) });
+  const mtbf = (params, prof) => computeComponent({ model: 'vendor', qty: 1, params: { method: 'mtbf', ...params } }, prof);
+  // RECOM R-78E-0.5 (217F, G.B.): 7,976 kh at +25 °C and 2,182 kh at +70 °C. The pair fits E_a = 0.2539 eV and gives both back.
+  const recom = { mtbfHours: 7976e3, predMethod: '217f-stress', statedEnv: 'GB', refPoint: 'ambient', tStated: 25, mtbfHours2: 2182e3, tStated2: 70 };
+  close(1e9 / mtbf(recom, at(25)).fit, 7976e3, 1e-9);
+  close(1e9 / mtbf(recom, at(70)).fit, 2182e3, 1e-9);
+  assert.match(mtbf(recom, at(40)).values[1][1], /^E_a = 0\.2539 eV, fitted from the two figures$/);
+  // Vicor MI-J71-MY (217F, G.B., baseplate): 3,782 and 1,778 kh at 25 and 65 °C give its printed 2,307 kh at 50 °C within 0.1 %.
+  const vicor = { mtbfHours: 3782e3, predMethod: '217f-stress', statedEnv: 'GB', refPoint: 'case', pointRise: 0, tStated: 25, mtbfHours2: 1778e3, tStated2: 65 };
+  close(1e9 / mtbf(vicor, at(50)).fit, 2307e3, 1e-3);
+  // A baseplate 10 °C above board ambient is read at ambient + 10.
+  close(mtbf({ ...vicor, pointRise: 10 }, at(40)).fit, mtbf(vicor, at(50)).fit, 1e-12);
+  // One figure: E_a starts at 0.3 eV.
+  const one = { mtbfHours: 1e6, predMethod: 'sr332', statedEnv: 'GB', refPoint: 'ambient', tStated: 40 };
+  close(mtbf(one, at(40)).fit, 1000, 1e-12);
+  close(mtbf(one, at(60)).fit / mtbf(one, at(40)).fit, Math.exp((0.3 / 8.617e-5) * (1 / 313.15 - 1 / 333.15)), 1e-12);
+  // No temperature (Raspberry Pi CM5, 143,000 h at G.B.): used as it is at any temperature; the same figure entered as FIT agrees.
+  const cm5 = { mtbfHours: 143000, predMethod: 'unstated', statedEnv: 'GB', refPoint: 'unstated' };
+  close(mtbf(cm5, at(70)).fit, 1e9 / 143000, 1e-12);
+  close(mtbf({ ...cm5, rateUnit: 'fit', mtbfHours: null, statedFit: 1e9 / 143000 }, at(20)).fit, 1e9 / 143000, 1e-12);
+  // Another environment is a notice, not an error: the line still counts.
+  const gf = mtbf(cm5, at(40, 'GF'));
+  assert.equal(gf.complete, true);
+  assert.match(gf.notices.join(' '), /Stated for Ground, benign \(G_B\); this board is Ground, fixed \(G_F\)/);
+  assert.deepEqual(mtbf(cm5, at(40)).notices, []);
+  // Blank inputs are Missing; a bound's confidence and a second figure's temperature only when they apply.
+  assert.deepEqual(mtbf({}, at(40)).missing, ['mtbfHours', 'predMethod', 'statedEnv', 'refPoint']);
+  assert.deepEqual(mtbf({ ...one, statistic: 'bound' }, at(40)).missing, ['confidence']);
+  assert.deepEqual(mtbf({ ...one, mtbfHours2: 5e5 }, at(40)).missing, ['tStated2']);
+  // Figures that do not worsen with temperature, or share one temperature, are errors.
+  assert.match(mtbf({ ...recom, mtbfHours2: 9e6 }, at(40)).errors.join(' '), /do not get worse with temperature/);
+  assert.match(mtbf({ ...recom, tStated2: 25 }, at(40)).errors.join(' '), /different temperatures/);
+});
