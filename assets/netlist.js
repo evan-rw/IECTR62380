@@ -20,7 +20,7 @@ import { aluminiumKindOf } from './caplife.js';
 // ---------------------------------------------------------------------------
 // Parsing
 
-export function parseProtel(text) {
+export function parseProtel(text, onProgress) {
   const lines = text.replace(/^﻿/, '').split(/\r\n|\r|\n/);
   const first = lines.find((l) => l.trim() !== '') ?? '';
   const format = /^PROTEL\s+NETLIST\s+2/i.test(first.trim()) ? 'Protel 2.0' : 'Protel';
@@ -29,6 +29,7 @@ export function parseProtel(text) {
   let nets = 0;
 
   for (let i = 0; i < lines.length; i++) {
+    if (onProgress && (i & 0x3ff) === 0) onProgress(i / lines.length);
     const line = lines[i].trim();
     if (line.startsWith('[')) {
       const block = [];
@@ -73,10 +74,11 @@ export function parseProtel(text) {
 
 // KiCad's own netlist (Eeschema's default export, an s-expression starting "(export"):
 // each component with its fields, symbol and DNP flag, and every net's nodes.
-function readSexpr(text) {
+function readSexpr(text, onProgress) {
   const tokens = text.match(/\(|\)|"(?:[^"\\]|\\.)*"|[^\s()"]+/g) ?? [];
   let i = 0;
   const read = () => {
+    if (onProgress && (i & 0x3fff) === 0) onProgress(i / tokens.length);
     const t = tokens[i++];
     if (t !== '(') return t[0] === '"' ? t.slice(1, -1).replace(/\\(.)/g, '$1') : t;
     const list = [];
@@ -89,8 +91,9 @@ function readSexpr(text) {
 
 export const isKicadNetlist = (text) => /^\s*\(export\b/.test(text.replace(/^\uFEFF/, ''));
 
-export function parseKicad(text) {
-  const root = readSexpr(text.replace(/^\uFEFF/, ''));
+// onProgress(fraction), optional: how far through the text the parser is.
+export function parseKicad(text, onProgress) {
+  const root = readSexpr(text.replace(/^\uFEFF/, ''), onProgress);
   if (!Array.isArray(root) || root[0] !== 'export') throw new Error('This is not a KiCad netlist.');
   const items = (list, key) => (list ?? []).filter((x) => Array.isArray(x) && x[0] === key);
   const one = (list, key) => items(list, key)[0];
@@ -833,8 +836,11 @@ function parallelStrings(parts, reach) {
 }
 
 // Parse a netlist and return grouped part lines plus a report.
-export function netlistToParts(text) {
-  const parsed = isKicadNetlist(text) ? parseKicad(text) : parseProtel(text);
+// onProgress(fraction, stage), optional: 'parse' while reading the text (to 0.7), then 'sort' while
+// classifying and grouping the parts (to 1).
+export function netlistToParts(text, onProgress) {
+  const parsing = onProgress ? (f) => onProgress(0.7 * f, 'parse') : undefined;
+  const parsed = isKicadNetlist(text) ? parseKicad(text, parsing) : parseProtel(text, parsing);
   const fitted = parsed.components.filter((c) => !c.offBoard && !c.dnp);
   // The fitted parts each net reaches; a net that reaches only one part carries nothing.
   const reach = new Map();
@@ -848,7 +854,8 @@ export function netlistToParts(text) {
   const stringParts = [];
   const skipped = [];
   const notFitted = [];
-  for (const c of parsed.components) {
+  for (const [k, c] of parsed.components.entries()) {
+    if (onProgress && k % 256 === 0) onProgress(0.7 + (0.25 * k) / parsed.components.length, 'sort');
     // Symbols that are not on the board (simulation sources, sheet notes) are not parts.
     if (c.offBoard) continue;
     if (c.dnp) { notFitted.push(c.designator); continue; }
@@ -885,6 +892,7 @@ export function netlistToParts(text) {
       proposed: `wired in parallel: alike strings of parts in series between the same nets (${g.nets.join(', ')})`,
     });
   }
+  onProgress?.(1, 'sort');
   return {
     format: parsed.format,
     components: parsed.components.length,

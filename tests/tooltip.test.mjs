@@ -18,7 +18,7 @@ const tip = () => $('#tip');
 
 test('every button in the page\'s source has a note of its own', () => {
   const keys = new Set();
-  for (const file of ['index.html', 'assets/app.js', 'assets/structure-ui.js']) {
+  for (const file of ['index.html', 'assets/app.js', 'assets/structure-ui.js', 'assets/progress.js']) {
     const text = readFileSync(new URL(file, root), 'utf8');
     for (const [, attrs] of text.matchAll(/<button\b([^>]*)>/g)) {
       for (const [, kind, value] of attrs.matchAll(/data-(act|st|tab)="([^"$]+)"/g)) keys.add(`${kind}=${value}`);

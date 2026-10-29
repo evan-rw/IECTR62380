@@ -206,6 +206,18 @@ button, a.caption-btn { -webkit-touch-callout: none; -webkit-user-select: none; 
 #tip { position: fixed; z-index: 1000; max-width: 300px; padding: 2px 14px 3px 5px; font: 11px var(--ui); line-height: 1.35; color: #000; background: var(--info-bg); border: 1px solid #000; pointer-events: none; clip-path: polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%); }
 #tip::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; background: linear-gradient(to bottom right, #e9e2a4 calc(50% - 1px), #000 calc(50% - 1px) 50%, transparent 50%); border-top: 1px solid #000; border-left: 1px solid #000; }
 #tip[hidden] { display: none; }
+/* Progress window for imports (progress.js): a small Windows 2000 dialog with a block bar. */
+.progress-window { position: fixed; z-index: 900; left: 50%; top: 30%; transform: translateX(-50%); width: min(360px, calc(100vw - 32px)); background: var(--face); box-shadow: var(--raised), 2px 2px 8px rgba(0, 0, 0, 0.35); padding: 2px 2px 8px; }
+.progress-window > h2 { margin: 0 0 8px; padding: 3px 6px; font-size: inherit; background: linear-gradient(90deg, var(--title-a), var(--title-b)); color: #fff; font-weight: bold; }
+.progress-window > p { margin: 0 8px 8px; }
+.progress-bar { display: flex; gap: 2px; height: 20px; margin: 0 8px 10px; padding: 3px; background: var(--face); box-shadow: var(--sunken); box-sizing: border-box; }
+.progress-bar > span { flex: 1 1 0; min-width: 0; }
+/* Dark blue blocks, one per 5 %; the block being worked on blinks. */
+.progress-bar > span.done, .progress-bar > span.current { background: var(--select); }
+.progress-bar > span.current { animation: progress-blink 1s steps(1, end) infinite; }
+@keyframes progress-blink { 50% { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .progress-bar > span.current { animation: none; opacity: 0.4; } }
+.progress-actions { text-align: right; }
 button:disabled { color: var(--gray-text); text-shadow: 1px 1px 0 var(--hilight); }
 /* The default button carries an extra dark frame. */
 button.primary { box-shadow: 0 0 0 1px #000, var(--raised); font-weight: bold; }

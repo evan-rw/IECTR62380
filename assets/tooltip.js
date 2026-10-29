@@ -44,6 +44,7 @@ const TIPS = {
   'act:attention': 'Hide the lines that are complete, leaving those with missing or guessed values.',
   'act:dismiss-report': 'Close this report.',
   'act:undo-del': 'Put back the line just removed.',
+  'act:cancel-import': 'Stop reading this file; the board stays as it was.',
   'st:group-kofn': 'Group the selected items as a redundant (k-of-n) block. (P)',
   'st:group-series': 'Group the selected items in series. (S)',
   'st:ungroup': 'Take the selected block apart, keeping its items. (U)',

@@ -15,6 +15,8 @@ import { evaluateCapLife, withLife, lifeInputs, LIFE_KEYS, TECHS, typeTech } fro
 import { LIFE_RULES, END_OF_LIFE } from './tablescaplife.js';
 import { VENDOR_MTBF } from './tablesmaker.js';
 import { initTooltips } from './tooltip.js';
+import { openProgress } from './progress.js';
+import { readBytes, decodeText, READ_SHARE } from './readfile.js';
 import { esc } from './html.js';
 import { xlsx } from './xlsx.js';
 import { boardSheets } from './report.js';
@@ -1082,12 +1084,7 @@ function boardCSV() {
 // Netlists are usually plain ASCII, but values such as "10µF" may be in a
 // Windows code page rather than UTF-8.
 async function readText(file) {
-  const bytes = await file.arrayBuffer();
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch {
-    return new TextDecoder('windows-1252').decode(bytes);
-  }
+  return decodeText(new Uint8Array(await file.arrayBuffer()));
 }
 
 // The toolbar button that opened the file picker, where Dismiss returns the focus.
@@ -1540,17 +1537,59 @@ $('#import-file').addEventListener('change', async (e) => {
   }
 });
 
+// Reads and parses an imported file with a progress window: in a worker when the browser can start one,
+// so a large file does not freeze the page, otherwise here. Resolves to the parsed result, or null if
+// cancelled.
+function importWithProgress(kind, file, title) {
+  const stages = { read: `Reading ${file.name}…`, parse: 'Reading the parts and nets…', sort: 'Sorting the parts into lines…' };
+  const progress = openProgress({ title, text: stages.read });
+  const here = async () => {
+    const text = decodeText(await readBytes(file, (f) => progress.set(f * READ_SHARE, stages.read)));
+    return netlistToParts(text, (f, stage) => progress.set(READ_SHARE + (1 - READ_SHARE) * f, stages[stage]));
+  };
+  return new Promise((resolve, reject) => {
+    const finish = (fn, value) => { progress.close(); fn(value); };
+    // Cancel settles the import as nothing; a parse still running here finishes unheard.
+    progress.onCancel = () => resolve(null);
+    let worker = null;
+    try {
+      worker = typeof Worker === 'function' ? new Worker(new URL('./importworker.js', import.meta.url), { type: 'module' }) : null;
+    } catch {
+      worker = null;
+    }
+    if (!worker) {
+      here().then((r) => finish(resolve, r), (err) => finish(reject, err));
+      return;
+    }
+    let heard = false;
+    progress.onCancel = () => { worker.terminate(); resolve(null); };
+    worker.onmessage = ({ data }) => {
+      heard = true;
+      if (data.type === 'progress') progress.set(data.fraction, stages[data.stage]);
+      else { worker.terminate(); if (data.type === 'done') finish(resolve, data.result); else finish(reject, new Error(data.message)); }
+    };
+    // A browser without module workers fails before the worker says anything: parse here instead.
+    worker.onerror = (e) => {
+      worker.terminate();
+      if (heard) finish(reject, new Error(e.message || 'the file could not be read'));
+      else here().then((r) => finish(resolve, r), (err) => finish(reject, err));
+    };
+    worker.postMessage({ kind, file });
+  });
+}
+
 $('#netlist-file').addEventListener('change', async (e) => {
   const file = e.target.files?.[0];
   e.target.value = '';
   if (!file) return;
   let result;
   try {
-    result = netlistToParts(await readText(file));
+    result = await importWithProgress('netlist', file, 'Import netlist');
   } catch (err) {
     alert(`Could not read “${file.name}”: ${err.message}`);
     return;
   }
+  if (!result) return;
   if (state.parts.length && !confirm(`Replace the current parts with the ${result.lines.length} lines from “${file.name}”? The mission profile is kept.`)) return;
   state.parts = result.lines.map((l) => makePart(l.model, l.ref, l.qty, l.params, { inferred: { ...l.inferred }, source: l.source }));
   state.structure = {
