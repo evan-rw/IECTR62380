@@ -498,7 +498,7 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.ok($('#pcb .field[data-field="custom-tg"]').classList.contains('missing'));
   click($('[data-act="export-json"]'));
   const savedPcb = JSON.parse(await downloads.at(-1).text()).pcb;
-  assert.deepEqual([savedPcb.laminate, savedPcb.reflows, savedPcb.holes[0]], ['custom', 10, { label: '0.3 mm vias', drill: 0.3, plating: 25 }]);
+  assert.deepEqual([savedPcb.laminate, savedPcb.reflows, savedPcb.holes[0]], ['custom', 10, { label: '0.3 mm vias', drill: 0.3, plating: 25, inferred: {}, confirmed: {} }]);
   click($('[data-act="pcb-del"]'));
   assert.equal(boardTotal(), beforePcb);
 

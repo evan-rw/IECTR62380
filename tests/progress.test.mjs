@@ -63,8 +63,8 @@ test('the import worker reads, parses and answers as netlistToParts does', async
   assert.equal(done.type, 'done');
   assert.deepEqual(done.result, netlistToParts(text));
   messages.length = 0;
-  await globalThis.self.onmessage({ data: { kind: 'board', file: new Blob(['x']) } });
-  assert.deepEqual(messages.at(-1), { type: 'error', message: 'Unknown import: board' });
+  await globalThis.self.onmessage({ data: { kind: 'spreadsheet', file: new Blob(['x']) } });
+  assert.deepEqual(messages.at(-1), { type: 'error', message: 'Unknown import: spreadsheet' });
   messages.length = 0;
   await globalThis.self.onmessage({ data: { kind: 'netlist', file: new Blob(['not a netlist']) } });
   assert.equal(messages.at(-1).type, 'error');

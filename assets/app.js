@@ -17,6 +17,7 @@ import { VENDOR_MTBF } from './tablesmaker.js';
 import { initTooltips } from './tooltip.js';
 import { openProgress } from './progress.js';
 import { readBytes, decodeText, READ_SHARE } from './readfile.js';
+import { parseBoardFile, laminateFor } from './boardfile.js';
 import { esc } from './html.js';
 import { xlsx } from './xlsx.js';
 import { boardSheets } from './report.js';
@@ -71,8 +72,11 @@ const emptySmt = () => ({ include: true, substrate: null, cycling: 'profile', eq
 const PCB_NUMBERS = ['thickness', 'ductility', 'strength', 'kq', 'kd', 'reflows', 'reflowPeak'];
 const emptyPcb = () => ({
   include: true, laminate: null, custom: { tg: null, alpha1: null, alpha2: null, modulus: null },
-  ...Object.fromEntries(PCB_NUMBERS.map((k) => [k, null])), holes: [],
+  ...Object.fromEntries(PCB_NUMBERS.map((k) => [k, null])), holes: [], inferred: {}, confirmed: {},
 });
+// Board settings and hole cells a board file can fill in, marked Guessed with where they came from.
+const PCB_GUESSED = ['thickness', 'laminate'];
+const HOLE_GUESSED = ['drill'];
 
 // Electrolytic capacitor life: whether drift is a failure by default, and the polymer rule.
 const emptyCapLife = () => ({ defaultRole: null, polymerRule: 'majority' });
@@ -112,8 +116,17 @@ function sanitizePcb(raw) {
     laminate: s.laminate === 'custom' || LAMINATES.rows.some((r) => r.id === s.laminate) ? s.laminate : null,
     custom: Object.fromEntries(['tg', 'alpha1', 'alpha2', 'modulus'].map((k) => [k, num(s.custom?.[k])])),
     ...Object.fromEntries(PCB_NUMBERS.map((k) => [k, num(s[k])])),
-    holes: (Array.isArray(s.holes) ? s.holes : []).map((h) => ({ label: str(h?.label), drill: num(h?.drill), plating: num(h?.plating) })),
+    holes: (Array.isArray(s.holes) ? s.holes : []).map((h) => ({
+      label: str(h?.label), drill: num(h?.drill), plating: num(h?.plating),
+      inferred: reasons(h?.inferred, HOLE_GUESSED), confirmed: reasons(h?.confirmed, HOLE_GUESSED),
+    })),
+    inferred: reasons(s.inferred, PCB_GUESSED), confirmed: reasons(s.confirmed, PCB_GUESSED),
   };
+}
+
+// The reasons kept for guessed values: text, for the keys that can be guessed.
+function reasons(raw, keys) {
+  return Object.fromEntries(Object.entries(raw && typeof raw === 'object' ? raw : {}).filter(([k, v]) => keys.includes(k) && typeof v === 'string'));
 }
 
 function sanitizeSmt(raw) {
@@ -490,7 +503,7 @@ function pcbHoleHTML(h, i) {
     <td class="num" data-out="used"></td>
     <td class="num" data-out="life"></td>
     <td class="num" data-out="fit"></td>
-    <td><button type="button" class="icon" data-act="pcb-del" data-i="${i}" aria-label="Remove ${esc(h.label || 'hole size')}">✕</button></td>
+    <td class="life-acts"><button type="button" class="icon" data-act="pcb-confirm" data-i="${i}" aria-label="Confirm the guessed values of ${esc(h.label || 'this hole size')}"${Object.keys(h.inferred ?? {}).length ? '' : ' hidden'}>✓</button><button type="button" class="icon" data-act="pcb-del" data-i="${i}" aria-label="Remove ${esc(h.label || 'hole size')}">✕</button></td>
   </tr>`;
 }
 
@@ -518,6 +531,14 @@ function markMissing(wrap, control, missing) {
   if (tag) tag.textContent = missing ? 'Missing' : '';
   control?.setAttribute('aria-invalid', String(missing));
 }
+// A value filled in from a file is Guessed, in amber, with where it came from, until changed or confirmed.
+function markGuessed(wrap, control, reason) {
+  wrap?.classList.toggle('inferred', Boolean(reason));
+  const tag = wrap?.querySelector?.('.state-tag');
+  if (tag && reason) tag.textContent = 'Guessed';
+  if (reason) control?.setAttribute('title', `Guessed: ${reason}`);
+  else if (control?.getAttribute('title')?.startsWith('Guessed: ')) control.removeAttribute('title');
+}
 
 function updatePcb(ev) {
   const s = state.pcb;
@@ -532,12 +553,22 @@ function updatePcb(ev) {
     ...PCB_NUMBERS.filter((k) => !isNum(s[k]) || (k !== 'reflows' && k !== 'reflowPeak' && !(s[k] > 0)) || (k === 'kq' && s[k] > 10)),
     ...(s.laminate === 'custom' ? ['tg', 'alpha1', 'alpha2', 'modulus'].filter((k) => !isNum(s.custom[k])).map((k) => `custom-${k}`) : []),
   ] : []);
-  for (const el of document.querySelectorAll('#pcb .pcb-settings .field')) markMissing(el, el.querySelector('input, select'), missingKeys.has(el.dataset.field));
+  for (const el of document.querySelectorAll('#pcb .pcb-settings .field')) {
+    const control = el.querySelector('input, select');
+    markMissing(el, control, missingKeys.has(el.dataset.field));
+    markGuessed(el, control, missingKeys.has(el.dataset.field) ? null : s.inferred?.[el.dataset.field]);
+  }
+  $('[data-act="pcb-confirm-settings"]').hidden = !Object.keys(s.inferred ?? {}).length;
   $('#pcb-kq-band').textContent = s.kq > 0 && s.kq <= 10 ? `Yours is ${qualityBand(s.kq)}.` : '';
   ev.holes.forEach((r, i) => {
     const row = $(`#pcb-holes [data-hole="${i}"]`);
     if (!row) return;
-    for (const key of ['drill', 'plating']) { const cell = $(`[data-cell="${key}"]`, row); markMissing(cell, $('input', cell), (r.missing ?? []).includes(key)); }
+    for (const key of ['drill', 'plating']) {
+      const cell = $(`[data-cell="${key}"]`, row);
+      const missing = (r.missing ?? []).includes(key);
+      markMissing(cell, $('input', cell), missing);
+      markGuessed(cell, $('input', cell), missing ? null : s.holes[i]?.inferred?.[key]);
+    }
     row.classList.toggle('worst', ev.worst === r);
     row.classList.toggle('cracked', Boolean(r.cracked));
     $('[data-out="used"]', row).textContent = r.complete && r.assembly ? `${Math.min(100, Math.round(r.used * 100))} %` : r.complete ? '0 %' : '—';
@@ -1157,9 +1188,11 @@ document.addEventListener('input', (e) => {
     const key = el.dataset.key;
     if (key.startsWith('custom.')) state.pcb.custom[key.slice(7)] = numOrNull(el.value);
     else state.pcb[key] = numOrNull(el.value);
+    delete state.pcb.inferred?.[key];
   } else if (bind === 'pcb-hole') {
     const hole = state.pcb.holes[Number(el.dataset.i)];
     hole[el.dataset.key] = el.dataset.key === 'label' ? el.value : numOrNull(el.value);
+    delete hole.inferred?.[el.dataset.key];
   } else if (bind === 'smt-dev') {
     const dev = state.smt.devices[Number(el.dataset.i)];
     const key = el.dataset.key;
@@ -1191,7 +1224,7 @@ document.addEventListener('change', (e) => {
   if (!bind && el.id !== 'life-add') return;
   if (bind === 'pcb' && (el.tagName === 'SELECT' || el.type === 'checkbox')) {
     if (el.type === 'checkbox') state.pcb.include = el.checked;
-    else state.pcb.laminate = el.value || null;
+    else { state.pcb.laminate = el.value || null; delete state.pcb.inferred?.laminate; }
   } else if (bind === 'smt') {
     const key = el.dataset.key;
     state.smt[key] = el.type === 'checkbox' ? el.checked : el.value || null;
@@ -1345,8 +1378,27 @@ document.addEventListener('click', (e) => {
       $('[data-act="toggle"]', first ?? document)?.focus();
       return;
     }
+    case 'import-board': reportOpener = btn; $('#board-file').click(); return;
+    case 'dismiss-pcb-report':
+      $('#pcb-report').hidden = true;
+      $('[data-act="import-board"]').focus();
+      return;
+    case 'pcb-confirm': {
+      // The guesses become the row's own values, with the reasons kept on record.
+      const hole = state.pcb.holes[Number(btn.dataset.i)];
+      hole.confirmed = { ...hole.confirmed, ...hole.inferred };
+      hole.inferred = {};
+      renderPcb();
+      $(`#pcb-holes [data-hole="${btn.dataset.i}"] [data-act="pcb-del"]`)?.focus();
+      break;
+    }
+    case 'pcb-confirm-settings':
+      state.pcb.confirmed = { ...state.pcb.confirmed, ...state.pcb.inferred };
+      state.pcb.inferred = {};
+      $('[data-act="pcb-add"]').focus();
+      break;
     case 'pcb-add':
-      state.pcb.holes.push({ label: '', drill: null, plating: null });
+      state.pcb.holes.push({ label: '', drill: null, plating: null, inferred: {}, confirmed: {} });
       renderPcb();
       $(`#pcb-holes [data-hole="${state.pcb.holes.length - 1}"] input`)?.focus();
       break;
@@ -1541,11 +1593,14 @@ $('#import-file').addEventListener('change', async (e) => {
 // so a large file does not freeze the page, otherwise here. Resolves to the parsed result, or null if
 // cancelled.
 function importWithProgress(kind, file, title) {
-  const stages = { read: `Reading ${file.name}…`, parse: 'Reading the parts and nets…', sort: 'Sorting the parts into lines…' };
+  const stages = kind === 'board'
+    ? { read: `Reading ${file.name}…`, parse: 'Reading the holes and the stackup…' }
+    : { read: `Reading ${file.name}…`, parse: 'Reading the parts and nets…', sort: 'Sorting the parts into lines…' };
   const progress = openProgress({ title, text: stages.read });
   const here = async () => {
     const text = decodeText(await readBytes(file, (f) => progress.set(f * READ_SHARE, stages.read)));
-    return netlistToParts(text, (f, stage) => progress.set(READ_SHARE + (1 - READ_SHARE) * f, stages[stage]));
+    const rest = (f, stage) => progress.set(READ_SHARE + (1 - READ_SHARE) * f, stages[stage]);
+    return kind === 'board' ? parseBoardFile(text, file.name, (f) => rest(f, 'parse')) : netlistToParts(text, rest);
   };
   return new Promise((resolve, reject) => {
     const finish = (fn, value) => { progress.close(); fn(value); };
@@ -1577,6 +1632,80 @@ function importWithProgress(kind, file, title) {
     worker.postMessage({ kind, file });
   });
 }
+
+// Fills the Circuit board check from a board file: one row per plated, round, through-hole size, the
+// board thickness and the laminate, all Guessed with where they came from. Values typed in are kept.
+function applyBoardFile(r, fileName) {
+  const s = state.pcb;
+  s.inferred ??= {};
+  const mm = (x) => String(+x.toFixed(3));
+  const count = (n, one) => `${n.toLocaleString('en')} ${n === 1 ? one : `${one}s`}`;
+  const bySize = new Map();
+  for (const h of r.holes.filter((x) => x.plated !== false && x.through && x.shape === 'round')) {
+    const row = bySize.get(h.size) ?? { size: h.size, vias: 0, holes: 0 };
+    if (h.kind === 'via') row.vias += h.count; else row.holes += h.count;
+    bySize.set(h.size, row);
+  }
+  const rows = [...bySize.values()].sort((a, b) => a.size - b.size);
+  if (rows.length && s.holes.length && !confirm(`Replace the ${plural(s.holes.length, 'hole size')} in the Circuit board check with the ${rows.length} from “${fileName}”? The other settings are kept.`)) return;
+  if (rows.length) {
+    s.holes = rows.map((x) => ({
+      label: `${mm(x.size)} mm: ${[x.vias && count(x.vias, 'via'), x.holes && count(x.holes, 'hole')].filter(Boolean).join(', ')}`,
+      drill: x.size,
+      plating: null,
+      inferred: { drill: `the finished hole size in ${fileName}; the drilled hole is larger by twice the plating` },
+      confirmed: {},
+    }));
+  }
+  const kept = [];
+  if (r.thickness) {
+    const why = r.thickness.from === 'stated' ? `stated in ${fileName}` : `the sum of the ${r.thickness.detail} of ${fileName}`;
+    if (s.thickness == null || s.inferred.thickness) { s.thickness = r.thickness.mm; s.inferred.thickness = why; }
+    else if (Math.abs(s.thickness - r.thickness.mm) > 1e-9) kept.push(`your board thickness, ${fmt(s.thickness)} mm (the file gives ${mm(r.thickness.mm)} mm)`);
+  }
+  const lam = laminateFor(r.materials);
+  if (lam) {
+    const why = `the dielectric ${r.materials.map((m) => `“${m}”`).join(', ')} in ${fileName}${lam === 'fr4' ? ', taken as standard FR-4' : ''}`;
+    if (!s.laminate || s.inferred.laminate) { s.laminate = lam; s.inferred.laminate = why; }
+    else if (s.laminate !== lam) kept.push('your laminate');
+  }
+  const sum = (pick) => r.holes.filter(pick).reduce((n, h) => n + h.count, 0);
+  const left = [
+    [sum((h) => h.plated === false), 'unplated hole', 'no barrel to crack'],
+    [sum((h) => h.plated !== false && !h.through), 'blind or buried via', 'the model is for through holes'],
+    [sum((h) => h.plated !== false && h.through && h.shape === 'slot'), 'plated slot', 'the model is for round holes'],
+  ].filter(([n]) => n).map(([n, what, why]) => `${count(n, what)} (${why})`);
+  const facts = [r.copperLayers && `${r.copperLayers} copper layers`, r.thickness && `${mm(r.thickness.mm)} mm`, r.materials.length && r.materials.join(', ')].filter(Boolean);
+  renderPcb();
+  update();
+  save();
+  const box = $('#pcb-report');
+  box.innerHTML = `<p>Read “${esc(fileName)}” (${esc(r.format)}${facts.length ? `, ${esc(facts.join(', '))}` : ''}). ${rows.length
+    ? `${plural(rows.length, 'plated hole size')} added: ${esc(s.holes.map((h) => h.label).join('; '))}.`
+    : 'No plated through holes were found, so the hole sizes are unchanged.'}
+    ${left.length ? `Left out: ${esc(left.join('; '))}.` : ''}
+    ${r.thickness ? '' : 'The file has no layer stackup: enter the board thickness and laminate.'}
+    ${kept.length ? `Kept ${esc(kept.join(' and '))}.` : ''}
+    ${r.notes.length ? esc(r.notes.join(' ')) : ''}
+    The file gives finished hole sizes, entered as the drill: the drilled hole is larger by twice the plating. Enter the plating thickness, which board files do not hold.</p>
+    <p class="report-actions"><button type="button" data-act="dismiss-pcb-report">Dismiss</button></p>`;
+  box.hidden = false;
+  box.focus();
+}
+
+$('#board-file').addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file) return;
+  let result;
+  try {
+    result = await importWithProgress('board', file, 'Import board file');
+  } catch (err) {
+    alert(`Could not read “${file.name}”: ${err.message}`);
+    return;
+  }
+  if (result) applyBoardFile(result, file.name);
+});
 
 $('#netlist-file').addEventListener('change', async (e) => {
   const file = e.target.files?.[0];

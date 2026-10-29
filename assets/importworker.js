@@ -3,6 +3,7 @@
 // { type: 'done', result } or { type: 'error', message }.
 
 import { netlistToParts } from './netlist.js';
+import { parseBoardFile } from './boardfile.js';
 import { readBytes, decodeText, READ_SHARE } from './readfile.js';
 
 self.onmessage = async ({ data }) => {
@@ -15,8 +16,11 @@ self.onmessage = async ({ data }) => {
   };
   try {
     const text = decodeText(await readBytes(data.file, (f) => report(f * READ_SHARE, 'read')));
-    if (data.kind !== 'netlist') throw new Error(`Unknown import: ${data.kind}`);
-    const result = netlistToParts(text, (f, stage) => report(READ_SHARE + (1 - READ_SHARE) * f, stage));
+    const rest = (f, stage) => report(READ_SHARE + (1 - READ_SHARE) * f, stage);
+    let result;
+    if (data.kind === 'netlist') result = netlistToParts(text, rest);
+    else if (data.kind === 'board') result = parseBoardFile(text, data.file.name ?? '', (f) => rest(f, 'parse'));
+    else throw new Error(`Unknown import: ${data.kind}`);
     self.postMessage({ type: 'done', result });
   } catch (err) {
     self.postMessage({ type: 'error', message: err?.message ?? String(err) });
