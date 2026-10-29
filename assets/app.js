@@ -1558,7 +1558,7 @@ $('#netlist-file').addEventListener('change', async (e) => {
   const board = computeBoard({ profile: state.profile, components: state.parts });
   const guessed = state.parts.filter((p) => guessCount(p)).length;
   showReport(`Read ${plural(result.components, 'component')} from “${esc(file.name)}” (${esc(result.format)}, ${plural(result.nets, 'net')}) into ${plural(result.lines.length, 'line')}.
-    ${result.skippedCount ? `Skipped ${result.skippedCount} mechanical items (${esc(result.skipped)}).` : ''}
+    ${result.skippedCount ? `Skipped ${plural(result.skippedCount, 'part')} with no failure rate to count, such as holes, test points and solder jumpers (${esc(result.skipped)}).` : ''}
     ${result.notFittedCount ? `Left out ${plural(result.notFittedCount, 'part')} marked do not populate (${esc(result.notFitted)}).` : ''}
     ${result.duplicatesCount ? `<strong>${plural(result.duplicatesCount, 'designator is', 'designators are')} used more than once</strong> (${esc(result.duplicates)}): those parts are counted but not proposed in blocks, since their connections cannot be told apart. Annotate the schematic again to fix it.` : ''}
     <strong>${plural(board.incomplete, 'line needs', 'lines need')} input</strong> (red, “Missing”) and ${plural(guessed, 'line has', 'lines have')} guessed values (amber, “Guessed”).
@@ -1596,7 +1596,7 @@ $('#bom-file').addEventListener('change', async (e) => {
     const board = computeBoard({ profile: state.profile, components: state.parts });
     const guessed = state.parts.filter((p) => guessCount(p)).length;
     showReport(`Read ${plural(bom.items.length, 'row')} from “${esc(file.name)}” (columns ${columns}) into ${plural(result.lines.length, 'line')} for ${plural(result.parts, 'part')}.
-      ${result.skippedCount ? `Skipped ${result.skippedCount} mechanical items (${esc(result.skipped)}).` : ''} ${notes}
+      ${result.skippedCount ? `Skipped ${plural(result.skippedCount, 'part')} with no failure rate to count, such as holes, test points and solder jumpers (${esc(result.skipped)}).` : ''} ${notes}
       <strong>${plural(board.incomplete, 'line needs', 'lines need')} input</strong> (red, “Missing”) and ${plural(guessed, 'line has', 'lines have')} guessed values (amber, “Guessed”).
       A BOM has no connections, so no parallel blocks are proposed; import the netlist too for those.`);
     return;

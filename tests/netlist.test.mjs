@@ -318,6 +318,46 @@ test('KiCad demo parts: the footprint names the part when the designator does no
   assert.deepEqual([c('R5', '10k', 'RESC1608X55N').params.type, c('R5', '10k', 'RESC1608X55N').params.rated], ['smd', 0.1]);
 });
 
+test('KiCad demo parts that used to import as "Other part"', () => {
+  // The demo boards' own values, footprints, symbols and descriptions (2026-10-28). Of 45 such parts, 8 are left:
+  // modules, batteries, LV101 and two jumpers that may be pin headers.
+  const c = (designator, value, footprint = '', extra = {}) => classifyComponent({ designator, value, footprint, description: '', symbol: '', ...extra });
+  const kind = (...a) => { const r = c(...a); return r.skip ? `skip: ${r.skip}` : [r.model, r.params.type ?? r.params.style].filter(Boolean).join(' / '); };
+  // A footprint rule for the start of a name also sees a footprint behind a library prefix (openair-max).
+  assert.equal(kind('CO2', 'HC-1.25-8PLT', 'easyeda2kicad:CONN-SMD_8P-P1.25_HC-1.25-8PLT'), 'mil-connector / rectangular');
+  assert.equal(kind('Battery1', 'ZX-PM2.54-1-2PY', 'easyeda2kicad:HDR-TH_2P-P2.54-V-F'), 'mil-connector / rectangular');
+  assert.equal(kind('X9', '', 'mylib:JST_PH_B2B-PH-K'), 'mil-connector / rectangular', 'X names no kind: the footprint decides');
+  assert.equal(kind('DC1', 'DC-045A-13A', 'easyeda2kicad:DC-IN-SMD_DC-045A-13A'), 'mil-connector / circular', 'a barrel jack');
+  // Bus slots (interf_u, video), Harwin sockets by their description, push buttons on PB (vme-wren).
+  assert.equal(kind('BUS1', 'BUSPC', 'interf_u:BUS_PC', { description: '8-bit ISA-PC bus connector' }), 'mil-connector / card-edge');
+  assert.equal(kind('BUS1', 'BUSPCI_5V', 'footprints:BUSPCI'), 'mil-connector / card-edge');
+  assert.equal(kind('JFP1', 'HARWIN_M22-6541042R', 'HARWIN SMD:HARWIN_M22-6541042R', { description: 'Socket 10 HARWIN_M22-6541042R' }), 'mil-connector / rectangular');
+  assert.equal(kind('PB1', 'PB_OMRON_B3U-1100P', 'Switches:PB_OMRON_B3U-1100P'), 'mil-switch / pushbutton');
+  // An IC socket is 217F's socket model, with its contacts from the footprint; a pin socket strip stays a connector.
+  const socket = c('P2', 'SUPP28', 'Package_DIP:DIP-28_W7.62mm_Socket_LongPads');
+  assert.deepEqual([socket.model, socket.params.type, socket.params.pins], ['mil-socket', 'dip', 28]);
+  assert.equal(kind('J5', 'Conn_01x08', 'Connector_PinSocket_2.54mm:PinSocket_1x08_P2.54mm_Vertical'), 'mil-connector / rectangular');
+  // Solder jumpers are bridged copper, not parts, whatever the designator (tiny_tapeout, video, openair-max).
+  assert.equal(kind('JP1', 'SolderJumper_2_Bridged', 'TinyTapeout:SolderJumper-2_Bridged_Throughole1'), 'skip: solder jumper');
+  assert.equal(kind('W1', '16/32', 'footprints:SolderJumper-2_P1.3mm_Open_Pad1.0x1.5mm'), 'skip: solder jumper');
+  assert.equal(kind('JP2', 'SolderJumper_3_Bridged12', 'Jumper:SolderJumper-3_P1.3mm_Bridged12_RoundedPad1.0x1.5mm', { symbol: 'Jumper:SolderJumper_3_Bridged12' }), 'skip: solder jumper', 'not a connector');
+  // A jumper that may be a pin header is left to the user; a maker's name (Samtec) is never read for the type.
+  assert.match(c('JP1', 'EXTPWR', 'footprints:JP-2_1.5x1.5').params.note, /^Jumper: a pin header with a shunt is a connector/);
+  assert.match(c('W1', 'SAMTEC_MTLW-102-07-L-S-250', 'SAMTEC THD:SAMTEC_MTLW-102-07-L-S-250').params.note, /^Wire link or jumper/);
+  // Trimmers by their symbol or designator (pic_programmer RV1 "1K" is a POT; video CV1 "5/30pF" a CTRIM).
+  assert.equal(kind('RV1', '1K', 'footprints:RV2X4', { symbol: 'pic_programmer:POT' }), 'mil-resistor / RJ');
+  assert.equal(kind('CV1', '5/30pF', 'footprints:CV3-30PF', { symbol: 'video_schlib:CTRIM' }), 'mil-capacitor / CV');
+  assert.equal(kind('CV2', '2-10pF', ''), 'mil-capacitor / CV', 'CV alone names a variable capacitor');
+  // VR on a regulator's package is an IC (kit-dev-coldfire VR201, LT1129 in TO-263-5); with POT text it stays a potentiometer.
+  assert.equal(kind('VR201', 'LT1129_QPACK', 'Package_TO_SOT_SMD:TO-263-5_TabPin3'), 'ic');
+  assert.equal(kind('VR1', '10k trimmer', 'Potentiometer_THT:Potentiometer_Bourns_3296W_Vertical'), 'mil-resistor / RJ');
+  // Sheet metal and placeholders are mechanical (vme-wren SFP cages, Jetson's "mechanical model" of an M.2 card).
+  assert.equal(kind('Cage1', 'TYCO_1761014-3', 'TYCO THD:TYCO_1761014-3', { description: 'SFP TYCO_1761014-3' }), 'skip: mechanical');
+  assert.equal(kind('A1', 'Mech_M2_2280_H2.5mm', 'antmicro-footprints:Mech_M2_2280_H2.5mm', { description: 'Mechanical model for M2 2280 2.5mm module' }), 'skip: mechanical');
+  // Modules take the maker's figure.
+  assert.match(c('A3', 'Jetson-Thor-AGX-T5000', 'antmicro-footprints:Module_Jetson-Thor-AGX-T5000').params.note, /^Assembly or module: enter the maker's rate/);
+});
+
 // A small KiCad netlist in Eeschema's s-expression format, as KiCad 10 writes it.
 const KICAD = `(export (version "E")
   (design (source "demo.kicad_sch") (tool "Eeschema 10.0.7"))

@@ -221,7 +221,7 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   click($('.st-nm', capsRow()));
   assert.equal(capsRow().getAttribute('aria-selected'), 'true');
   assert.match($('.st-proposal', inspector()).textContent, /same nets \(\+3V3, GND\)/);
-  assert.match(report.textContent, /Skipped 1 mechanical items \(TP1\)/);
+  assert.match(report.textContent, /Skipped 1 part with no failure rate to count, such as holes, test points and solder jumpers \(TP1\)/);
   assert.match(report.textContent, /3 lines need input/);
   // Only the capacitors are complete: 3 × 0.15 × (π_t(26 °C)·0.5 + 3.3e-3 × 36^0.76 × 15^0.68).
   assert.equal(boardTotal(), 0.356);

@@ -180,19 +180,25 @@ const PREFIX_MODEL = {
   L: 'inductor', FB: 'inductor', T: 'inductor',
   // MIL-HDBK-217F models
   K: 'mil-relay', RLY: 'mil-relay', RL: 'mil-relay',
-  J: 'mil-connector', P: 'mil-connector', CN: 'mil-connector', CON: 'mil-connector',
+  J: 'mil-connector', P: 'mil-connector', CN: 'mil-connector', CON: 'mil-connector', BUS: 'mil-connector',
   Y: 'mil-crystal', XTAL: 'mil-crystal',
   F: 'mil-fuse', FU: 'mil-fuse',
-  SW: 'mil-switch', S: 'mil-switch',
+  SW: 'mil-switch', S: 'mil-switch', PB: 'mil-switch',
   LED: 'mil-opto', OK: 'mil-opto', OC: 'mil-opto', ISO: 'mil-opto',
+  CV: 'capacitor',
 };
 
 // Parts with no failure rate of their own.
-const MECHANICAL = new Set(['TP', 'MH', 'H', 'FID', 'FD', 'MTG', 'HOLE', 'LOGO', 'MP', 'NT', 'FTG', 'NUT', 'SCREW', 'WASHER', 'STANDOFF', 'SPACER']);
-// Hardware named by its value or footprint, for a designator with no electrical meaning (M702 "M.2 Screw").
-const MECHANICAL_TEXT = /MOUNTING-?HOLE|FIDUCIAL|WASHER|STANDOFF|SPACER|PLATED-?HOLE|TEST-?POINT|\bSCREW\b|\bNUT\b/;
+const MECHANICAL = new Set(['TP', 'MH', 'H', 'FID', 'FD', 'MTG', 'HOLE', 'LOGO', 'MP', 'NT', 'FTG', 'NUT', 'SCREW', 'WASHER', 'STANDOFF', 'SPACER', 'CAGE', 'SHIELD']);
+// Hardware named by its value or footprint, for a designator with no electrical meaning (M702 "M.2 Screw",
+// Jetson's A1 "Mechanical model for M2 2280 2.5mm module").
+const MECHANICAL_TEXT = /MOUNTING-?HOLE|FIDUCIAL|WASHER|STANDOFF|SPACER|PLATED-?HOLE|TEST-?POINT|\bSCREW\b|\bNUT\b|MECHANICAL\sMODEL/;
+// A solder jumper is copper pads bridged by solder or a cut trace: no part to rate, whatever the designator.
+const SOLDER_JUMPER = /SOLDER-?JUMPER/;
+// The footprint tests below see "library footprint", e.g. "EASYEDA2KICAD CONN-SMD-8P-P1.25…", so a rule for
+// the start of a footprint name needs (?:^|\s), not ^: ^ alone only ever sees the library name.
 // Footprints that only a connector or jumper has, whatever the designator (CT101 on a pin header).
-const CONNECTOR_FOOTPRINT = /PIN-?HEADER|PIN-?SOCKET|^CONN|CONNECTOR|TERMINAL-?BLOCK/;
+const CONNECTOR_FOOTPRINT = /PIN-?HEADER|PIN-?SOCKET|(?:^|\s)CONN|CONNECTOR|TERMINAL-?BLOCK/;
 // An LED footprint: KiCad's LED_SMD:LED_0603…, easyeda's LED-SMD_…, Kingbright's Duo_LED_….
 const LED_FOOTPRINT = /(?:^|[-\s])LED(?:[-\d]|$)/;
 // Part kind from the footprint library and name, for a designator that names none
@@ -200,16 +206,17 @@ const LED_FOOTPRINT = /(?:^|[-\s])LED(?:[-\d]|$)/;
 // (Resistor_SMD, Crystal, Connector_Dsub, Button_Switch_SMD, …) and most others say it.
 const FOOTPRINT_KINDS = [
   [CONNECTOR_FOOTPRINT, 'mil-connector'],
-  [/^USB|\sUSB|^DSUB|\sDSUB|^DB-?\d|^JST|^HDR-|^U-?FL/, 'mil-connector'],
+  // DC-IN: easyeda's barrel jacks (openair-max DC1).
+  [/(?:^|\s)(?:USB|DSUB|DB-?\d|JST|HDR-|U-?FL)|DC-?IN-|DC-?JACK|BARREL-?JACK/, 'mil-connector'],
   [LED_FOOTPRINT, 'mil-opto'],
-  [/CRYSTAL|^XTAL|OSCILLATOR|^OSC-/, 'mil-crystal'],
-  [/BUTTON-?SWITCH|^SW-|^KEY-|^BUTTON|\sSW-/, 'mil-switch'],
-  [/^FUSE|\sFUSE|^F\d{4}\b/, 'mil-fuse'],
-  [/^RELAY|\sRELAY/, 'mil-relay'],
-  [/^XFMR|TRANSFORMER/, 'inductor'],
-  [/^RESISTOR|\sRESISTOR|^R-ARRAY|^R-\d{4}|^RESC\d/, 'resistor'],
-  [/^CAPACITOR|\sCAPACITOR|^C-\d{4}|^CP-|^CAPC\d/, 'capacitor'],
-  [/^INDUCTOR|\sINDUCTOR|^L-\d{4}|^INDC\d/, 'inductor'],
+  [/CRYSTAL|OSCILLATOR|(?:^|\s)(?:XTAL|OSC-)/, 'mil-crystal'],
+  [/BUTTON-?SWITCH|(?:^|\s)(?:SW-|KEY-|BUTTON)/, 'mil-switch'],
+  [/(?:^|\s)(?:FUSE|F\d{4}\b)/, 'mil-fuse'],
+  [/(?:^|\s)RELAY/, 'mil-relay'],
+  [/(?:^|\s)XFMR|TRANSFORMER/, 'inductor'],
+  [/(?:^|\s)(?:RESISTOR|R-ARRAY|R-\d{4}|RESC\d)/, 'resistor'],
+  [/(?:^|\s)(?:CAPACITOR|C-\d{4}|CP-|CAPC\d)/, 'capacitor'],
+  [/(?:^|\s)(?:INDUCTOR|L-\d{4}|INDC\d)/, 'inductor'],
 ];
 // …from a KiCad symbol (Device:R, Device:LED, Connector_Generic:Conn_01x04, Mechanical:MountingHole)…
 const SYMBOL_KINDS = [
@@ -238,10 +245,23 @@ const VALUE_KINDS = [
   [/^CONN-|^CONN$|^DB\d+$/, 'mil-connector'],
 ];
 
+// …and from the value and description: a connector, or a socket for a cable or board (vme-wren's JFP1
+// "Socket 10"); an IC socket is left to the user.
+const isConnectorText = (text) => /\bCONNECTOR\b|\bSOCKET\b/.test(text) && !/\b(?:IC|DIP|PLCC|PGA|ZIF)\b/.test(text);
+// An IC socket (pic_programmer P2 on "DIP-28_W7.62mm_Socket_LongPads"): 217F's socket model, not a connector.
+// A pin socket strip (Connector_PinSocket) names no package, so it stays a connector.
+const IC_SOCKET_PACKAGE = /\b(DIP|SIP|PLCC|PGA)-?(\d+)?/;
+const isIcSocket = (s) => /SOCKET|\bZIF\b/.test(s) && (IC_SOCKET_PACKAGE.test(s) || /\bIC\b|\bZIF\b/.test(s));
+// A VR designator on a regulator's package is a voltage regulator, not a potentiometer (kit-dev-coldfire VR201).
+const REGULATOR_PACKAGE = /TO-?263|TO-?220|TO-?252|D2?-?PAK|SOT-?223|SOT-?23-5|SOIC|MSOP|\bSOP|QFN|DFN|\bSON/;
+
 // Families the calculator does not model yet, for the note on an "Other" part.
 const OTHER_FAMILY = {
   X: 'Connector or crystal: choose Connector or Quartz crystal instead if you know which',
-  BT: 'Battery (62380 clause 19)', B: 'Battery (62380 clause 19)',
+  JP: 'Jumper: a pin header with a shunt is a connector; a solder jumper has no failure rate of its own',
+  W: 'Wire link or jumper: a pin header with a shunt is a connector; a wire link or solder jumper has no failure rate of its own',
+  A: 'Assembly or module: enter the maker\'s rate, or use the maker\'s life test', MODULE: 'Module: enter the maker\'s rate, or use the maker\'s life test',
+  BT: 'Battery (62380 clause 19)', B: 'Battery (62380 clause 19)', BAT: 'Battery or battery holder (62380 clause 19)',
   DS: 'LED or display (62380 clauses 9, 17)',
   RV: 'Varistor or potentiometer (62380 clauses 18, 11)', VR: 'Potentiometer or regulator',
   RT: 'Thermistor (62380 clauses 10, 18)', TH: 'Thermistor (62380 clauses 10, 18)',
@@ -436,10 +456,12 @@ const TRANSISTOR_RULES = [
 
 const CONNECTOR_RULES = [
   [/\bSMA\b|\bBNC\b|U-?FL|\bMMCX|\bMCX\b|\bSMB-?CONN|COAX/, 'rf-coax'],
-  [/CARD-?EDGE|\bPCIE|\bM\.2\b/, 'card-edge'],
+  // ISA and PCI bus slots (interf_u and video BUS1).
+  [/CARD-?EDGE|\bPCIE|\bM\.2\b|\bISA\b|\bPCI\b|BUSPCI/, 'card-edge'],
   [/\bRJ-?(?:11|12|45)\b|MODULAR/, 'telephone'],
-  [/PIN-?HEADER|\bHEADER|\bIDC\b|\bJST|\bMOLEX|\bUSB|\bHDMI|D-?SUB|\bDB-?\d|CONN-\d|\bFFC|\bFPC/, 'rectangular'],
-  [/\bM8\b|\bM12\b|CIRCULAR|\bDIN-?\d/, 'circular'],
+  [/PIN-?HEADER|\bHEADER|\bHDR-|\bIDC\b|\bJST|\bMOLEX|\bUSB|\bHDMI|D-?SUB|\bDB-?\d|CONN-(?:\d|SMD|TH)|\bSOCKET\b|\bFFC|\bFPC/, 'rectangular'],
+  // A DC barrel jack is a cylindrical power connector.
+  [/\bM8\b|\bM12\b|CIRCULAR|\bDIN-?\d|DC-?IN-|DC-?JACK|BARREL/, 'circular'],
 ];
 
 const SWITCH_RULES = [
@@ -462,7 +484,7 @@ const SIGNAL_PACKAGES = new Set(['do35', 'do34', 'sod523', 'sod323', 'sod110', '
 const RECTIFIER_PACKAGES = new Set(['do41-plastic', 'sma', 'smb', 'smc', 'do220']);
 
 // Turn one netlist component into { model, params, inferred, source, note }
-// or { skip: reason } for mechanical items.
+// or { skip: reason } for mechanical items and solder jumpers.
 export function classifyComponent(c) {
   const prefix = prefixOf(c.designator);
   const source = { value: c.value, footprint: c.footprint, description: c.description };
@@ -473,11 +495,13 @@ export function classifyComponent(c) {
   const fpAll = `${lib} ${fp}`.trim();
   const sym = norm(c.symbol);
   if (MECHANICAL.has(prefix)) return { skip: 'mechanical' };
+  if (SOLDER_JUMPER.test(`${sym} ${fpAll} ${text}`)) return { skip: 'solder jumper' };
 
   let model = PREFIX_MODEL[prefix] ?? 'fixed';
   const family = OTHER_FAMILY[prefix];
   if (!PREFIX_MODEL[prefix]) {
-    const kind = firstMatch(sym, SYMBOL_KINDS) ?? firstMatch(fpAll, FOOTPRINT_KINDS) ?? firstMatch(norm(c.value), VALUE_KINDS);
+    const kind = firstMatch(sym, SYMBOL_KINDS) ?? firstMatch(fpAll, FOOTPRINT_KINDS) ?? firstMatch(norm(c.value), VALUE_KINDS)
+      ?? (isConnectorText(text) ? 'mil-connector' : null);
     if (kind === 'mechanical') return { skip: 'mechanical' };
     if (kind) model = kind;
     // Hardware only when nothing names an electrical part: a DSUB footprint can end in "…MountingHolesOffset9.12mm".
@@ -487,15 +511,18 @@ export function classifyComponent(c) {
   // T is a transformer or a transistor; the part number tells which.
   if (prefix === 'T' && firstMatch(text, TRANSISTOR_RULES)) model = 'transistor';
   if (model === 'diode' && (firstMatch(text, DIODE_RULES) === 'led' || LED_FOOTPRINT.test(fpAll) || /:LED/.test(sym))) model = 'mil-opto';
-  // Film, mica and trimmer capacitors have no IEC TR 62380 model here: use the 217F one.
-  const capStyle = model === 'capacitor' ? firstMatch(`${text} ${fp}`, CAP_217F_RULES) : null;
+  // Film, mica and trimmer capacitors have no IEC TR 62380 model here: use the 217F one. The symbol
+  // counts (video's CV1 "5/30pF" is a CTRIM), and CV names a variable capacitor whatever its text.
+  const capStyle = model === 'capacitor' ? firstMatch(`${text} ${fp} ${sym}`, CAP_217F_RULES) ?? (prefix === 'CV' ? 'CV' : null) : null;
   if (capStyle) model = 'mil-capacitor';
   // Wirewound resistors, potentiometers and thermistors: the 217F resistor model.
   let resStyle = null;
   if (model === 'resistor' && /WIREWOUND|\bWW\b|R-WW|\bWIRE\b/.test(`${text} ${fp}`)) resStyle = 'RW';
-  else if (['RV', 'VR', 'POT'].includes(prefix) && /POT|TRIM|\bR-?POT|CERMET/.test(`${prefix} ${text} ${fp}`)) resStyle = 'RJ';
+  else if (['RV', 'VR', 'POT'].includes(prefix) && /POT|TRIM|\bR-?POT|CERMET/.test(`${prefix} ${text} ${fp} ${sym}`)) resStyle = 'RJ';
   else if (['RT', 'TH', 'NTC', 'PTC'].includes(prefix) && !/FUSE|POLY/.test(text)) resStyle = 'RTH';
   if (resStyle) model = 'mil-resistor';
+  if (prefix === 'VR' && model === 'fixed' && REGULATOR_PACKAGE.test(fp)) model = 'ic';
+  if (['mil-connector', 'fixed'].includes(model) && isIcSocket(`${fp} ${text}`)) model = 'mil-socket';
   // The IEC TR 62380 inductor model here has no base rates; the 217F one does.
   if (model === 'inductor') model = 'mil-inductive';
   // Aluminium polymer and hybrid capacitors have no failure-rate model: the maker's
@@ -617,6 +644,15 @@ export function classifyComponent(c) {
     }
   } else if (model === 'mil-relay') {
     Object.assign(params, { application: null, stress: null, cycles: null });
+  } else if (model === 'mil-socket') {
+    Object.assign(params, { type: null, pins: null });
+    const m = IC_SOCKET_PACKAGE.exec(`${fp} ${text}`);
+    if (m) {
+      const from = why(`“${c.footprint || c.value}”`);
+      params.type = { DIP: 'dip', SIP: 'sip', PLCC: 'chip-carrier', PGA: 'pga' }[m[1]];
+      inferred.type = from;
+      if (m[2]) { params.pins = Number(m[2]); inferred.pins = `${from}, every contact taken as active`; }
+    }
   } else if (model === 'mil-connector') {
     params.type = null;
     const type = firstMatch(`${text} ${fp}`, CONNECTOR_RULES);
@@ -632,6 +668,7 @@ export function classifyComponent(c) {
     Object.assign(params, { type: null, stress: null });
     const type = firstMatch(`${text} ${fp}`, SWITCH_RULES);
     if (type) { params.type = type; inferred.type = why(`“${[c.value, c.footprint].filter(Boolean).join(', ')}”`); }
+    else if (prefix === 'PB') { params.type = 'pushbutton'; inferred.type = why(`the designator ${c.designator}`); }
   } else if (model === 'mil-opto') {
     Object.assign(params, { type: null, power: null, rja: null });
     const ledSymbol = /:LED/.test(sym) && !/\bLED\b/.test(text);
