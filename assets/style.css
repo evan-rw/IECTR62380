@@ -412,6 +412,8 @@ table.smt-devices td.inferred input, table.smt-devices td.inferred select { back
 table.smt-devices tr.worst td { background: #ffe8d8; }
 table.smt-devices .empty { color: var(--text-2); padding: 6px; }
 .smt-actions { margin-top: 6px; align-items: center; }
+.pcb-import { margin-bottom: 6px; }
+.pcb-report { margin: 0 0 8px; }
 .smt-result p { margin: 6px 0 0; }
 .flex-note { margin: 8px 0 0; }
 

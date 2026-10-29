@@ -117,6 +117,10 @@
     <section class="panel" id="pcb" aria-labelledby="pcb-heading">
       <h2 id="pcb-heading">Circuit board</h2>
       <p class="hint">The bare board’s main wear-out: plated holes and vias crack around the barrel because the laminate swells through its thickness far more than copper does, much more once it passes its glass transition (Tg) in reflow. Following the IPC-TR-579 model as published in open papers (see Data sources), each hole size gets a cycles-to-failure life from the board thickness, drill, plating and laminate; the assembly reflows use up part of that life and the mission profile’s thermal cycles the rest, and the weakest hole size adds its rate, averaged over the mission length, to the board total. The plating’s quality K<sub>Q</sub> and strain distribution K<sub>d</sub> move the result a lot, so they are entered rather than assumed.</p>
+      <div class="toolbar pcb-import">
+        <button type="button" data-act="import-board">Import board file</button>
+      </div>
+      <div id="pcb-report" class="import-report pcb-report" role="status" tabindex="-1" hidden></div>
       <div class="pcb-settings">
         <div class="field wide" data-field="laminate"><label for="pcb-laminate">Laminate <span class="state-tag"></span></label><select id="pcb-laminate" data-bind="pcb" data-key="laminate"></select></div>
         <div id="pcb-custom" class="pcb-custom" hidden>
@@ -151,9 +155,7 @@
           <tbody id="pcb-holes"></tbody>
         </table>
       </div>
-      <div id="pcb-report" class="import-report" role="status" tabindex="-1" hidden></div>
       <div class="toolbar smt-actions">
-        <button type="button" data-act="import-board">Import board file</button>
         <button type="button" data-act="pcb-add">Add hole size</button>
         <button type="button" data-act="pcb-confirm-settings" hidden>Confirm the board values</button>
       </div>
