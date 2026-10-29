@@ -200,6 +200,12 @@ button {
 }
 button:active { box-shadow: var(--pressed); padding: 4px 9px 2px 11px; }
 button:focus-visible { outline: 1px dotted #000; outline-offset: -4px; }
+/* A press and hold on a button shows its note (tooltip.js), not the phone's text menu. */
+button, a.caption-btn { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+/* Hover notes, after Windows 2000's: pale yellow, black text, a hairline black border; here with a folded corner. */
+#tip { position: fixed; z-index: 1000; max-width: 300px; padding: 2px 14px 3px 5px; font: 11px var(--ui); line-height: 1.35; color: #000; background: var(--info-bg); border: 1px solid #000; pointer-events: none; clip-path: polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%); }
+#tip::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: 10px; height: 10px; background: linear-gradient(to bottom right, #e9e2a4 calc(50% - 1px), #000 calc(50% - 1px) 50%, transparent 50%); border-top: 1px solid #000; border-left: 1px solid #000; }
+#tip[hidden] { display: none; }
 button:disabled { color: var(--gray-text); text-shadow: 1px 1px 0 var(--hilight); }
 /* The default button carries an extra dark frame. */
 button.primary { box-shadow: 0 0 0 1px #000, var(--raised); font-weight: bold; }

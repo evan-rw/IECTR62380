@@ -14,6 +14,7 @@ import { failureModesFor } from './failuremodes.js';
 import { evaluateCapLife, withLife, lifeInputs, LIFE_KEYS, TECHS, typeTech } from './caplife.js';
 import { LIFE_RULES, END_OF_LIFE } from './tablescaplife.js';
 import { VENDOR_MTBF } from './tablesmaker.js';
+import { initTooltips } from './tooltip.js';
 import { esc } from './html.js';
 import { xlsx } from './xlsx.js';
 import { boardSheets } from './report.js';
@@ -1642,3 +1643,4 @@ mountStructure($('#structure'), {
   },
 });
 renderAll();
+initTooltips();
