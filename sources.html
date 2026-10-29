@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <!-- The page loads and runs only its own files, and may not send anything anywhere (connect-src 'none'). -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; worker-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Data Sources: IEC TR 62380 Calculator</title>
   <meta name="description" content="Where every coefficient, model and failure-mode figure in the IEC TR 62380 calculator comes from, and how far each has been checked.">

@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <!-- The page loads and runs only its own files, and may not send anything anywhere (connect-src 'none'). -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; worker-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>IEC TR 62380 Calculator</title>
   <meta name="description" content="Estimate the failure rate and MTBF of an electronic board from its parts list and mission profile, following the IEC TR 62380:2004 approach as described in public sources.">
@@ -291,7 +293,7 @@
           <svg id="st-rbd" tabindex="0" role="img" aria-label="Reliability block diagram of the board. Edit with the structure tree; with this focused, plus and minus zoom, arrows pan, 0 fits.">
             <g id="st-vp"></g>
             <g id="st-names" class="names" aria-hidden="true"></g>
-            <rect id="st-lasso" class="lasso" style="display:none"></rect>
+            <rect id="st-lasso" class="lasso" display="none"></rect>
           </svg>
         </section>
       </div>
@@ -320,7 +322,7 @@
 
   <footer class="site-footer">
     <div class="wrap">
-      <p>Not affiliated with the IEC. IEC TR 62380:2004 was withdrawn in favour of IEC 61709:2017 but is still referenced by ISO 26262-11:2018. Your work is saved in this browser only; use Export JSON to keep a copy. <a href="https://github.com/evan-rw/IECTR62380">Source code</a> (AGPL-3.0) · <a href="sources.html">Data sources and licences</a>.</p>
+      <p>Not affiliated with the IEC. IEC TR 62380:2004 was withdrawn in favour of IEC 61709:2017 but is still referenced by ISO 26262-11:2018. Your work is saved in this browser only and is never uploaded; use Export JSON to keep a copy. <a href="https://github.com/evan-rw/IECTR62380">Source code</a> (AGPL-3.0) · <a href="sources.html">Data sources and licences</a>.</p>
     </div>
   </footer>
   </div>

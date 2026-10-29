@@ -22,9 +22,13 @@ test('lasso: Lasso mode and Shift+drag start a lasso even on a box', async () =>
   p.ptr(box, 'pointerdown', ...corner0);
   p.ptr(p.svg, 'pointermove', (corner0[0] + corner1[0]) / 2, (corner0[1] + corner1[1]) / 2);
   assert.equal(p.$('#st-ghost').hidden, true, 'no move ghost in lasso mode');
+  // The rectangle starts hidden by its display="none" attribute (the page's policy blocks style
+  // attributes), so showing it needs an explicit value: clearing the inline style would leave it hidden.
+  assert.equal(p.$('#st-lasso').style.display, 'inline', 'the lasso shows while dragging');
   p.ptr(p.svg, 'pointermove', ...corner1);
   p.ptr(p.svg, 'pointerup', ...corner1);
   p.ptr(p.window, 'pointerup', ...corner1);
+  assert.equal(p.$('#st-lasso').style.display, 'none', 'and hides after');
   assert.match(p.$('#st-status').textContent, /Lasso selected \d+ items/);
   assert.equal(p.$$('#st-vp .frame').length, framesBefore, 'nothing moved');
   p.$('[data-st="lasso"]').click();

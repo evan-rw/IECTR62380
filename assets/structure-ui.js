@@ -276,14 +276,14 @@ function rowHTML(n, level) {
   const fitText = !isBlock && (st.missing || st.unknown) ? '<span class="bad">—</span>' : fmt(st.fit);
   const title = isBlock && st.red ? ` title="${fmt(st.sfit)} FIT if everything in it were in series"` : '';
   return `<li role="treeitem" id="st-t-${esc(n.id)}" data-id="${esc(n.id)}" aria-level="${level}" aria-selected="${sel}"${kids ? ` aria-expanded="${n.expanded}"` : ''} tabindex="${n.id === focusId ? 0 : -1}">
-    <div class="${cls}" style="--lvl:${level - 1}">
+    <div class="${cls}" data-lvl="${level - 1}">
       <span class="st-handle${n.fixed ? ' off' : ''}" aria-hidden="true">${n.fixed ? '' : '⠿'}</span>
       <span class="st-twisty" aria-hidden="true">${kids ? (n.expanded ? '▾' : '▸') : ''}</span>
       <span class="st-main">${isBlock ? (n.fixed ? '<span class="st-badge">series</span>' : modeBadge(n)) : `<span class="st-qty">×${st.pieces}</span>`}${name}${isBlock && n.nets?.length ? `<span class="st-nets muted">${esc(n.nets.join(' / '))}</span>` : ''}${chips(n, st)}</span>
       <span class="st-fit"${title}>${fitText}</span>
-      <span class="st-bar" aria-hidden="true">${!st.inRed && st.share > 0 ? `<i style="width:${Math.max(3, st.share * 100).toFixed(1)}%"></i>` : ''}</span>
+      <span class="st-bar" aria-hidden="true">${!st.inRed && st.share > 0 ? `<i data-share="${Math.max(3, st.share * 100).toFixed(1)}"></i>` : ''}</span>
     </div>${n.proposed && sel && selection.size === 1 ? `
-    <div class="st-rowacts" style="--lvl:${level - 1}"><button type="button" class="primary" data-st="accept" tabindex="-1">Mark redundant</button><button type="button" data-st="dismiss" tabindex="-1">Dismiss</button></div>` : ''}`;
+    <div class="st-rowacts" data-lvl="${level - 1}"><button type="button" class="primary" data-st="accept" tabindex="-1">Mark redundant</button><button type="button" data-st="dismiss" tabindex="-1">Dismiss</button></div>` : ''}`;
 }
 
 function renderTree() {
@@ -308,6 +308,9 @@ function renderTree() {
     focusId = p ?? ROOT;
   }
   el.tree.innerHTML = out.join('');
+  // Indents and bars go through the style object: the page's security policy blocks style attributes.
+  for (const r of el.tree.querySelectorAll('[data-lvl]')) r.style.setProperty('--lvl', r.dataset.lvl);
+  for (const b of el.tree.querySelectorAll('[data-share]')) b.style.width = `${b.dataset.share}%`;
   const f = document.getElementById(`st-t-${focusId}`);
   if (f) {
     f.tabIndex = 0;
@@ -1012,7 +1015,7 @@ export function mountStructure(section, context) {
     } else if (gesture.type === 'lasso') {
       gesture.p1 = p;
       const [x0, y0] = gesture.p0;
-      el.lasso.style.display = '';
+      el.lasso.style.display = 'inline';
       el.lasso.setAttribute('x', Math.min(x0, p[0]));
       el.lasso.setAttribute('y', Math.min(y0, p[1]));
       el.lasso.setAttribute('width', Math.abs(p[0] - x0));
