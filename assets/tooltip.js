@@ -48,7 +48,7 @@ const TIPS = {
   'act:dismiss-report': 'Close this report.',
   'act:undo-del': 'Put back the line just removed.',
   'act:cancel-import': 'Stop reading this file; the board stays as it was.',
-  'act:import-board': 'Read the drill sizes and layer stackup from a board file: Altium ASCII .PcbDoc, KiCad .kicad_pcb, IPC-2581 or Excellon.',
+  'act:import-board': 'Read the drill sizes and layer stackup from a board file: Altium ASCII .PcbDoc, KiCad .kicad_pcb, IPC-2581, P-CAD ASCII .pcb or Excellon.',
   'act:dismiss-pcb-report': 'Close this report.',
   'act:pcb-confirm': 'Accept the guessed values in this row.',
   'act:pcb-confirm-settings': 'Accept the board thickness and laminate read from the board file.',

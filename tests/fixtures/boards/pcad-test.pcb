@@ -1,0 +1,137 @@
+ACCEL_ASCII "C:\boards\"
+
+(asciiHeader
+  (asciiVersion 3 0)
+  (timeStamp 2026 10 30 9 0 0)
+  (program "P-CAD 2006 PCB" "19.02.958")
+  (copyright "Written for the IECTR62380 tests")
+  (fileAuthor "")
+  (headerString "")
+  (fileUnits Mil)
+  (guidString "")
+)
+
+(library "Library_1"
+  (padStyleDef "(Default)"
+    (holeDiam 30.0)
+    (StartRange 1)
+    (EndRange 2)
+    (padShape (layerType Signal) (padShapeType Ellipse) (shapeWidth 60.0) (shapeHeight 60.0) )
+  )
+  (padStyleDef "P:40"
+    (holeDiam 40)
+    (startRange 1)
+    (endRange 2)
+    (padShape (layerType Signal) (padShapeType Ellipse) (shapeWidth 64mil) (shapeHeight 64mil) )
+  )
+  (padStyleDef "SMD"
+    (holeDiam 0.0)
+    (startRange 1)
+    (endRange 1)
+    (padShape (layerNumRef 1) (padShapeType Rect) (shapeWidth 1.2mm) (shapeHeight 0.6mm) )
+  )
+  (padStyleDef "MTG125"
+    (holeDiam 3.175mm)
+    (isHolePlated False)
+    (startRange 1)
+    (endRange 2)
+    (padShape (layerType Signal) (padShapeType Ellipse) (shapeWidth 0.0) (shapeHeight 0.0) )
+  )
+  (viaStyleDef "V12"
+    (holeDiam 12)
+    (startRange 1)
+    (endRange 2)
+    (viaShape (layerType Signal) (viaShapeType Ellipse) (shapeWidth 24) (shapeHeight 24) )
+  )
+  (viaStyleDef "VB"
+    (holeDiam 0.2 mm)
+    (startRange 1)
+    (endRange 12)
+    (viaShape (layerType Signal) (viaShapeType Ellipse) (shapeWidth 0.45 mm) (shapeHeight 0.45 mm) )
+  )
+  (patternDefExtended "DIP4_1"
+    (originalName "DIP4")
+    (patternGraphicsNameRef "Primary")
+    (patternGraphicsDef
+      (patternGraphicsNameDef "Primary")
+      (multiLayer
+        (pad (padNum 1) (padStyleRef "P:40") (pt 0 0) )
+        (pad (padNum 2) (padStyleRef "p:40") (pt 100 0) )
+        (pad (padNum 3) (padStyleRef "P:40") (pt 100 300) )
+        (pad (padNum 4) (padStyleRef "P:40") (pt 0 300) )
+        (pad (padNum 5) (padStyleRef "SMD") (pt 50 150) )
+      )
+      (layerContents (layerNumRef 6)
+        (line (pt -50 -50) (pt 150 -50) (width 10) )
+        (pad (padNum 9) (padStyleRef "P:40") (pt 0 0) )
+      )
+    )
+    (patternGraphicsDef
+      (patternGraphicsNameDef "Alt")
+      (multiLayer
+        (pad (padNum 1) (padStyleRef "P:40") (pt 0 0) )
+        (pad (padNum 2) (padStyleRef "P:40") (pt 100 0) )
+      )
+    )
+  )
+  (patternDef "MTG"
+    (originalName "MTG")
+    (multiLayer
+      (pad (padNum 1) (padStyleRef "MTG125") (pt 0 0) )
+      (via (viaStyleRef "V12") (pt 200 0) )
+    )
+  )
+)
+
+(netlist "Netlist_1"
+  (globalAttrs)
+  (compInst "U1" (compRef "DIP4") (originalName "DIP4") (compValue "") )
+)
+
+(pcbDesign "PcbDesign_1"
+  (pcbDesignHeader
+    (workspaceSize 10000.0 10000.0)
+  )
+  (layerDef "Top"
+    (layerNum 1)
+    (layerType Signal)
+  )
+  (layerDef "GND"
+    (layerNum 12)
+    (layerType Plane)
+  )
+  (layerDef "Inner 2"
+    (layerNum 13)
+    (layerType Signal)
+  )
+  (layerDef "Bottom"
+    (layerNum 2)
+    (layerType Signal)
+  )
+  (layerDef "Top Silk"
+    (layerNum 6)
+    (layerType NonSignal)
+  )
+  (multiLayer
+    (pattern (patternRef "DIP4_1") (refDesRef "U1") (pt 1000 1000) (patternGraphicsNameRef "Primary")
+      (patternGraphicsRef
+        (patternGraphicsNameRef "Primary")
+        (attr "RefDes" "" (pt 0 400) (isVisible True) )
+      )
+    )
+    (pattern (patternRef "DIP4_1") (refDesRef "U2") (pt 2000 1000) (patternGraphicsNameRef "Alt")
+      (patternGraphicsRef
+        (patternGraphicsNameRef "Alt")
+      )
+    )
+    (pattern (patternRef "MTG") (refDesRef "H1") (pt 100 100) )
+    (pattern (patternRef "NOPE") (refDesRef "X1") (pt 300 100) )
+    (via (viaStyleRef "V12") (pt 500 500) )
+    (via (viaStyleRef "v12") (pt 600 500) )
+    (via (viaStyleRef "VB") (pt 700 500) )
+    (pad (padNum 1) (padStyleRef "P:40") (pt 800 500) )
+  )
+  (layerContents (layerNumRef 1)
+    (line (pt 500 500) (pt 600 500) (width 10) )
+  )
+)

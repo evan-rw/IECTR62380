@@ -1,16 +1,17 @@
 // Board files for the Circuit board check: drilled holes and the layer stackup from Altium ASCII
-// .PcbDoc, KiCad .kicad_pcb, IPC-2581 and Excellon drill files. Pure functions, text in and data out,
+// .PcbDoc, KiCad .kicad_pcb, IPC-2581, P-CAD ASCII .pcb and Excellon drill files. Pure functions, text in and data out,
 // written to walk a large file once (files of 50 MB and more), reporting how far they are.
 //
 // parseBoardFile(text, name, onProgress) -> {
-//   format,                        'Altium ASCII', 'KiCad', 'IPC-2581' or 'Excellon'
+//   format,                        'Altium ASCII', 'KiCad', 'IPC-2581', 'P-CAD ASCII' or 'Excellon'
 //   holes: [{ size, plated, through, kind, shape, count }],
 //                                  size: finished hole diameter (slot width) in mm; plated true,
 //                                  false or null (the file does not say); through: from the top
 //                                  copper layer to the bottom one; kind 'via', 'pad' or 'hole';
 //                                  shape 'round' or 'slot'; count: how many
 //   thickness: { mm, from, detail } or null, from 'stated' or 'stack'
-//   copperLayers, materials: dielectric material names, notes: [] }
+//   copperLayers, materials: dielectric material names, notes: [],
+//   noStack: what to say instead of "no layer stackup" when thickness is null (optional) }
 
 const MIL = 0.0254;
 const round = (x, d = 4) => +x.toFixed(d);
@@ -52,6 +53,7 @@ function throttle(onProgress, step = 0.005) {
 export function boardFormat(text, name = '') {
   const head = text.slice(0, 4096).replace(/^﻿/, '').trimStart();
   if (head.charCodeAt(0) === 0xd0 && head.charCodeAt(1) === 0xcf) return 'Altium binary';
+  if (/P-CAD [^\n]*PCB Binary/.test(head.slice(0, 512))) return 'P-CAD binary';
   if (/^\|RECORD=/.test(head) || /\|KIND=Protel_Advanced_PCB/.test(head)) return 'Altium ASCII';
   // Other text types on Altium's Save Copy As and Export lists, named so the message can say which to pick.
   if (/^PCB FILE \d/.test(head)) return 'Protel PCB';
@@ -72,13 +74,14 @@ export function parseBoardFile(text, name = '', onProgress) {
     case 'Altium ASCII': return parseAltium(text, progress);
     case 'KiCad': return parseKicadPcb(text, progress);
     case 'IPC-2581': return parseIpc2581(text, progress);
+    case 'P-CAD ASCII': return parsePcad(text, progress);
     case 'Excellon': return parseExcellon(text, name, progress);
     case 'Altium binary': throw new Error('This is a binary Altium .PcbDoc. In Altium, save a copy as a PCB ASCII file (File » Save Copy As, type "PCB ASCII File") and import that.');
-    case 'Protel PCB':
-    case 'P-CAD ASCII': throw new Error(`This is a ${format === 'Protel PCB' ? 'Protel PCB 2.8 ASCII (or older Protel)' : 'P-CAD ASCII'} file, which the page does not read. In Altium, save a copy as type "PCB ASCII File (*.PcbDoc)" (File » Save Copy As) and import that.`);
+    case 'P-CAD binary': throw new Error('This is a binary P-CAD .pcb. In P-CAD PCB, save a copy as an ASCII file (File » Save As, ASCII type) and import that.');
+    case 'Protel PCB': throw new Error('This is a Protel PCB 2.8 ASCII (or older Protel) file, which the page does not read. In Altium, save a copy as type "PCB ASCII File (*.PcbDoc)" (File » Save Copy As) and import that.');
     case 'Gerber': throw new Error('This is a Gerber file (copper, mask, silkscreen or a drill drawing), not a drill file. Import the Excellon drill file from the same set instead: .drl, or .TXT from Altium.');
     case 'EIA drill': throw new Error('This is a drill file in the old EIA tape code, which the page does not read (Altium writes one as .DRL). Import the ASCII drill file beside it instead: Altium\'s drill report (.DRR) names it, usually a .TXT.');
-    default: throw new Error('This is not a board file the page can read: an Altium ASCII .PcbDoc, a KiCad .kicad_pcb, an IPC-2581 .xml or an Excellon drill file.');
+    default: throw new Error('This is not a board file the page can read: an Altium ASCII .PcbDoc, a KiCad .kicad_pcb, an IPC-2581 .xml, a P-CAD ASCII .pcb or an Excellon drill file.');
   }
 }
 
@@ -265,53 +268,195 @@ function parseKicadPcb(text, progress) {
 
 const attrs = (tag) => Object.fromEntries([...tag.matchAll(/([\w:-]+)="([^"]*)"/g)].map(([, k, v]) => [k, v]));
 
+// Copper layer functions: KiCad writes CONDUCTOR, Altium SIGNAL.
+const IPC_COPPER = new Set(['CONDUCTOR', 'SIGNAL', 'PLANE', 'MIXED']);
+const IPC_DIELECTRIC = new Set(['DIELCORE', 'DIELPREG', 'DIELBASE', 'DIELADHV']);
+
 function parseIpc2581(text, progress) {
   const unitName = /<CadHeader\b[^>]*\bunits="([^"]+)"/.exec(text)?.[1] ?? 'MILLIMETER';
   const unit = { MILLIMETER: 1, INCH: 25.4, MICRON: 0.001 }[unitName.toUpperCase()] ?? 1;
-  // Layers: function by name; a drill layer's span.
+  // Layers: function by name; a drill layer's span (<Span> from KiCad, <SpanType> from Altium).
   const fn = new Map();
   const spans = new Map();
   for (const lm of text.matchAll(/<Layer\b([^>]*?)(\/>|>([\s\S]*?)<\/Layer>)/g)) {
     const a = attrs(lm[1]);
     if (!a.name) continue;
     fn.set(a.name, (a.layerFunction ?? '').toUpperCase());
-    const span = lm[3] && /<Span\b([^>]*)\/?>/.exec(lm[3]);
+    const span = lm[3] && /<Span(?:Type)?\b([^>]*)\/?>/.exec(lm[3]);
     if (span) spans.set(a.name, attrs(span[1]));
   }
-  const conductors = [...fn].filter(([, f]) => f === 'CONDUCTOR' || f === 'PLANE').map(([n]) => n);
+  const conductors = [...fn].filter(([, f]) => IPC_COPPER.has(f)).map(([n]) => n);
   // Stackup: copper and dielectric thicknesses in sequence; solder mask and coatings are outside the laminate.
   let thickness = null;
   const layers = [...text.matchAll(/<StackupLayer\b([^>]*)>/g)].map((x) => attrs(x[1]));
-  const inBoard = layers.filter((l) => ['CONDUCTOR', 'PLANE', 'DIELCORE', 'DIELPREG', 'DIELBASE', 'DIELADHV'].includes(fn.get(l.layerOrGroupRef)));
-  if (inBoard.length) {
-    const mm = inBoard.reduce((s, l) => s + (Number(l.thickness) || 0) * unit, 0);
-    if (mm > 0) thickness = { mm: round(mm, 3), from: 'stack', detail: `${inBoard.filter((l) => ['CONDUCTOR', 'PLANE'].includes(fn.get(l.layerOrGroupRef))).length} copper layers and ${inBoard.length - inBoard.filter((l) => ['CONDUCTOR', 'PLANE'].includes(fn.get(l.layerOrGroupRef))).length} dielectric layers in the stackup` };
+  const copper = layers.filter((l) => IPC_COPPER.has(fn.get(l.layerOrGroupRef)));
+  const dielectric = layers.filter((l) => IPC_DIELECTRIC.has(fn.get(l.layerOrGroupRef)));
+  if (copper.length + dielectric.length) {
+    const mm = [...copper, ...dielectric].reduce((s, l) => s + (Number(l.thickness) || 0) * unit, 0);
+    if (mm > 0) thickness = { mm: round(mm, 3), from: 'stack', detail: `${copper.length} copper layers and ${dielectric.length} dielectric layer${dielectric.length === 1 ? '' : 's'} in the stackup` };
   }
   const materials = [...new Set([...text.matchAll(/<Property\b[^>]*\btext="([^"]*)"/g)].map((x) => x[1].trim())
     .filter((t) => /FR-?4|370\s*HR|85N|RO\s?4350|POLYIMIDE|ISOLA|ROGERS|ARLON|MEGTRON|IT-?180/i.test(t)))];
-  // Holes and slots, each under the drill layer it belongs to.
+  // Holes and slots, each under the drill layer it belongs to: KiCad puts slots on a ROUT layer. Altium
+  // repeats each slot on every other layer, drill layers included, so a slot counts once per place.
   const holes = holeCounter();
   const first = conductors[0];
   const last = conductors[conductors.length - 1];
-  let drill = null;
-  let slots = 0;
+  const drills = new Set([...fn].filter(([, f]) => f === 'DRILL' || f === 'ROUT').map(([name]) => name));
+  let layer = null;
+  const slotsAt = new Set();
   let n = 0;
   for (const tm of text.matchAll(/<(\/?)(LayerFeature|Hole|SlotCavity)\b([^>]*)>/g)) {
-    if (tm[2] === 'LayerFeature') { drill = tm[1] ? null : attrs(tm[3]).layerRef ?? null; continue; }
-    if (tm[1]) continue;
+    if (tm[2] === 'LayerFeature') { layer = tm[1] ? null : attrs(tm[3]).layerRef ?? null; continue; }
+    if (tm[1] || (drills.size && !drills.has(layer))) continue;
     const a = attrs(tm[3]);
-    const span = drill && spans.get(drill);
+    const span = layer && spans.get(layer);
     const through = !span || !first || ((span.fromLayer === first && span.toLayer === last) || (span.fromLayer === last && span.toLayer === first));
     const status = (a.platingStatus ?? '').toUpperCase();
     const plated = status === 'NONPLATED' ? false : status ? true : null;
     if (tm[2] === 'Hole') holes.add({ size: Number(a.diameter) * unit, plated, through, kind: status === 'VIA' ? 'via' : 'pad' });
-    else slots++;
+    else slotsAt.add(/<PolyBegin\b[^>]*>/.exec(text.slice(tm.index, tm.index + 1000))?.[0] ?? tm.index);
     if ((++n & 0xfff) === 0) progress(tm.index / text.length);
   }
+  const slots = slotsAt.size;
   progress(1);
   return {
     format: 'IPC-2581', holes: holes.list(), thickness, copperLayers: conductors.length || null, materials,
-    notes: slots ? [`${slots} slot${slots === 1 ? '' : 's'} (sizes not read)`] : [],
+    notes: slots ? [`${slots} slot${slots === 1 ? '' : 's'} (sizes not read).`] : [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// P-CAD ASCII .pcb (ACCEL_ASCII), from P-CAD itself or from Altium's P-CAD export: s-expressions whose
+// keywords may be in any case. Strings have no escapes (a Windows path can end in a backslash). A length is
+// in the file's units unless it carries its own, joined (30mil) or apart (0.2 mm). A hole's size, plating
+// and layer span belong to the pad or via style it names; a footprint (pattern) places its pads once for
+// each instance on the board.
+
+// The forms kept whole, by where they sit; everything else is passed over as it streams by.
+const PCAD_KEEP = new Map([
+  ['asciiheader', new Set(['fileunits', 'program'])],
+  ['library', new Set(['padstyledef', 'viastyledef', 'patterndef', 'patterndefextended'])],
+  ['pcbdesign', new Set(['layerdef', 'layersstackup'])],
+  ['pcbdesign multilayer', new Set(['pattern', 'pad', 'via'])],
+]);
+
+// [path, form] for each kept form; a form is [keyword, ...values and forms], strings unquoted.
+function pcadForms(text, progress) {
+  const token = /[()]|"[^"]*"|[^\s()"]+/g;
+  const stack = []; // { mode: 'path' | 'keep' | 'skip', kw, list }
+  const kept = [];
+  let opening = false;
+  let n = 0;
+  const begin = (kw) => {
+    const parent = stack[stack.length - 1];
+    const k = kw.toLowerCase();
+    let frame = { mode: 'skip' };
+    if (!parent) frame = { mode: 'path', kw: k };
+    else if (parent.mode === 'keep') {
+      // A footprint's drawing is not needed.
+      if (k !== 'layercontents') { frame = { mode: 'keep', list: [kw] }; parent.list.push(frame.list); }
+    } else if (parent.mode === 'path') {
+      const path = stack.map((f) => f.kw).join(' ');
+      if (PCAD_KEEP.get(path)?.has(k)) { frame = { mode: 'keep', list: [kw] }; kept.push([path, frame.list]); }
+      else if (stack.length < 2) frame = { mode: 'path', kw: k };
+    }
+    stack.push(frame);
+  };
+  for (let m; (m = token.exec(text));) {
+    const t = m[0];
+    if (t === '(') {
+      if (opening) begin('');
+      opening = true;
+    } else if (t === ')') {
+      if (opening) begin('');
+      opening = false;
+      stack.pop();
+    } else if (opening) {
+      begin(t);
+      opening = false;
+    } else if (stack[stack.length - 1]?.mode === 'keep') stack[stack.length - 1].list.push(t[0] === '"' ? t.slice(1, -1) : t);
+    if ((++n & 0x3ffff) === 0) progress(m.index / text.length);
+  }
+  return kept;
+}
+
+const isForm = (x, k) => Array.isArray(x) && x[0].toLowerCase() === k;
+const formIn = (form, k) => form.find((x) => isForm(x, k));
+const formsIn = (form, k) => form.filter((x) => isForm(x, k));
+const valueIn = (form, k) => formIn(form, k)?.slice(1).filter((x) => typeof x === 'string').join(' ');
+const nameKey = (x) => String(x ?? '').trim().toUpperCase();
+
+function parsePcad(text, progress) {
+  const kept = pcadForms(text, progress);
+  const at = (path, k) => kept.filter(([p, f]) => p === path && f[0].toLowerCase() === k).map(([, f]) => f);
+  const unit = { mil: MIL, mm: 1, in: 25.4, inch: 25.4 }[String(at('asciiheader', 'fileunits')[0]?.[1] ?? 'mil').toLowerCase()] ?? MIL;
+  const program = String(at('asciiheader', 'program')[0]?.[1] ?? '');
+  // Pad and via styles. Layer 1 is the top copper and layer 2 the bottom, so a hole from 1 to 2 goes through.
+  const styles = { pad: new Map(), via: new Map() };
+  for (const kind of ['pad', 'via']) {
+    for (const f of at('library', `${kind}styledef`)) {
+      const start = Number(valueIn(f, 'startrange'));
+      const end = Number(valueIn(f, 'endrange'));
+      const plated = valueIn(f, 'isholeplated')?.toLowerCase();
+      styles[kind].set(nameKey(f[1]), {
+        size: lengthMm(valueIn(f, 'holediam'), unit) ?? 0,
+        plated: plated === 'false' ? false : plated === 'true' ? true : undefined,
+        through: !(start > 0 && end > 0) || (Math.min(start, end) === 1 && Math.max(start, end) === 2),
+      });
+    }
+  }
+  // Each footprint's pads and vias by style, for each of its graphics ('' for the older form without).
+  const tally = (multi) => {
+    const t = { pad: new Map(), via: new Map() };
+    for (const kind of ['pad', 'via']) for (const x of formsIn(multi ?? [], kind)) {
+      const s = nameKey(valueIn(x, `${kind}styleref`));
+      t[kind].set(s, (t[kind].get(s) ?? 0) + 1);
+    }
+    return t;
+  };
+  const patterns = new Map();
+  const defs = [...at('library', 'patterndef'), ...at('library', 'patterndefextended')].map((f) => {
+    const graphics = new Map();
+    if (formIn(f, 'multilayer')) graphics.set('', tally(formIn(f, 'multilayer')));
+    for (const g of formsIn(f, 'patterngraphicsdef')) graphics.set(nameKey(valueIn(g, 'patterngraphicsnamedef')), tally(formIn(g, 'multilayer')));
+    return [f, graphics];
+  });
+  // An instance names its footprint as the library does, or (older files) by the original name.
+  for (const [f, graphics] of defs) if (!patterns.has(nameKey(f[1]))) patterns.set(nameKey(f[1]), graphics);
+  for (const [f, graphics] of defs) if (valueIn(f, 'originalname') && !patterns.has(nameKey(valueIn(f, 'originalname')))) patterns.set(nameKey(valueIn(f, 'originalname')), graphics);
+  // The board: footprints, free pads and vias.
+  const used = { pad: new Map(), via: new Map() };
+  const use = (kind, style, n) => used[kind].set(style, (used[kind].get(style) ?? 0) + n);
+  let unknownPatterns = 0;
+  for (const kind of ['pad', 'via']) for (const x of at('pcbdesign multilayer', kind)) use(kind, nameKey(valueIn(x, `${kind}styleref`)), 1);
+  for (const x of at('pcbdesign multilayer', 'pattern')) {
+    const graphics = patterns.get(nameKey(valueIn(x, 'patternref')));
+    if (!graphics) { unknownPatterns++; continue; }
+    const t = graphics.get(nameKey(valueIn(x, 'patterngraphicsnameref'))) ?? graphics.values().next().value;
+    for (const kind of ['pad', 'via']) for (const [style, n] of t?.[kind] ?? []) use(kind, style, n);
+  }
+  // P-CAD marks an unplated hole (isHolePlated False). Altium's P-CAD export never does, so there the
+  // plating is unknown.
+  const fromPcad = /P-CAD/i.test(program) || [...styles.pad.values()].some((s) => s.plated !== undefined);
+  const holes = holeCounter();
+  let unknownStyles = 0;
+  for (const kind of ['pad', 'via']) {
+    for (const [name, n] of used[kind]) {
+      const s = styles[kind].get(name);
+      if (!s) { unknownStyles += n; continue; }
+      holes.add({ size: s.size, plated: kind === 'via' ? true : s.plated ?? (fromPcad ? true : null), through: s.through, kind }, n);
+    }
+  }
+  const signal = at('pcbdesign', 'layerdef').filter((f) => /^(signal|plane)$/i.test(valueIn(f, 'layertype') ?? ''));
+  const notes = [];
+  if (!fromPcad && holes.list().some((h) => h.kind === 'pad')) notes.push('The file does not say which holes are plated or which are slots (Altium’s P-CAD export leaves both out), so every pad hole is taken as a plated round hole: remove any mounting-hole sizes that are not plated.');
+  if (unknownPatterns) notes.push(`${unknownPatterns === 1 ? '1 footprint names a pattern' : `${unknownPatterns} footprints name patterns`} the file’s library does not hold; ${unknownPatterns === 1 ? 'its' : 'their'} holes are not counted.`);
+  if (unknownStyles) notes.push(`${unknownStyles === 1 ? '1 pad or via names a style' : `${unknownStyles} pads or vias name styles`} the file’s library does not hold; ${unknownStyles === 1 ? 'its hole is' : 'their holes are'} not counted.`);
+  progress(1);
+  return {
+    format: 'P-CAD ASCII', holes: holes.list(), thickness: null, copperLayers: signal.length || null, materials: [], notes,
+    ...(at('pcbdesign', 'layersstackup').length ? { noStack: 'The page does not read the layer stackup of a P-CAD file yet: enter the board thickness and laminate.' } : {}),
   };
 }
 

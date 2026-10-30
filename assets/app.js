@@ -1837,7 +1837,7 @@ function applyBoardFile(r, fileName) {
     ? `${plural(rows.length, 'plated hole size')} added: ${esc(s.holes.map((h) => h.label).join('; '))}.`
     : 'No plated through holes were found, so the hole sizes are unchanged.'}
     ${left.length ? `Left out: ${esc(left.join('; '))}.` : ''}
-    ${r.thickness ? '' : 'The file has no layer stackup: enter the board thickness and laminate.'}
+    ${r.thickness ? '' : esc(r.noStack ?? 'The file has no layer stackup: enter the board thickness and laminate.')}
     ${kept.length ? `Kept ${esc(kept.join(' and '))}.` : ''}
     ${r.notes.length ? esc(r.notes.join(' ')) : ''}
     The file gives finished hole sizes, entered as the drill: the drilled hole is larger by twice the plating. Enter the plating thickness, which board files do not hold.</p>

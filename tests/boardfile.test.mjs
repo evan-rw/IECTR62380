@@ -3,7 +3,7 @@
 // through vias, a blind via, two plated holes, a plated slot, an unplated hole, an SMD pad, and a
 // dielectric made of two sub-layers); test-board.xml and test-board-*.drl are KiCad 10's own IPC-2581
 // and Excellon exports of it. simplefocmini.pcbdoc is a public Altium ASCII board (MIT; see
-// THIRD_PARTY_NOTICES.md); altium-stackup.PcbDoc is written for these tests in the same format.
+// THIRD_PARTY_NOTICES.md); altium-stackup.PcbDoc and pcad-test.pcb (P-CAD ASCII) are written for these tests.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -25,11 +25,13 @@ test('each file is told by its first bytes and its name; a binary .PcbDoc is tur
   assert.equal(boardFormat(board('test-board-PTH.drl'), 'test-board-PTH.drl'), 'Excellon');
   assert.equal(boardFormat(board('simplefocmini.pcbdoc')), 'Altium ASCII');
   assert.equal(boardFormat(board('altium-stackup.PcbDoc')), 'Altium ASCII');
+  assert.equal(boardFormat(board('pcad-test.pcb')), 'P-CAD ASCII');
   const binary = String.fromCharCode(0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1) + '\0'.repeat(20);
   assert.throws(() => parseBoardFile(binary, 'x.PcbDoc'), /binary Altium \.PcbDoc.*Save Copy As.*PCB ASCII File/);
   // The other text types on Altium's lists are named, with the one to pick instead.
   assert.throws(() => parseBoardFile('PCB FILE 6 VERSION 2.80\r\n', 'x.pcb'), /Protel PCB 2\.8 ASCII.*"PCB ASCII File \(\*\.PcbDoc\)"/);
-  assert.throws(() => parseBoardFile('ACCEL_ASCII "x.pcb"\r\n', 'x.pcb'), /P-CAD ASCII.*"PCB ASCII File \(\*\.PcbDoc\)"/);
+  // P-CAD 2006's binary .pcb, as its first bytes read.
+  assert.throws(() => parseBoardFile('II\x02\x04 \xb0\x00\r\n\r\n;P-CAD 2006 PCB V19.00.6667\x06\r\nP-CAD 2006 PCB Binary (Rev 6)\r\n\r\n', 'x.PCB'), /binary P-CAD \.pcb.*save a copy as an ASCII file/);
   assert.throws(() => parseBoardFile('hello', 'x.txt'), /not a board file the page can read/);
 });
 
@@ -42,7 +44,7 @@ test('KiCad, IPC-2581 and Excellon all give KiCad\'s own hole statistics for the
   // IPC-2581 gives slots without their sizes: counted, and said so.
   const ipc = parseBoardFile(board('test-board.xml'), 'test-board.xml');
   assert.deepEqual(holes(ipc), TEST_BOARD.filter((h) => !h.includes('slot')));
-  assert.deepEqual(ipc.notes, ['1 slot (sizes not read)']);
+  assert.deepEqual(ipc.notes, ['1 slot (sizes not read).']);
 });
 
 test('the stackup: copper and dielectric without the solder mask, sub-layers included, and the laminate', () => {
@@ -140,8 +142,52 @@ test('IPC-2581 in inches', () => {
   assert.equal(r.thickness.mm, 1.57);
 });
 
+test('IPC-2581 from Altium: SIGNAL copper, drill pairs in <SpanType>, a slot repeated on many layers', () => {
+  // As Altium writes them: the slot is on every layer, twice on the through-hole drill layer.
+  const slot = '<Set><SlotCavity name="J1-1 Hole" platingStatus="PLATED"><Outline><Polygon><PolyBegin x="5" y="6" /><PolyStepSegment x="5" y="7" /></Polygon></Outline></SlotCavity></Set>';
+  const hole = (d, status, x) => `<Set><Hole name="H" diameter="${d}" platingStatus="${status}" x="${x}" y="0" /></Set>`;
+  const xml = '<?xml version="1.0"?>\n<IPC-2581 revision="B"><Content/><Ecad><CadHeader units="MILLIMETER"/>'
+    + '<Layer name="Top Solder" layerFunction="SOLDERMASK"/><Layer name="Top Layer" layerFunction="SIGNAL" side="TOP"/><Layer name="D1" layerFunction="DIELCORE"/>'
+    + '<Layer name="Mid Layer 1" layerFunction="SIGNAL"/><Layer name="D2" layerFunction="DIELCORE"/><Layer name="Bottom Layer" layerFunction="SIGNAL" side="BOTTOM"/>'
+    + '<Layer name="Drill Drawing (Top Layer - Bottom Layer)" layerFunction="DOCUMENT"/>'
+    + '<Layer name="Drill Guide (Top Layer - Bottom Layer)" layerFunction="DRILL"><SpanType fromLayer="Top Layer" toLayer="Bottom Layer" /></Layer>'
+    + '<Layer name="Drill Guide (Top Layer - Mid Layer 1)" layerFunction="DRILL"><SpanType fromLayer="Top Layer" toLayer="Mid Layer 1" /></Layer>'
+    + '<Stackup><StackupGroup><StackupLayer layerOrGroupRef="Top Solder" thickness="0.0475"/><StackupLayer layerOrGroupRef="Top Layer" thickness="0.035"/><StackupLayer layerOrGroupRef="D1" thickness="0.1"/>'
+    + '<StackupLayer layerOrGroupRef="Mid Layer 1" thickness="0.035"/><StackupLayer layerOrGroupRef="D2" thickness="1.2"/><StackupLayer layerOrGroupRef="Bottom Layer" thickness="0.035"/></StackupGroup></Stackup>'
+    + `<LayerFeature layerRef="Top Layer">${slot}</LayerFeature>`
+    + `<LayerFeature layerRef="Drill Drawing (Top Layer - Bottom Layer)">${slot}${hole(0.9, 'PLATED', 1)}</LayerFeature>`
+    + `<LayerFeature layerRef="Drill Guide (Top Layer - Bottom Layer)">${slot}${slot}${hole(0.15, 'VIA', 1)}${hole(0.15, 'VIA', 2)}${hole(0.9, 'PLATED', 3)}</LayerFeature>`
+    + `<LayerFeature layerRef="Drill Guide (Top Layer - Mid Layer 1)">${slot}${hole(0.1, 'VIA', 4)}</LayerFeature></Ecad></IPC-2581>`;
+  const r = parseBoardFile(xml, 'x.cvg');
+  assert.deepEqual(holes(r), ['0.1 via plated partial ×1', '0.15 via plated through ×2', '0.9 pad plated through ×1']);
+  assert.deepEqual([r.thickness.mm, r.thickness.detail, r.copperLayers], [1.405, '3 copper layers and 2 dielectric layers in the stackup', 3]);
+  assert.deepEqual(r.notes, ['1 slot (sizes not read).']);
+});
+
+test('P-CAD ASCII: holes from the pad and via styles, footprints counted per instance', () => {
+  const text = board('pcad-test.pcb');
+  const r = parseBoardFile(text, 'pcad-test.pcb');
+  // Style names in any case; a footprint's own graphics, its drawing and its SMD pad left aside.
+  assert.deepEqual(holes(r), ['0.2 via plated partial ×1', '0.3048 via plated through ×3', '1.016 pad plated through ×7', '3.175 pad unplated through ×1']);
+  assert.deepEqual([r.format, r.copperLayers, r.thickness, r.materials, r.noStack], ['P-CAD ASCII', 4, null, [], undefined]);
+  assert.deepEqual(r.notes, ['1 footprint names a pattern the file’s library does not hold; its holes are not counted.']);
+  // A bare length is in the file's units; one with its own unit keeps it.
+  const mm = parseBoardFile(text.replace('(fileUnits Mil)', '(fileUnits mm)'), 'x.pcb');
+  assert.deepEqual(holes(mm).map((h) => h.split(' ')[0]), ['0.2', '12', '3.175', '40']);
+  // P-CAD's own layer stackup is not read yet.
+  const stacked = parseBoardFile(text.replace('\r\n  (multiLayer', '\r\n  (layersStackup (layerStackupData (layerStackupName "Top")))\r\n  (multiLayer'), 'x.pcb');
+  assert.match(stacked.noStack, /does not read the layer stackup of a P-CAD file/);
+});
+
+test('P-CAD ASCII from Altium\'s export: no plating stated, so pad holes are of unknown plating and the report says so', () => {
+  const text = board('pcad-test.pcb').replace('"P-CAD 2006 PCB" "19.02.958"', '"Design Explorer 99 SE" "6.1.0"').replace(/\s*\(isHolePlated False\)/, '');
+  const r = parseBoardFile(text, 'x.PCB');
+  assert.deepEqual(r.holes.map((h) => `${h.size} ${h.kind} ${h.plated}`), ['0.2 via true', '0.3048 via true', '1.016 pad null', '3.175 pad null']);
+  assert.match(r.notes[0], /^The file does not say which holes are plated or which are slots \(Altium’s P-CAD export leaves both out\)/);
+});
+
 test('every reader reports steady progress that ends at 1', () => {
-  for (const name of ['test-board.kicad_pcb', 'test-board.xml', 'test-board-PTH.drl', 'simplefocmini.pcbdoc']) {
+  for (const name of ['test-board.kicad_pcb', 'test-board.xml', 'test-board-PTH.drl', 'simplefocmini.pcbdoc', 'pcad-test.pcb']) {
     const seen = [];
     parseBoardFile(board(name), name, (f) => seen.push(f));
     assert.ok(seen.length >= 1 && seen.at(-1) === 1 && seen.every((f, i) => f >= 0 && f <= 1 && (i === 0 || f >= seen[i - 1])), `${name}: ${seen}`);
@@ -213,4 +259,19 @@ test('a second board file keeps a thickness you typed, says so, and replaces the
   assert.match(report, /Kept your board thickness, 1\.6 mm \(the file gives 1\.519 mm\) and your laminate\./);
   click($('[data-act="dismiss-pcb-report"]'));
   assert.equal($('#pcb-report').hidden, true);
+});
+
+test('a P-CAD file from Altium\'s export: its hole sizes, with the plating and the missing stackup said in the report', async () => {
+  const text = board('pcad-test.pcb').replace('"P-CAD 2006 PCB" "19.02.958"', '"Design Explorer 99 SE" "6.1.0"').replace(/\s*\(isHolePlated False\)/, '');
+  await importBoard('board.PCB', text);
+  assert.deepEqual(rows().map((r) => $('input', r).value), ['0.305 mm: 3 vias', '1.016 mm: 7 holes', '3.175 mm: 1 hole']);
+  let report = $('#pcb-report').textContent.replace(/\s+/g, ' ');
+  assert.match(report, /Read “board\.PCB” \(P-CAD ASCII, 4 copper layers\)\./);
+  assert.match(report, /Left out: 1 blind or buried via/);
+  assert.match(report, /The file has no layer stackup: enter the board thickness and laminate\./);
+  assert.match(report, /every pad hole is taken as a plated round hole/);
+  await importBoard('board2.PCB', text.replace('\r\n  (multiLayer', '\r\n  (layersStackup (layerStackupData (layerStackupName "Top")))\r\n  (multiLayer'));
+  report = $('#pcb-report').textContent.replace(/\s+/g, ' ');
+  assert.match(report, /The page does not read the layer stackup of a P-CAD file yet: enter the board thickness and laminate\./);
+  assert.doesNotMatch(report, /The file has no layer stackup/);
 });
