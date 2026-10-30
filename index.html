@@ -114,6 +114,27 @@
       <p class="hint">Import a KiCad, Protel or Protel 2 netlist to start from a schematic, a BOM (CSV) to start from a parts list, or both: a BOM imported after a netlist adds part numbers and descriptions to the matching lines and improves their guesses. Values the files cannot supply are marked <span class="tag-missing">Missing</span> and the part is left out of the total until they are filled in. Values the importer worked out from footprints, part names and descriptions are marked <span class="tag-guessed">Guessed</span> until you change or confirm them.</p>
       <div class="parts-filter"><label for="parts-find">Find a line</label><input type="search" id="parts-find" placeholder="C47, 100n, SN74…" autocomplete="off" autocapitalize="characters" spellcheck="false"></div>
       <label class="check-label"><input type="checkbox" id="attention-only"> Only parts that need attention</label>
+      <details id="ic-review" class="ic-review" hidden>
+        <summary id="ic-review-summary">ICs by part number</summary>
+        <p class="help">One row for each IC part number, covering all its lines. A family or R<sub>JA</sub> set here goes on every line of that part, as on the line's own card. R<sub>JA</sub> is the data sheet's junction-to-ambient thermal resistance; it is applied when you press Enter or leave the box.</p>
+        <div class="table-scroll">
+          <table class="smt-devices ic-families">
+            <thead>
+              <tr>
+                <th scope="col">Part number</th>
+                <th scope="col">Lines</th>
+                <th scope="col" class="num">Qty</th>
+                <th scope="col">Family</th>
+                <th scope="col">R<sub>JA</sub> <span class="unit">°C/W</span></th>
+                <th scope="col">Why</th>
+                <th scope="col"><span class="visually-hidden">Confirm</span></th>
+              </tr>
+            </thead>
+            <tbody id="ic-families"></tbody>
+          </table>
+        </div>
+        <p class="report-actions"><button type="button" data-act="ic-confirm-all">Confirm all guessed families</button></p>
+      </details>
       <p id="parts-undo" class="undo-bar" role="status" hidden></p>
       <div id="parts" class="parts"></div>
     </section>

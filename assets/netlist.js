@@ -434,17 +434,79 @@ function firstMatch(text, rules) {
   return null;
 }
 
+// Families the name settles: memories, programmable logic, processors, and 74-series logic, whose
+// letters give the technology with or without a maker's prefix (SN74LVC1T45, MC74HC595, DM74LS245).
 const IC_FAMILY_RULES = [
-  [/EEPROM|\b24(?:LC|AA|C)\d|\b25(?:LC|AA)\d|\bAT24|\bM24\d/, 'mos-eeprom'],
-  [/FLASH|\bW25Q|\bMX25|\bS25FL|\bSST2[56]|\b29[FL]\d/, 'mos-eprom'],
-  [/\bDDR|SDRAM|\bDRAM/, 'mos-dram'],
-  [/\bSRAM/, 'mos-sram-low'],
+  [/EEPROM|\b(?:AT|M|CAT|BR)?2[45](?:LC|AA|C|CS|FC)\d|\bAT24|\bM24\d|\b93(?:C|LC|AA)\d/, 'mos-eeprom'],
+  [/FLASH|\bW25[QXM]|\bMX25|\bS25FL|\bSST2[56]|\bSST39|\b29[FL]\d|\bMT25Q|\bMT29F|\bGD25|\bIS25[LW]P|\bAT25SF|\bAT45DB|\bXC17|\b27C\d/, 'mos-eprom'],
+  [/\bDDR|SDRAM|\bDRAM|\bMT(?:4[0-8]|5[0-3])[A-Z]{1,2}\d+[MG]\d/, 'mos-dram'],
+  [/\bSRAM|\b(?:HM|CY|KM|UM)?62(?:64|256)(?!\d)|\b(?:HM|CY|KM|UM)?628(?:128|512)/, 'mos-sram-low'],
+  [/\bGAL\d|\bPALCE?\d|\bATF(?:16|20|22)V/, 'mos-pld'],
   // Altera MAX families are written "MAX 7000" or EPM…; Maxim's MAX3232-style numbers are not CPLDs.
-  [/\bCPLD|\bMAX\s(?:[2-9]\d{3}|II|V|10)\b|\bEPM\d|\bXC95/, 'mos-cpld'],
-  [/\bFPGA|\bXC[67]|\bEP[234]C|\bICE40|\bLFE/, 'mos-lca'],
-  [/MICROCONTROLLER|MICROPROCESSOR|\bMCU\b|\bCPU\b|\bDSP|\bSTM32|\bSTM8|\bATMEGA|\bATTINY|\bATSAM|\bPIC\d|\bDSPIC|\bMSP430|\bNRF5|\bESP32|\bRP2040|\bLPC\d|\bMK[LV]?\d|\bS32K|\bTMS320/, 'mos-digital'],
-  [/\b74(?:HC|HCT|AHC|LVC|LV|AC|ACT|ALVC|AUP|VHC)\d|\bCD4\d{3}/, 'mos-digital'],
+  [/\bCPLD|\bMAX\s(?:[2-9]\d{3}|II|V|10)\b|\bEPM\d|\bXC95|\bXCR\d|\bXC2C\d|\bEP(?:6|9|18)\d0\b|\bLCMXO/, 'mos-cpld'],
+  [/\bFPGA|\bXC[67]|\bXC[2-5]\d{3}|\bXC(?:ZU|KU|VU|AU)\d|\bEP[234]C|\bICE40|\bLFE/, 'mos-lca'],
+  [/MICROCONTROLLER|MICROPROCESSOR|\bMCU\b|\bCPU\b|\bDSP|\bSTM32|\bSTM8|\bATMEGA|\bATTINY|\bATSAM|\bPIC\d|\bDSPIC|\bMSP430|\bNRF5|\bESP32|\bRP2040|\bLPC\d|\bMK[LV]?\d|\bS32K|\bTMS320|\bMCF5\d|\bEFM32|\bEFR32|\bAT89|\bGD32/, 'mos-digital'],
+  [/(?:\b|SN|MC|NLV?|TC|IDT|QS|HEF|M)74(?:LVTH?|ALVTH?|ABTH?|BCT|GTLP?)\d/, 'bicmos-digital'],
+  [/(?:\b|SN|MC|NLV?|TC|IDT|QS|HEF|M)74(?:HCT?|AHCT?|LVCH?|LVX?|ACT?|ALVCH?|AUC|AUP|AXC|AVC|LXCH?|VHCT?|CBT(?:LV)?|CB3[QT]|FCT|LCX|VCX)\d|\bNC7[SWN][ZPVU]?\d|\b(?:CD|HEF|MC1)4\d{3}/, 'mos-digital'],
+  [/(?:\b|SN|DM)74(?:LS|ALS|AS|F|S|H|L)?\d{2,}/, 'bip-digital'],
+  // Classic analogue parts made in bipolar processes: 78xx and 79xx, LM317 and LM337, the 1117 family
+  // (not TI's TLV1117LV, which is CMOS), 555 timers, TL07x and TL08x, LM358, LM324, LM393, LM339, TL431, LM4040.
+  [/\b(?:LM|UA|MC|L)?7[89](?:L|M)?\d\d(?!\d)|\bLM3[13]7|\b(?:LM|AMS|LD|AZ)1117|\bTLV1117(?!LV)|\b(?:NE|LM)555|\bTL0[78]\d|\bLM(?:358|324|393|339)|\bTL431|\bLM4040/, 'bip-linear'],
+  [/\bTLV1117LV/, 'mos-linear'],
 ];
+
+// Families the name does not settle: a family is assumed from what the part does, and the reason
+// says so (the owner's choice, 2026-10-29). Matched against the value, description, part number and
+// symbol (KiCad's library names, "REGULATOR-LINEAR:…", count). The first rule that matches wins.
+const IC_FUNCTION_RULES = [
+  // Load and USB power switches are nearly all 5.5 V parts.
+  [/LOAD.?SWITCH|DISTRIBUTION.?SWITCH|POWER.?SWITCH|POWER.?MUX|\bTPS2[01]\d{2}|\bTPS2[27]\d{3}|\bSTMPS\d|\bAP22\d{3}/,
+    'bicmos-lowv', 'a load or power-distribution switch (usually rated 5.5 V or less)'],
+  [/DC.?DC|BUCK|BOOST|SWITCHING.?REG|STEP.?(?:DOWN|UP)|\bPMIC|POWER.?MANAGEMENT|CHARGER|BATTERY.?MANAGEMENT|\bEFUSE|HOT.?SWAP|IDEAL.?DIODE|SEQUENCER|(?:GATE|MOTOR|LED).?DRIVER|POWER.?STAGE|REGULATOR-(?:SWITCHING|CONTROLLER)|DRIVER-(?:MOTOR|FET|LED)|\bTPS(?:2\d{3,4}|5\d{4,5}|6\d{4,5})|\bBQ\d{4}/,
+    'bicmos-highv', 'a power IC (switching regulator, PMIC, charger, power switch or driver)'],
+  [/RS-?232|RS-?485|RS-?422|CAN.?(?:BUS|TRANSCEIVER)|\bLIN\b|LVDS|LINE.?(?:DRIVER|RECEIVER)|INTERFACE-CAN-LIN|\bMAX(?:20[2-9]|21\d|23[2-9]|3232|3221|3243|34[3-9]\d|48[1-9]|49[01])|\bSP32\d\d|\bICL32\d\d|\bADM(?:3|48)\d\d|\bSN75(?:176|LBC)|\bSN65(?:HVD|LVDS)|\bDS90LV|\bTJA\d{4}|\bPCA82C25|\bMCP25[56]\d|\bISO10[45]0/,
+    'bicmos-lowv', 'a line transceiver (RS-232, RS-485, CAN, LIN or LVDS)'],
+  [/\bADC\b|\bDAC\b|\bDAC\d|ANALOG.?TO.?DIGITAL|DIGITAL.?TO.?ANALOG|CODEC|\bPHY\b|ETHERNET|SENSOR|ACCELEROMETER|GYRO|MAGNETOMETER|(?:CURRENT|POWER).?MONITOR|CURRENT.?SENSE|CLOCK.?(?:GENERATOR|SYNTHESI[SZ]ER|BUFFER)|JITTER|\bPLL\b|\bRTC\b|REAL.?TIME.?CLOCK|TOUCH|TYPE.?C|POWER.?DELIVERY|ANALOG-(?:ADC|DAC)|TIMER-RTC|POWERMEASUREMENT/,
+    'mos-diglin', 'a mixed-signal IC (converter, sensor, clock, monitor or USB-C controller)'],
+  // Analogue parts are assumed CMOS (the owner's choice, 2026-10-29); the bipolar classics are named above.
+  [/OP.?AMP|OPERATIONAL|AMPLIFIER|COMPARATOR|VOLTAGE.?REFERENCE|SHUNT.?REG|\bREF\d{4}|REFERENCE-VOLTAGE|\bLDO|LOW.?DROP|LINEAR.?REG|VOLTAGE.?REGULATOR|SUPERVISOR|VOLTAGE.?DETECTOR|ANALOG.?(?:SWITCH|MUX)|CHARGE.?PUMP|\bICL7660|\bTPS3\d{3}|\bTPS7[0-9A]\d{2,4}|REGULATOR-LINEAR/,
+    'mos-linear', 'a CMOS analogue IC (op-amp, comparator, reference, LDO, supervisor, analogue switch or charge pump)'],
+  [/TRANSLATOR|LEVEL.?SHIFT|TRANSCEIVER|BUFFER|EXPANDER|\bUART|USB|\bHUB\b|MULTIPLEXER|\bMUX\b|DECODER|FLIP.?FLOP|LATCH|SHIFT.?REG|COUNTER|SECURITY|AUTHENTICAT|\bTPM\b|LOGIC|INTERFACE-(?:UART|USB|EXPANSION)/,
+    'mos-digital', 'a digital IC (translator, buffer, expander, bridge, hub or logic)'],
+];
+
+// ESD protection arrays often carry a U designator; they are TVS diodes, not ICs. Not a part whose
+// description only mentions its own ESD rating ("RS-485 transceiver with ±15 kV ESD protection").
+const ESD_ARRAY = /\bTPD\d|\bPRTR\d|\bPESD\d|\bUSBLC\d|\bRCLAMP\d|\bIP4\d{3}|\bSP0\d{3}|\bESDA?\d|\bTVS|ESD.?(?:PROTECTION|SUPPRESS)|POWER-PROTECTION:|TVSDIODES/;
+const NOT_ESD_ARRAY = /TRANSCEIVER|TRANSLATOR|LEVEL.?SHIFT|BUFFER|EXPANDER|MULTIPLEXER|REGULATOR|CONTROLLER|\bHUB\b|CONVERTER|DRIVER|AMPLIFIER|SWITCH\b/;
+
+// A memory's size, in bits, where its part number says it: serial EEPROMs in kilobits (24LC256,
+// AT24C02; 24AA025 is 2 kbit), SPI flash in megabits (W25Q128, MT25QU512; W25Q80 is 8 Mbit),
+// Micron DRAM as depth × width (MT40A512M16 is 512M × 16), byte-wide SRAM (62256, 628128).
+const MEMORY_FAMILIES = new Set(['mos-eeprom', 'mos-eprom', 'mos-dram', 'mos-sram-low']);
+const KBIT = new Set([1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]);
+const MBIT = new Set([16, 32, 64, 128, 256, 512]);
+function memoryBits(text) {
+  let m = /\b(?:AT|M|CAT|BR)?2[45](?:LC|AA|C|CS|FC)(\d{2,4})/.exec(text);
+  if (m) {
+    const n = m[1].length === 3 && m[1].startsWith('0') ? Number(m[1].slice(0, 2)) : Number(m[1]);
+    return KBIT.has(n) ? { bits: n * 1024, from: m[0], size: `${n} kbit` } : null;
+  }
+  m = /\b(?:W25[QXM]|GD25[A-Z]{0,2}|IS25[LW]P|S25FL|AT25SF|MT25Q[LU])0?(\d{2,3})(?!\d)/.exec(text);
+  if (m) {
+    const n = Number(m[1]);
+    const mbit = MBIT.has(n) ? n : [20, 40, 80].includes(n) ? n / 10 : null;
+    return mbit ? { bits: mbit * 2 ** 20, from: m[0], size: `${mbit} Mbit` } : null;
+  }
+  m = /\bMT(?:4[0-8]|5[0-3])[A-Z]{1,2}(\d+)([MG])(\d+)/.exec(text);
+  if (m) {
+    const bits = Number(m[1]) * (m[2] === 'G' ? 2 ** 30 : 2 ** 20) * Number(m[3]);
+    return { bits, from: m[0], size: `${m[1]}${m[2]} × ${m[3]}` };
+  }
+  m = /\b(?:HM|CY|KM|UM)?62(64|256)(?!\d)|\b(?:HM|CY|KM|UM)?628(128|512)/.exec(text);
+  if (m) return m[1] ? { bits: Number(m[1]) * 1024, from: m[0], size: `${m[1]} kbit` } : { bits: Number(m[2]) * 8 * 1024, from: m[0], size: `${m[2]}k × 8` };
+  return null;
+}
 
 const DIODE_RULES = [
   [/\bLED\b/, 'led'],
@@ -527,6 +589,8 @@ export function classifyComponent(c) {
   else if (['RT', 'TH', 'NTC', 'PTC'].includes(prefix) && !/FUSE|POLY/.test(text)) resStyle = 'RTH';
   if (resStyle) model = 'mil-resistor';
   if (prefix === 'VR' && model === 'fixed' && REGULATOR_PACKAGE.test(fp)) model = 'ic';
+  const esdArray = model === 'ic' && ESD_ARRAY.test(`${text} ${sym}`) && !NOT_ESD_ARRAY.test(text);
+  if (esdArray) model = 'diode';
   if (['mil-connector', 'fixed'].includes(model) && isIcSocket(`${fp} ${text}`)) model = 'mil-socket';
   // The IEC TR 62380 inductor model here has no base rates; the 217F one does.
   if (model === 'inductor') model = 'mil-inductive';
@@ -554,8 +618,15 @@ export function classifyComponent(c) {
 
   if (model === 'ic') {
     Object.assign(params, { family: null, count: null, power: null, rja: null, package: null });
-    const fam = firstMatch(text, IC_FAMILY_RULES);
-    if (fam) { params.family = fam; inferred.family = why(`“${c.value || c.description}”`); }
+    const said = (re) => (re.test(text) ? `“${c.value || c.description}”` : `the symbol ${c.symbol}`);
+    // The part's own text first, then its symbol, whose library name ("Analog & Interface") says less.
+    const first = (rules) => rules.find(([re]) => re.test(text)) ?? rules.find(([re]) => re.test(sym));
+    const named = first(IC_FAMILY_RULES);
+    const does = named ? null : first(IC_FUNCTION_RULES);
+    if (named) { params.family = named[1]; inferred.family = why(said(named[0])); }
+    else if (does) { params.family = does[1]; inferred.family = `assumed for ${does[2]}, ${why(said(does[0]))}; the name does not say how the chip is made`; }
+    const mem = MEMORY_FAMILIES.has(params.family) ? memoryBits(text) : null;
+    if (mem) { params.count = mem.bits; inferred.count = `${mem.size}, ${why(`the part number “${mem.from}”`)}`; }
     const pkg = guessIcPackage(c.footprint, c.highestPin);
     Object.assign(params, pkg.params);
     inferred = { ...inferred, ...pkg.inferred };
@@ -571,6 +642,7 @@ export function classifyComponent(c) {
       const sized = SIGNAL_PACKAGES.has(pkg.params.package) ? 'signal' : RECTIFIER_PACKAGES.has(pkg.params.package) ? 'rectifier-lp' : null;
       if (sized) { params.type = sized; inferred.type = `a Schottky diode in a ${pkg.params.package} package`; }
     }
+    if (esdArray) { params.type = 'tvs-lp'; inferred.type = `an ESD protection array on designator ${c.designator}, ${why(`“${c.value || c.description}”`)}`; }
   } else if (model === 'transistor') {
     Object.assign(params, { type: null, stress: null, power: null, rja: null, package: null });
     const pkg = guessDiscretePackage(c.footprint);

@@ -489,6 +489,76 @@ function rerenderPart(part, focusKey) {
   if (focusKey) $(`[data-id="${part.id}"][data-key="${focusKey}"]`)?.focus();
 }
 
+// IC families, one row per part number. The importer guesses most families from the name or what
+// the part does, and a board holds many lines of the same parts, so they are reviewed here at once.
+const IC_FAMILY_OPTIONS = MODELS.ic.fields.find((f) => f.key === 'family').options;
+function icGroups() {
+  const groups = new Map();
+  for (const part of state.parts) {
+    if (part.model !== 'ic') continue;
+    const pn = (part.source?.mpn || part.source?.value || '').trim();
+    const key = pn ? pn.toUpperCase() : `#${part.id}`;
+    if (!groups.has(key)) groups.set(key, { key, pn, parts: [] });
+    groups.get(key).parts.push(part);
+  }
+  // Rows that need a choice first, then the guesses, then the rest.
+  const rank = (g) => (g.parts.some((p) => !p.params.family) ? 0 : g.parts.some((p) => p.inferred?.family) ? 1 : 2);
+  return [...groups.values()].sort((a, b) => rank(a) - rank(b) || a.pn.localeCompare(b.pn, 'en', { numeric: true }));
+}
+
+function icRowHTML(g) {
+  const fams = new Set(g.parts.map((p) => p.params.family ?? ''));
+  const family = fams.size === 1 ? [...fams][0] : null; // null: the lines differ
+  const missing = fams.has('');
+  const guess = g.parts.find((p) => p.inferred?.family)?.inferred.family;
+  const confirmed = g.parts.find((p) => p.confirmed?.family)?.confirmed.family;
+  const why = family === null ? 'The lines differ; a choice here sets them all.'
+    : missing ? 'Nothing in the name, description or symbol says.'
+    : guess ? `Guessed: ${guess}` : confirmed ? `Confirmed: ${confirmed}` : 'Your choice.';
+  const label = g.pn || g.parts[0].ref;
+  const id = `ic-family-${g.parts[0].id}`;
+  // R_JA has no guess: it is read from the data sheet and typed once for the part number.
+  const rjas = new Set(g.parts.map((p) => p.params.rja ?? ''));
+  const rja = rjas.size === 1 ? [...rjas][0] : null;
+  const rjaMissing = rjas.has('');
+  const rjaCell = `<td${rjaMissing ? ' class="missing"' : ''}><label class="visually-hidden" for="ic-rja-${g.parts[0].id}">R_JA of ${esc(label)}, °C/W</label><input id="ic-rja-${g.parts[0].id}" type="number" min="0" step="any" inputmode="decimal" data-bind="ic-rja" data-ic-key="${esc(g.key)}" value="${rja == null ? '' : esc(rja)}"${rja === null ? ' placeholder="differs"' : ''} aria-invalid="${rjaMissing}"></td>`;
+  const opts = family === null
+    ? `<option value="" selected>(differs between lines)</option>${optionsHTML(IC_FAMILY_OPTIONS, '-')}`
+    : optionsHTML(IC_FAMILY_OPTIONS, family);
+  return `<tr data-ic-key="${esc(g.key)}">
+    <th scope="row">${esc(label)}</th>
+    <td>${esc(g.parts.map((p) => p.ref).join(', '))}</td>
+    <td class="num">${g.parts.reduce((s, p) => s + (p.qty ?? 0), 0)}</td>
+    <td class="${missing ? 'missing' : guess ? 'inferred' : ''}"><label class="visually-hidden" for="${id}">Family of ${esc(label)}</label><select id="${id}" data-bind="ic-family" data-ic-key="${esc(g.key)}" aria-invalid="${missing}">${opts}</select></td>
+    ${rjaCell}
+    <td class="help">${esc(why)}</td>
+    <td>${guess ? `<button type="button" data-act="ic-confirm" data-ic-key="${esc(g.key)}">Confirm</button>` : ''}</td>
+  </tr>`;
+}
+
+function renderIcFamilies() {
+  const groups = icGroups();
+  $('#ic-review').hidden = !groups.length;
+  if (!groups.length) return;
+  const missing = groups.filter((g) => g.parts.some((p) => !p.params.family)).length;
+  const guessed = groups.filter((g) => g.parts.some((p) => p.inferred?.family)).length;
+  const noRja = groups.filter((g) => g.parts.some((p) => p.params.rja == null)).length;
+  const families = [missing && `${missing} missing`, guessed && `${guessed} guessed`].filter(Boolean).join(', ');
+  putText($('#ic-review-summary'), `ICs by part number: ${groups.length}${families ? `; family ${families}` : ''}${noRja ? `; R_JA missing on ${noRja}` : ''}`);
+  setHTML($('#ic-families'), groups.map(icRowHTML).join(''));
+  $('[data-act="ic-confirm-all"]').hidden = !guessed;
+}
+const icGroupOf = (key) => icGroups().find((g) => g.key === key);
+const focusIcRow = (key, what) => [...document.querySelectorAll(`#ic-families ${what}`)].find((el) => el.dataset.icKey === key)?.focus();
+
+// A guessed family becomes the line's own, with the reason kept on record.
+function confirmIcFamily(part) {
+  if (!part.inferred?.family) return;
+  part.confirmed = { ...part.confirmed, family: part.inferred.family };
+  delete part.inferred.family;
+  rerenderPart(part);
+}
+
 // Find a line: a designator matches whole, also inside a range (C7 finds C6–C8 but not C17);
 // other text matches the start of the imported value or part number.
 function partMatches(part, tokens) {
@@ -930,6 +1000,7 @@ function update() {
   });
 
   updateCapLife(life);
+  renderIcFamilies();
   const structure = refreshStructure(board.items, years);
   // With redundant blocks the board figures are averages over the mission.
   const redundancy = structure.redundancy;
@@ -1158,7 +1229,9 @@ let reportOpener = null;
 function showReport(html) {
   const box = $('#import-report');
   const attention = document.querySelector('#parts .part.needs-input, #parts .part.has-guesses');
-  box.innerHTML = `<p>${html}</p><p class="report-actions">${attention ? '<button type="button" data-act="attention">Show only the lines that need attention</button> ' : ''}<button type="button" data-act="dismiss-report">Dismiss</button></p>`;
+  const ics = !$('#ic-review').hidden;
+  box.innerHTML = `<p>${html}</p><p class="report-actions">${attention ? '<button type="button" data-act="attention">Show only the lines that need attention</button> ' : ''}${
+    ics ? '<button type="button" data-act="review-ics">Review ICs by part number</button> ' : ''}<button type="button" data-act="dismiss-report">Dismiss</button></p>`;
   box.hidden = false;
   box.scrollIntoView?.({ block: 'nearest' });
   box.focus({ preventScroll: true });
@@ -1210,6 +1283,8 @@ document.addEventListener('input', (e) => {
   const el = e.target;
   const bind = el.dataset?.bind;
   if (!bind || el.tagName === 'SELECT' || el.type === 'checkbox') return;
+  // Applied on change, to every line of the part number: applied while typing, the list would redraw under the cursor.
+  if (bind === 'ic-rja') return;
   // The name feeds no figure: save it without recomputing the board.
   if (bind === 'title') { state.title = el.value; save(); return; }
   if (bind === 'years') state.years = numOrNull(el.value);
@@ -1308,6 +1383,30 @@ document.addEventListener('change', (e) => {
     part.params[el.dataset.key] = el.value || null;
     clearGuess(part, el.dataset.key);
     rerenderPart(part, el.dataset.key);
+  } else if (bind === 'ic-family') {
+    // Every line of the part number takes the family, as if chosen on each card.
+    const key = el.dataset.icKey;
+    if (!el.value) return;
+    for (const part of icGroupOf(key)?.parts ?? []) {
+      part.params.family = el.value;
+      clearGuess(part, 'family');
+      rerenderPart(part);
+    }
+    save();
+    update();
+    focusIcRow(key, 'select');
+    return;
+  } else if (bind === 'ic-rja') {
+    const key = el.dataset.icKey;
+    for (const part of icGroupOf(key)?.parts ?? []) {
+      part.params.rja = numOrNull(el.value);
+      clearGuess(part, 'rja');
+      rerenderPart(part);
+    }
+    save();
+    update();
+    focusIcRow(key, 'input');
+    return;
   } else {
     return;
   }
@@ -1414,6 +1513,11 @@ document.addEventListener('click', (e) => {
       $('[data-act="toggle"]', first ?? document)?.focus();
       return;
     }
+    case 'review-ics':
+      $('#ic-review').open = true;
+      $('#ic-review').scrollIntoView?.({ block: 'start' });
+      $('#ic-families select')?.focus();
+      return;
     case 'import-board': reportOpener = btn; $('#board-file').click(); return;
     case 'dismiss-pcb-report':
       $('#pcb-report').hidden = true;
@@ -1428,6 +1532,16 @@ document.addEventListener('click', (e) => {
       $(`#pcb-holes [data-hole="${btn.dataset.i}"] [data-act="pcb-del"]`)?.focus();
       break;
     }
+    case 'ic-confirm': {
+      const key = btn.dataset.icKey;
+      for (const p of icGroupOf(key)?.parts ?? []) confirmIcFamily(p);
+      refocus = () => focusIcRow(key, 'select');
+      break;
+    }
+    case 'ic-confirm-all':
+      for (const p of state.parts) if (p.model === 'ic') confirmIcFamily(p);
+      refocus = () => $('#ic-families select')?.focus();
+      break;
     case 'pcb-confirm-settings':
       state.pcb.confirmed = { ...state.pcb.confirmed, ...state.pcb.inferred };
       state.pcb.inferred = {};

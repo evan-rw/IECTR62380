@@ -101,7 +101,8 @@ test('netlist parts: what is guessed, what is missing', () => {
   assert.deepEqual([u2.params.family, u2.params.package, u2.params.pins], ['mos-eeprom', 'so', 8]);
 
   const u3 = byRef(parts, 'U3');
-  assert.equal(u3.params.family, null, 'LM1117 is not guessed');
+  assert.equal(u3.params.family, 'bip-linear', 'LM1117, a classic bipolar regulator, by name');
+  assert.equal(u3.inferred.family, 'from “LM1117-3.3”');
   assert.equal(u3.params.package, null, 'SOT-223 has no IC package row');
 
   const u4 = byRef(parts, 'U4');
@@ -253,8 +254,8 @@ test('KiCad demo parts: the part type follows the part, not a stray word or pref
   assert.deepEqual([c('T2', 'BSS138LT1G', 'SOT95P240X110-3N').model, c('T2', 'BSS138LT1G', 'SOT95P240X110-3N').params.type], ['transistor', 'mos-lp']);
   assert.equal(c('T5', 'FDV301N', 'SOT95P240X110-3N').model, 'transistor');
   assert.equal(c('T1', 'ADT2-1T', 'XFMR_MINI-CIRCUITS_CD542').model, 'mil-inductive');
-  // Maxim's MAX3430 is a transceiver, not an Altera MAX CPLD (vme-wren IC26).
-  assert.equal(c('IC26', 'MAX3430ESA', 'SOIC127P600X175-8N').params.family, null);
+  // Maxim's MAX3430 is an RS-485 transceiver, not an Altera MAX CPLD (vme-wren IC26).
+  assert.equal(c('IC26', 'MAX3430ESA', 'SOIC127P600X175-8N').params.family, 'bicmos-lowv');
   assert.equal(c('U1', 'EPM7128STC100', 'TQFP-100_14x14mm_P0.5mm').params.family, 'mos-cpld');
   assert.equal(c('U2', 'CPLD', '', 'MAX 7000 CPLD').params.family, 'mos-cpld');
   // A pin header or connector footprint is a connector, whatever the designator (kit-dev-coldfire CT101, openair-max CE1).
@@ -316,6 +317,61 @@ test('KiCad demo parts: the footprint names the part when the designator does no
   assert.deepEqual(pkg('SOT65P210X110-6N'), ['diag-two-rows', 6, undefined, undefined]);
   // …and chip passives: RESC1608 is metric for an 0603 resistor.
   assert.deepEqual([c('R5', '10k', 'RESC1608X55N').params.type, c('R5', '10k', 'RESC1608X55N').params.rated], ['smd', 0.1]);
+});
+
+test('U parts: the family from the name, else assumed from the function; ESD arrays are diodes; memory sizes', () => {
+  // The demo boards' own parts (2026-10-29): 294 of 311 ICs had no family before.
+  const c = (designator, value, footprint = '', extra = {}) => classifyComponent({ designator, value, footprint, description: '', symbol: '', ...extra });
+  const fam = (...a) => c(...a).params.family;
+  // 74-series logic: the letters give the technology, with or without a maker's prefix.
+  assert.equal(fam('U1', 'SN74LVC1T45DCKT'), 'mos-digital');
+  assert.equal(fam('U2', 'SN74LVTH125RGY'), 'bicmos-digital');
+  assert.equal(fam('U3', '74LS245'), 'bip-digital');
+  assert.equal(fam('U4', 'MC74HC595ADR2G'), 'mos-digital');
+  assert.equal(fam('U5', 'LM7480QDRRRQ1'), null, 'an ideal diode controller, not 74-series logic');
+  assert.match(c('U1', 'SN74LVC1T45DCKT').inferred.family, /^from “SN74LVC1T45DCKT”$/);
+  // Memories, programmable logic and processors by part number or symbol.
+  assert.deepEqual(['MT40A512M16LY-075-E', '628128', 'XC4005-PQ160', 'XCR3256-TQ144', 'EP600', 'MCF5213-LQFP100'].map((v) => fam('U1', v)),
+    ['mos-dram', 'mos-sram-low', 'mos-lca', 'mos-cpld', 'mos-cpld', 'mos-digital']);
+  assert.equal(fam('U1', 'PIC_18_PINS', '', { symbol: 'pic_programmer:PIC16F54' }), 'mos-digital');
+  // The function, when the name does not give the technology: assumed, and said so.
+  const buck = c('U7', 'TPS62902RPJR');
+  assert.equal(buck.params.family, 'bicmos-highv');
+  assert.match(buck.inferred.family, /^assumed for a power IC .*from “TPS62902RPJR”; the name does not say how the chip is made$/);
+  // Analogue parts are assumed CMOS; the bipolar classics are named (the owner's choice, 2026-10-29).
+  assert.equal(fam('U8', 'XYZ123', '', { description: 'Op Amp, dual, rail-to-rail' }), 'mos-linear');
+  assert.match(c('U8', 'XYZ123', '', { description: 'Comparator' }).inferred.family, /^assumed for a CMOS analogue IC .*the name does not say how the chip is made$/);
+  assert.deepEqual(['LM358N', 'TL072CD', '78L05', 'LM7805CT', 'NE555P', 'AMS1117-3.3', 'TLV1117-33'].map((v) => fam('U8', v)), Array(7).fill('bip-linear'));
+  assert.equal(fam('U8', 'TLV1117LV33DCYR'), 'mos-linear', "TI's TLV1117LV is CMOS");
+  assert.equal(fam('U8', 'STM32F078CB'), 'mos-digital', 'not a 78xx regulator');
+  // Load and USB power switches are 5.5 V parts (cm5_minima U701, U405; Jetson's TPS2117).
+  assert.deepEqual(['AP22653W6', 'STMPS2151STR', 'TPS2117DRLR'].map((v) => fam('U8', v)), ['bicmos-lowv', 'bicmos-lowv', 'bicmos-lowv']);
+  assert.equal(fam('U8', 'TPS25947', '', { description: 'eFuse, 2.7-23 V' }), 'bicmos-highv', 'an eFuse is a power IC');
+  assert.equal(fam('U8', 'NCP718BSN330T1G', '', { description: 'Linear Voltage Regulator IC Positive Fixed 1 Output' }), 'mos-linear');
+  assert.equal(fam('U8', 'INA219AIDCNR', '', { description: 'Bidirectional Current/Power Monitor With I2C' }), 'mos-diglin');
+  assert.equal(fam('U8', 'PCA82C251'), 'bicmos-lowv');
+  assert.equal(fam('U8', 'PCAL6408A', '', { description: 'I/O Expander, 8 bit, I2C' }), 'mos-digital');
+  // The part's own text before its symbol's library name: vme-wren's "Analog & Interface" library holds RS-485 and LVDS parts.
+  assert.equal(fam('IC26', 'MAX3430ESA', '', { symbol: 'Analog & Interface:MAX3430ESA' }), 'bicmos-lowv');
+  assert.equal(fam('U9', 'DS90LV027AQMA', '', { symbol: 'Analog & Interface:DS90LV027AQMA' }), 'bicmos-lowv');
+  // Jetson's TPS3840 supervisor sits in a "PMIC" symbol library, which would make it a power IC.
+  assert.equal(fam('U9', 'TPS3840PL30DBVR', '', { symbol: 'antmicroPMICPowerSequencers:TPS3840PL30DBVR' }), 'mos-linear');
+  assert.equal(fam('U9', 'ZZ9000'), null, 'nothing to go on: left Missing');
+  // ESD protection arrays on U or IC designators are TVS diodes; parts that only quote their own ESD rating are not.
+  for (const [ref, value, description] of [['U401', 'TPD4EUSB30', '4-Channel ESD Protection for Super-Speed USB 3.0 Interface'], ['IC4', 'PRTR5V0U2X', ''], ['U17', 'TPD4E05U06QDQARQ1', 'TVS diode array, 12 kV']]) {
+    const d = c(ref, value, '', { description });
+    assert.deepEqual([d.model, d.params.type], ['diode', 'tvs-lp'], value);
+    assert.match(d.inferred.type, new RegExp(`^an ESD protection array on designator ${ref}, from “${value}”$`));
+  }
+  assert.equal(c('U6', 'TXB0106RGY', '', { description: '6-Bit Bidirectional Voltage-Level Translator with ±15-kV ESD protection' }).model, 'ic');
+  assert.equal(c('U6', 'XYZ485', '', { description: 'RS-485 transceiver, ±15 kV ESD protection' }).params.family, 'bicmos-lowv');
+  // Memory sizes in bits, where the part number says them.
+  const bits = (value) => c('U1', value).params.count;
+  assert.deepEqual(['W25Q128JVSIQ', 'W25Q80DVUXIE', 'MT25QU512ABB8ESF', '24LC256-I/SN', '24AA025E48T', 'AT24CS01', 'MT40A512M16LY', '628128', 'CY62256NLL'].map(bits),
+    [128 * 2 ** 20, 8 * 2 ** 20, 512 * 2 ** 20, 256 * 1024, 2 * 1024, 1024, 512 * 2 ** 20 * 16, 128 * 1024 * 8, 256 * 1024]);
+  assert.match(c('U1', 'W25Q128JVSIQ').inferred.count, /^128 Mbit, from the part number “W25Q128”$/);
+  assert.equal(bits('W25Q100XYZ'), null, 'a number that is no density');
+  assert.equal(bits('STM32F103C8T6'), null, 'not a memory');
 });
 
 test('KiCad demo parts that used to import as "Other part"', () => {
