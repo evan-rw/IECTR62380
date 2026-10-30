@@ -17,9 +17,15 @@ ${[['C1', '100n'], ['C2', '100n'], ['C3', '10u'], ['C4', '10u'], ['C5', '1u'], [
     (net (code "4") (name "+1V8") (node (ref "C5") (pin "1")) (node (ref "C6") (pin "1")))
     (net (code "5") (name "EN") (node (ref "R1") (pin "2")))))`;
 
+let previous = null;
 export async function loadPage() {
+  // Leaving a page fires pagehide, as a browser does: the last page writes its pending save to its own
+  // storage now. Otherwise its save timer fires later and writes into this page's storage (the globals
+  // below point at the newest page), and on a loaded machine this page opens the last page's board.
+  previous?.dispatchEvent(new previous.Event('pagehide'));
   const dom = new JSDOM(readFileSync(new URL('index.html', SITE), 'utf8'), { url: 'http://localhost/', pretendToBeVisual: true });
   const { window } = dom;
+  previous = window;
   Object.assign(globalThis, { window, document: window.document, localStorage: window.localStorage, confirm: () => true, alert: () => {} });
   globalThis.CSS ??= { escape: (s) => String(s).replace(/[^\w-]/g, (c) => `\\${c}`) };
   window.HTMLElement.prototype.scrollIntoView = () => {};
