@@ -383,6 +383,8 @@ table.phases td.check label { display: flex; align-items: center; justify-conten
 .import-report:focus-visible { outline: 1px dotted #000; outline-offset: 2px; }
 .import-report[hidden] { display: none; }
 .check-label { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 8px; }
+.remember { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; margin: 8px 0 0; }
+.remember .check-label { margin: 0; }
 
 /* Circuit board */
 

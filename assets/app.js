@@ -23,6 +23,9 @@ import { xlsx } from './xlsx.js';
 import { boardSheets } from './report.js';
 
 const STORAGE_KEY = 'iec62380.board.v1';
+// "Remember this board on this computer": when it is off, the board is never written and its saved
+// copy is deleted, so it lasts only while the tab is open. The choice itself holds no board data.
+const REMEMBER_KEY = 'iec62380.remember';
 const FORMAT = 'iec62380-board';
 const REF_PREFIX = {
   ic: 'U', diode: 'D', transistor: 'Q', capacitor: 'C', resistor: 'R', inductor: 'L', fixed: 'X',
@@ -243,7 +246,15 @@ function exportable(board) {
   };
 }
 
+function readRemember() {
+  try { return localStorage.getItem(REMEMBER_KEY) !== 'no'; } catch { return true; }
+}
+let remember = readRemember();
+// Changed since the page opened or the last Export JSON: closing the tab then loses work when nothing is remembered.
+let changedSinceKept = false;
+
 function load() {
+  if (!remember) return null;
   try {
     const s = localStorage.getItem(STORAGE_KEY);
     return s ? sanitize(JSON.parse(s)).board : null;
@@ -256,14 +267,38 @@ let saveTimer = null;
 function writeNow() {
   clearTimeout(saveTimer);
   saveTimer = null;
+  if (!remember) return;
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* private mode or storage blocked */ }
 }
 function save() {
+  changedSinceKept = true;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(writeNow, 250);
 }
 // Going to the data sources page must not lose the last keystrokes.
 window.addEventListener('pagehide', () => { if (saveTimer) writeNow(); });
+window.addEventListener('beforeunload', (e) => {
+  if (!remember && changedSinceKept && state.parts.length) e.preventDefault();
+});
+function setRemember(on) {
+  remember = on;
+  try {
+    if (on) localStorage.removeItem(REMEMBER_KEY);
+    else { localStorage.setItem(REMEMBER_KEY, 'no'); localStorage.removeItem(STORAGE_KEY); }
+  } catch { /* storage blocked: nothing was saved either */ }
+  if (on) writeNow();
+  showRemember();
+}
+function showRemember() {
+  $('#remember').checked = remember;
+  $('#remember-note').hidden = remember;
+}
+// Another tab changing the choice applies here too, so this tab cannot write the board back.
+window.addEventListener('storage', (e) => {
+  if (e.key !== REMEMBER_KEY && e.key !== null) return;
+  remember = readRemember();
+  showRemember();
+});
 
 let state = load() ?? exampleBoard();
 const findPart = (id) => state.parts.find((p) => p.id === id);
@@ -1221,6 +1256,7 @@ document.addEventListener('change', (e) => {
     $('#parts').classList.toggle('attention-only', el.checked);
     return;
   }
+  if (el.id === 'remember') { setRemember(el.checked); return; }
   if (!bind && el.id !== 'life-add') return;
   if (bind === 'pcb' && (el.tagName === 'SELECT' || el.type === 'checkbox')) {
     if (el.type === 'checkbox') state.pcb.include = el.checked;
@@ -1473,7 +1509,10 @@ document.addEventListener('click', (e) => {
       $('#import-report').hidden = true;
       (reportOpener ?? $('[data-act="import-netlist"]')).focus();
       return;
-    case 'export-json': download(`${fileBase()}.iec62380.json`, 'application/json', JSON.stringify(exportable(state), null, 2)); return;
+    case 'export-json':
+      download(`${fileBase()}.iec62380.json`, 'application/json', JSON.stringify(exportable(state), null, 2));
+      changedSinceKept = false;
+      return;
     case 'export-csv': download(`${fileBase()}.csv`, 'text/csv', boardCSV()); return;
     case 'export-xlsx': download(`${fileBase()}-FIT.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', boardWorkbook()); return;
     case 'add-phase':
@@ -1811,4 +1850,5 @@ mountStructure($('#structure'), {
   },
 });
 renderAll();
+showRemember();
 initTooltips();
