@@ -103,6 +103,33 @@ test('Excellon from Altium: plated and unplated tools in one header, and routed 
   assert.deepEqual(holes(parseBoardFile(slots, 'board-SlotHoles.TXT')), ['0.5004 hole slot plated through ×2']);
 });
 
+// The forms below follow drill files from other tools in gerbv's test set (github.com/gerbv/gerbv).
+test('Excellon from other tools: units after the header, no header, no %, patterns, Mentor\'s plating line', () => {
+  // Veribest: the header names no units; M71 after it says millimetres. The name says plated.
+  const veribest = 'M48\nT01C.864\nT02C1.092\n%\nG90\nM71\nG05\nT01\nX40500Y6270\nY3730\nT02\nX37000Y8960\nM30\n';
+  assert.deepEqual(holes(parseBoardFile(veribest, 'ThruHolePlated.ncd')), ['0.864 hole plated through ×2', '1.092 hole plated through ×1']);
+  // OrCAD: no header at all; each tool is defined where it is first used, in inches.
+  const orcad = '%\nT1C0.028F200S100\nX002250Y002300\nX002400Y003850\nT2C0.034F200S100\nX003100Y004100\nM30\n';
+  assert.deepEqual(holes(parseBoardFile(orcad, 'thruhole.tap')).map((h) => h.split(' ')[0] + ' ' + h.split(' ').at(-1)), ['0.7112 ×2', '0.8636 ×1']);
+  // A header that ends where the first tool is chosen, with no % line; a G85 slot.
+  const noPercent = 'M48\nINCH\nT4C0.05\nG05\nT4\nX2.0872Y0.6494G85X2.1463Y0.6494\nX1Y1\nM30\n';
+  assert.deepEqual(holes(parseBoardFile(noPercent, 'x.drl')).map((h) => h.replace(/ (un)?plated/, '')), ['1.27 hole slot through ×1', '1.27 hole through ×1']);
+  // M25 … M01 records a pattern of hits; each M02 drills it again elsewhere.
+  const pattern = 'M48\nINCH,TZ\nT01C0.050\nT02C0.035\n%\nT01\nM25\nX10000Y10000\nX20000Y10000\nT02\nX15000Y15000\nM01\nM02X25000Y0\nM02X0Y25000\nM30\n';
+  assert.deepEqual(holes(parseBoardFile(pattern, 'x.exc')).map((h) => h.split(' ')[0] + ' ' + h.split(' ').at(-1)), ['0.889 ×3', '1.27 ×6']);
+  // Mentor's job header says what the file holds; its slots are routed.
+  const mentor = '; Format  : 3.3 / Absolute / MM / Leading\n; Contents: Thru / Mill / Plated\nM48\nMETRIC,TZ\nT03C0.8000\n%\nM71\nG90\nT03\nG00X2550Y80000\nM15\nG01Y79500\nY80500\nM16\nM30\n';
+  assert.deepEqual(holes(parseBoardFile(mentor, 'x.drl')), ['0.8 hole slot plated through ×1']);
+  assert.deepEqual(holes(parseBoardFile(mentor.replace('/ Plated', '/ Non-Plated'), 'x.drl')), ['0.8 hole slot unplated through ×1']);
+});
+
+test('the other files in a drill set are named when turned away: Gerber artwork and EIA tape code', () => {
+  assert.throws(() => parseBoardFile('*\nG04 Mass Parameters ***\n%FSLAX34Y34*%\n%MOIN*%\n', 'board.drd'), /Gerber file .*Import the Excellon drill file/);
+  const eia = 'T\x07\x02\x80T\x04\x08\x80#\x01v 2  s k ';
+  assert.throws(() => parseBoardFile(eia, 'board.DRL'), /EIA tape code.*\.DRR.*\.TXT/);
+  assert.throws(() => parseBoardFile(eia, 'board.bin'), /not a board file the page can read/);
+});
+
 test('IPC-2581 in inches', () => {
   const xml = '<?xml version="1.0"?>\n<IPC-2581 revision="C"><Content/><Ecad><CadHeader units="INCH"/>'
     + '<Layer name="TOP" layerFunction="CONDUCTOR" side="TOP"/><Layer name="CORE" layerFunction="DIELCORE"/><Layer name="BOTTOM" layerFunction="CONDUCTOR" side="BOTTOM"/>'

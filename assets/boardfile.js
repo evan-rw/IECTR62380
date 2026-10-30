@@ -58,7 +58,10 @@ export function boardFormat(text, name = '') {
   if (/^ACCEL_ASCII\b/.test(head)) return 'P-CAD ASCII';
   if (/^\(kicad_pcb\b/.test(head)) return 'KiCad';
   if (/^<\?xml/.test(head) && /<IPC-2581\b/.test(head)) return 'IPC-2581';
-  if (/^(?:;[^\n]*\n\s*)*M48\b/m.test(head) || (/\.(drl|xln|exc|drd|txt|nc)$/i.test(name) && /^T\d+[^\n]*C[\d.]+/m.test(head))) return 'Excellon';
+  if (/^(?:;[^\n]*\n\s*)*M48\b/m.test(head) || (/\.(drl|xln|exc|drd|txt|nc|ncd|cnc|tap)$/i.test(name) && /^T\d+[^\n]*C[\d.]+/m.test(head))) return 'Excellon';
+  // Files that come in the same set as the drill file, named so the message can say which to take instead.
+  if (/%FS[LTD]?[AI]/.test(head) || /^G04 /m.test(head)) return 'Gerber';
+  if (/\.(drl|drd)$/i.test(name) && /[\x01-\x08\x0e-\x1a]/.test(head.slice(0, 512))) return 'EIA drill';
   return null;
 }
 
@@ -73,6 +76,8 @@ export function parseBoardFile(text, name = '', onProgress) {
     case 'Altium binary': throw new Error('This is a binary Altium .PcbDoc. In Altium, save a copy as a PCB ASCII file (File » Save Copy As, type "PCB ASCII File") and import that.');
     case 'Protel PCB':
     case 'P-CAD ASCII': throw new Error(`This is a ${format === 'Protel PCB' ? 'Protel PCB 2.8 ASCII (or older Protel)' : 'P-CAD ASCII'} file, which the page does not read. In Altium, save a copy as type "PCB ASCII File (*.PcbDoc)" (File » Save Copy As) and import that.`);
+    case 'Gerber': throw new Error('This is a Gerber file (copper, mask, silkscreen or a drill drawing), not a drill file. Import the Excellon drill file from the same set instead: .drl, or .TXT from Altium.');
+    case 'EIA drill': throw new Error('This is a drill file in the old EIA tape code, which the page does not read (Altium writes one as .DRL). Import the ASCII drill file beside it instead: Altium\'s drill report (.DRR) names it, usually a .TXT.');
     default: throw new Error('This is not a board file the page can read: an Altium ASCII .PcbDoc, a KiCad .kicad_pcb, an IPC-2581 .xml or an Excellon drill file.');
   }
 }
@@ -315,21 +320,32 @@ function parseIpc2581(text, progress) {
 
 function parseExcellon(text, name, progress) {
   const lines = text.split(/\r\n|\r|\n/);
-  let unit = 25.4; // Excellon's default is inches
+  // Tool sizes are in the header's units; a header that names none takes the first M71 (mm) or M72 (inch)
+  // after it (Veribest), else Excellon's default, inches.
+  let headerUnit = null;
+  let bodyUnit = null;
   let filePlated = /NPTH|NON.?PLATED/i.test(name) ? false : /PTH|PLATED/i.test(name) ? true : null;
   let fileThrough = true;
-  const tools = new Map(); // T number -> { size, plated, kind }
+  const tools = new Map(); // T number -> { c: size in the file's units, plated, kind }
   let pending = null; // a tool attribute comment applies to the next tool definition
   let typePlated = null; // Altium's ;TYPE=PLATED or ;TYPE=NON_PLATED, for the tools defined after it
   let header = true;
   let tool = null;
   let routing = false; // G00 starts route mode, where M15 plunges for a slot and X/Y lines are its path; G05 ends it
+  let pattern = null; // the hits from M25 to M01, which each M02 repeats
+  let recording = false;
   const hits = new Map();
   const add = (t, slot, n = 1) => {
     const key = `${t}|${slot ? 'slot' : 'round'}`;
     hits.set(key, (hits.get(key) ?? 0) + n);
+    if (recording) pattern.push([t, slot, n]);
+  };
+  const define = (t, c) => {
+    tools.set(t, { c, ...(typePlated == null ? {} : { plated: typePlated }), ...(pending ?? {}) });
+    pending = null;
   };
   for (let i = 0; i < lines.length; i++) {
+    if ((i & 0x3fff) === 0) progress(i / lines.length);
     const line = lines[i].trim();
     if (!line) continue;
     if (line.startsWith(';')) {
@@ -337,20 +353,39 @@ function parseExcellon(text, name, progress) {
       if (ff) { filePlated = ff[1].toLowerCase() === 'plated'; fileThrough = /^N?PTH$/i.test(ff[2]); }
       if (/TYPE=NON_PLATED/i.test(line)) filePlated = typePlated = false;
       else if (/TYPE=PLATED/i.test(line)) filePlated = typePlated = true;
+      // Mentor's job header: "; Contents: Thru / Mill / Plated".
+      const contents = /^;\s*Contents:.*?\b(Non-?Plated|Plated)\b/i.exec(line);
+      if (contents) filePlated = !/^non/i.test(contents[1]);
       const af = /TA\.AperFunction,(Plated|NonPlated),\w+,(\w+)/i.exec(line);
       if (af) pending = { plated: af[1].toLowerCase() === 'plated', kind: /Via/i.test(af[2]) ? 'via' : 'pad' };
       continue;
     }
+    if (/^M48\b/.test(line)) { header = true; continue; }
+    // A header ends with % or M95, or, in some files, where a tool is chosen or a hole drilled.
+    if (header && /^(T\d+\s*$|[XY]|G0[05]\b)/i.test(line)) header = false;
     if (header) {
-      if (/^(METRIC|M71)\b/i.test(line)) unit = 1;
-      else if (/^(INCH|M72)\b/i.test(line)) unit = 25.4;
+      if (/^(METRIC|M71)\b/i.test(line)) headerUnit = 1;
+      else if (/^(INCH|M72)\b/i.test(line)) headerUnit = 25.4;
       const def = /^T(\d+)[^C]*C(\d*\.?\d+)/i.exec(line);
-      if (def) { tools.set(Number(def[1]), { size: Number(def[2]) * unit, ...(typePlated == null ? {} : { plated: typePlated }), ...(pending ?? {}) }); pending = null; }
+      if (def) define(Number(def[1]), Number(def[2]));
       if (line === '%' || /^M95\b/.test(line)) header = false;
       continue;
     }
-    const sel = /^T(\d+)\s*$/i.exec(line);
-    if (sel) { tool = Number(sel[1]); continue; }
+    if (bodyUnit == null && /^M7[12]\b/.test(line)) bodyUnit = line.startsWith('M71') ? 1 : 25.4;
+    // A tool chosen by number, or (OrCAD, with no header) defined where it is first used.
+    const sel = /^T(\d+)(?:[^C]*C(\d*\.?\d+))?/i.exec(line);
+    if (sel) {
+      tool = Number(sel[1]);
+      if (sel[2] && !tools.has(tool)) define(tool, Number(sel[2]));
+      continue;
+    }
+    if (/^M25\b/.test(line)) { pattern = []; recording = true; continue; }
+    if (/^M0?1\b/.test(line)) { recording = false; continue; }
+    if (/^M02(?!\d)/.test(line)) { // M02X…Y…: the pattern again, moved
+      recording = false;
+      for (const [t, slot, n] of pattern ?? []) add(t, slot, n);
+      continue;
+    }
     if (/^G00/i.test(line)) routing = true;
     else if (/^G05\b/i.test(line)) routing = false;
     const repeat = /^R(\d+)/.exec(line);
@@ -358,13 +393,13 @@ function parseExcellon(text, name, progress) {
     if (routing) { if (/^M15\b/.test(line)) add(tool, true); }
     else if (repeat) add(tool, false, Number(repeat[1]));
     else if (/^[XY]/i.test(line)) add(tool, /G85/i.test(line));
-    if ((i & 0x3fff) === 0) progress(i / lines.length);
   }
+  const unit = headerUnit ?? bodyUnit ?? 25.4;
   const holes = holeCounter();
   for (const [key, n] of hits) {
     const [t, shape] = key.split('|');
     const def = tools.get(Number(t));
-    if (def) holes.add({ size: def.size, plated: def.plated ?? filePlated, through: fileThrough, kind: def.kind ?? 'hole', shape }, n);
+    if (def) holes.add({ size: def.c * unit, plated: def.plated ?? filePlated, through: fileThrough, kind: def.kind ?? 'hole', shape }, n);
   }
   progress(1);
   const unknown = filePlated === null && [...tools.values()].some((t) => t.plated == null);
