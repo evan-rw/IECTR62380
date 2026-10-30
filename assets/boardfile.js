@@ -53,6 +53,9 @@ export function boardFormat(text, name = '') {
   const head = text.slice(0, 4096).replace(/^﻿/, '').trimStart();
   if (head.charCodeAt(0) === 0xd0 && head.charCodeAt(1) === 0xcf) return 'Altium binary';
   if (/^\|RECORD=/.test(head) || /\|KIND=Protel_Advanced_PCB/.test(head)) return 'Altium ASCII';
+  // Other text types on Altium's Save Copy As and Export lists, named so the message can say which to pick.
+  if (/^PCB FILE \d/.test(head)) return 'Protel PCB';
+  if (/^ACCEL_ASCII\b/.test(head)) return 'P-CAD ASCII';
   if (/^\(kicad_pcb\b/.test(head)) return 'KiCad';
   if (/^<\?xml/.test(head) && /<IPC-2581\b/.test(head)) return 'IPC-2581';
   if (/^(?:;[^\n]*\n\s*)*M48\b/m.test(head) || (/\.(drl|xln|exc|drd|txt|nc)$/i.test(name) && /^T\d+[^\n]*C[\d.]+/m.test(head))) return 'Excellon';
@@ -68,6 +71,8 @@ export function parseBoardFile(text, name = '', onProgress) {
     case 'IPC-2581': return parseIpc2581(text, progress);
     case 'Excellon': return parseExcellon(text, name, progress);
     case 'Altium binary': throw new Error('This is a binary Altium .PcbDoc. In Altium, save a copy as a PCB ASCII file (File » Save Copy As, type "PCB ASCII File") and import that.');
+    case 'Protel PCB':
+    case 'P-CAD ASCII': throw new Error(`This is a ${format === 'Protel PCB' ? 'Protel PCB 2.8 ASCII (or older Protel)' : 'P-CAD ASCII'} file, which the page does not read. In Altium, save a copy as type "PCB ASCII File (*.PcbDoc)" (File » Save Copy As) and import that.`);
     default: throw new Error('This is not a board file the page can read: an Altium ASCII .PcbDoc, a KiCad .kicad_pcb, an IPC-2581 .xml or an Excellon drill file.');
   }
 }
@@ -93,16 +98,18 @@ function parseAltium(text, progress) {
   const board = {};
   const holes = holeCounter();
   const len = text.length;
+  // Lines end in CR LF, but a genuine export also parts some records with a lone CR.
+  const eol = /[\r\n]/g;
   let pos = 0;
   let lines = 0;
   while (pos < len) {
-    let end = text.indexOf('\n', pos);
-    if (end < 0) end = len;
+    eol.lastIndex = pos;
+    const end = eol.exec(text)?.index ?? len;
     if (text.startsWith('|RECORD=', pos)) {
       const bar = text.indexOf('|', pos + 8);
       const kind = text.slice(pos + 8, bar < 0 || bar > end ? end : bar).trim();
       if (kind === 'Board' || kind === 'Via' || kind === 'Pad') {
-        const line = text.slice(pos, end).replace(/\r$/, '');
+        const line = text.slice(pos, end);
         if (kind === 'Board') recordFields(line, board);
         else {
           const f = recordFields(line);
@@ -135,12 +142,17 @@ function altiumStack(b) {
   const copper = [];
   const dielectric = [];
   if (`V9_STACK_LAYER0_NAME` in b) {
+    // Every dielectric between the outer copper layers is the laminate, whatever its DIELTYPE (a genuine
+    // export marks its 1.2 mm core 2); solder resist and any top or bottom dielectric lie outside them.
+    let below = [];
     for (let i = 0; `V9_STACK_LAYER${i}_NAME` in b; i++) {
       const g = (k) => b[`V9_STACK_LAYER${i}_${k}`];
       const cu = lengthMm(g('COPTHICK'));
-      if (cu > 0) copper.push(cu);
-      // Dielectric types 0 (core) and 1 (prepreg) are the laminate; 3 is solder resist, outside it.
-      else if (['0', '1'].includes(g('DIELTYPE')) && lengthMm(g('DIELHEIGHT')) > 0) dielectric.push({ mm: lengthMm(g('DIELHEIGHT')), material: g('DIELMATERIAL') ?? '' });
+      if (cu > 0) {
+        if (copper.length) dielectric.push(...below);
+        copper.push(cu);
+        below = [];
+      } else if (lengthMm(g('DIELHEIGHT')) > 0) below.push({ mm: lengthMm(g('DIELHEIGHT')), material: g('DIELMATERIAL') ?? '' });
     }
   } else if ('LAYER1NAME' in b) {
     const seen = new Set();
@@ -302,14 +314,16 @@ function parseIpc2581(text, progress) {
 // Excellon drill file: a tool table, then one line per hole (or slot)
 
 function parseExcellon(text, name, progress) {
-  const lines = text.split(/\r?\n/);
+  const lines = text.split(/\r\n|\r|\n/);
   let unit = 25.4; // Excellon's default is inches
   let filePlated = /NPTH|NON.?PLATED/i.test(name) ? false : /PTH|PLATED/i.test(name) ? true : null;
   let fileThrough = true;
   const tools = new Map(); // T number -> { size, plated, kind }
   let pending = null; // a tool attribute comment applies to the next tool definition
+  let typePlated = null; // Altium's ;TYPE=PLATED or ;TYPE=NON_PLATED, for the tools defined after it
   let header = true;
   let tool = null;
+  let routing = false; // G00 starts route mode, where M15 plunges for a slot and X/Y lines are its path; G05 ends it
   const hits = new Map();
   const add = (t, slot, n = 1) => {
     const key = `${t}|${slot ? 'slot' : 'round'}`;
@@ -321,8 +335,8 @@ function parseExcellon(text, name, progress) {
     if (line.startsWith(';')) {
       const ff = /TF\.FileFunction,(Plated|NonPlated),\d+,\d+,(\w+)/i.exec(line);
       if (ff) { filePlated = ff[1].toLowerCase() === 'plated'; fileThrough = /^N?PTH$/i.test(ff[2]); }
-      if (/TYPE=NON_PLATED/i.test(line)) filePlated = false;
-      else if (/TYPE=PLATED/i.test(line)) filePlated = true;
+      if (/TYPE=NON_PLATED/i.test(line)) filePlated = typePlated = false;
+      else if (/TYPE=PLATED/i.test(line)) filePlated = typePlated = true;
       const af = /TA\.AperFunction,(Plated|NonPlated),\w+,(\w+)/i.exec(line);
       if (af) pending = { plated: af[1].toLowerCase() === 'plated', kind: /Via/i.test(af[2]) ? 'via' : 'pad' };
       continue;
@@ -331,15 +345,19 @@ function parseExcellon(text, name, progress) {
       if (/^(METRIC|M71)\b/i.test(line)) unit = 1;
       else if (/^(INCH|M72)\b/i.test(line)) unit = 25.4;
       const def = /^T(\d+)[^C]*C(\d*\.?\d+)/i.exec(line);
-      if (def) { tools.set(Number(def[1]), { size: Number(def[2]) * unit, ...(pending ?? {}) }); pending = null; }
+      if (def) { tools.set(Number(def[1]), { size: Number(def[2]) * unit, ...(typePlated == null ? {} : { plated: typePlated }), ...(pending ?? {}) }); pending = null; }
       if (line === '%' || /^M95\b/.test(line)) header = false;
       continue;
     }
     const sel = /^T(\d+)\s*$/i.exec(line);
     if (sel) { tool = Number(sel[1]); continue; }
+    if (/^G00/i.test(line)) routing = true;
+    else if (/^G05\b/i.test(line)) routing = false;
     const repeat = /^R(\d+)/.exec(line);
-    if (tool != null && repeat) add(tool, false, Number(repeat[1]));
-    else if (tool != null && /^[XY]/i.test(line)) add(tool, /G85/i.test(line));
+    if (tool == null) continue;
+    if (routing) { if (/^M15\b/.test(line)) add(tool, true); }
+    else if (repeat) add(tool, false, Number(repeat[1]));
+    else if (/^[XY]/i.test(line)) add(tool, /G85/i.test(line));
     if ((i & 0x3fff) === 0) progress(i / lines.length);
   }
   const holes = holeCounter();

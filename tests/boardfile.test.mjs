@@ -27,6 +27,9 @@ test('each file is told by its first bytes and its name; a binary .PcbDoc is tur
   assert.equal(boardFormat(board('altium-stackup.PcbDoc')), 'Altium ASCII');
   const binary = String.fromCharCode(0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1) + '\0'.repeat(20);
   assert.throws(() => parseBoardFile(binary, 'x.PcbDoc'), /binary Altium \.PcbDoc.*Save Copy As.*PCB ASCII File/);
+  // The other text types on Altium's lists are named, with the one to pick instead.
+  assert.throws(() => parseBoardFile('PCB FILE 6 VERSION 2.80\r\n', 'x.pcb'), /Protel PCB 2\.8 ASCII.*"PCB ASCII File \(\*\.PcbDoc\)"/);
+  assert.throws(() => parseBoardFile('ACCEL_ASCII "x.pcb"\r\n', 'x.pcb'), /P-CAD ASCII.*"PCB ASCII File \(\*\.PcbDoc\)"/);
   assert.throws(() => parseBoardFile('hello', 'x.txt'), /not a board file the page can read/);
 });
 
@@ -65,6 +68,12 @@ test('Altium ASCII: vias in bare mils, pads with units, slots, blind vias, and t
   // Without Altium's newest stack (V9), the older chain LAYER1 → 39 → 40 → 32 gives the same.
   const old = parseBoardFile(board('altium-stackup.PcbDoc').replace(/^\|RECORD=Board\|V9_STACK.*\n/m, ''), 'x.PcbDoc');
   assert.deepEqual([old.thickness.mm, old.copperLayers, old.materials], [1.519, 4, ['Isola 370HR']]);
+  // A genuine export (Nordic's Thingy:91) marks its 1.2 mm core DIELTYPE 2 and parts some records with a
+  // lone CR: every dielectric between the outer copper layers counts, and any line ending will do.
+  const type2 = board('altium-stackup.PcbDoc').replace('V9_STACK_LAYER4_DIELTYPE=0', 'V9_STACK_LAYER4_DIELTYPE=2');
+  assert.equal(parseBoardFile(type2, 'x.PcbDoc').thickness.mm, 1.519);
+  const crOnly = parseBoardFile(board('altium-stackup.PcbDoc').replace(/\n/g, '\r'), 'x.PcbDoc');
+  assert.deepEqual([holes(crOnly), crOnly.thickness.mm], [holes(r), 1.519]);
   // SimpleFOC Mini (an EasyEDA export): holes, no stackup.
   const mini = parseBoardFile(board('simplefocmini.pcbdoc'), 'simplefocmini.pcbdoc');
   assert.deepEqual(holes(mini), ['0.3 via plated through ×8', '0.3048 via plated through ×42', '1.02 pad plated through ×3', '1.1 pad plated through ×13', '2 pad plated through ×4']);
@@ -79,6 +88,19 @@ test('Excellon in inches with Altium\'s plating line, and a file that does not s
   assert.deepEqual(holes(parseBoardFile(unplated, 'board.TXT')).map((h) => h.includes('unplated')), [true, true]);
   const silent = parseBoardFile(altium.replace(';TYPE=PLATED\n', ''), 'board.drl');
   assert.deepEqual(silent.notes, ['The drill file does not say whether its holes are plated.']);
+});
+
+test('Excellon from Altium: plated and unplated tools in one header, and routed slots', () => {
+  // The round holes' file lists the plated tools, then the unplated ones.
+  const round = 'M48\n;FILE_FORMAT=2:5\nINCH,LZ\n;TYPE=PLATED\nT1F00S00C0.0059\nT2F00S00C0.0354\n;TYPE=NON_PLATED\nT3F00S00C0.0354\nT4F00S00C0.1181\n%\n'
+    + 'T01\nX0010000Y0010000\nX0020000\nT02\nX0030000Y0020000\nT03\nX0040000Y0020000\nT04\nX0050000Y0030000\nM30\n';
+  const ROUND = ['0.1499 hole plated through ×2', '0.8992 hole plated through ×1', '0.8992 hole unplated through ×1', '2.9997 hole unplated through ×1'];
+  assert.deepEqual(holes(parseBoardFile(round, 'board-RoundHoles.TXT')), ROUND);
+  assert.deepEqual(holes(parseBoardFile(round.replace(/\n/g, '\r'), 'board-RoundHoles.TXT')), ROUND, 'lone CR line ends');
+  // Each slot is routed: G00 to its start, M15 down, G01 along (further X/Y lines continue the path), M16 up.
+  const slots = 'M48\n;FILE_FORMAT=2:5\nINCH,LZ\n;TYPE=PLATED\nT4F00S00C0.0197\n;TYPE=NON_PLATED\n%\nG90\nG05\nT04\n'
+    + 'G00X0007000Y0080000\nM15\nG01X0004000\nY0085000\nM16\nG00X0007000Y0110000\nM15\nG01X0004000\nM16\nM17\nM30\n';
+  assert.deepEqual(holes(parseBoardFile(slots, 'board-SlotHoles.TXT')), ['0.5004 hole slot plated through ×2']);
 });
 
 test('IPC-2581 in inches', () => {
