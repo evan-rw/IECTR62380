@@ -15,11 +15,12 @@ self.onmessage = async ({ data }) => {
     self.postMessage({ type: 'progress', fraction, stage });
   };
   try {
-    const text = decodeText(await readBytes(data.file, (f) => report(f * READ_SHARE, 'read')));
+    // A board file goes in as bytes: a binary .PcbDoc is no text.
+    const bytes = await readBytes(data.file, (f) => report(f * READ_SHARE, 'read'));
     const rest = (f, stage) => report(READ_SHARE + (1 - READ_SHARE) * f, stage);
     let result;
-    if (data.kind === 'netlist') result = netlistToParts(text, rest);
-    else if (data.kind === 'board') result = parseBoardFile(text, data.file.name ?? '', (f) => rest(f, 'parse'));
+    if (data.kind === 'netlist') result = netlistToParts(decodeText(bytes), rest);
+    else if (data.kind === 'board') result = parseBoardFile(bytes, data.file.name ?? '', (f) => rest(f, 'parse'));
     else throw new Error(`Unknown import: ${data.kind}`);
     self.postMessage({ type: 'done', result });
   } catch (err) {

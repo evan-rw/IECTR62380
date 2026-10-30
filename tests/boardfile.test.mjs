@@ -2,8 +2,9 @@
 // tests/fixtures/boards: test-board.kicad_pcb is a small 4-layer board written for these tests (three
 // through vias, a blind via, two plated holes, a plated slot, an unplated hole, an SMD pad, and a
 // dielectric made of two sub-layers); test-board.xml and test-board-*.drl are KiCad 10's own IPC-2581
-// and Excellon exports of it. simplefocmini.pcbdoc is a public Altium ASCII board (MIT; see
-// THIRD_PARTY_NOTICES.md); altium-stackup.PcbDoc and pcad-test.pcb (P-CAD ASCII) are written for these tests.
+// and Excellon exports of it. simplefocmini.pcbdoc is a public Altium ASCII board and DM6010_R2M2E2.PcbDoc
+// a public binary one (both MIT; see THIRD_PARTY_NOTICES.md); altium-stackup.PcbDoc and pcad-test.pcb
+// (P-CAD ASCII) are written for these tests.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -11,23 +12,103 @@ import { openPage, root } from './_page.mjs';
 
 const { parseBoardFile, boardFormat, laminateFor } = await import(new URL('assets/boardfile.js', root).href);
 const board = (name) => readFileSync(new URL(`tests/fixtures/boards/${name}`, root), 'latin1');
+const boardBytes = (name) => new Uint8Array(readFileSync(new URL(`tests/fixtures/boards/${name}`, root)));
 // "0.3 via plated through ×3": one line per counted hole kind, sorted.
-const holes = (r) => r.holes.map((h) => `${h.size} ${h.kind}${h.shape === 'slot' ? ' slot' : ''} ${h.plated ? 'plated' : 'unplated'} ${h.through ? 'through' : 'partial'} ×${h.count}`).sort();
+const holes = (r) => r.holes.map((h) => `${h.size} ${h.kind}${h.shape === 'round' ? '' : ` ${h.shape}`} ${h.plated ? 'plated' : 'unplated'} ${h.through ? 'through' : 'partial'} ×${h.count}`).sort();
+
+// A compound file ([MS-CFB]) holding `streams` ({ 'Board6/Data': bytes, … }), each under 4096 bytes and so
+// in the mini stream: the header, the directory, the mini sector table, the mini stream and one FAT sector.
+// `loop` sends the first stream's second mini sector back to its first.
+function compoundFile(streams, { loop = false } = {}) {
+  const S = 512;
+  const M = 64;
+  const END = 0xfffffffe;
+  const NONE = 0xffffffff;
+  const miniTable = [];
+  const placed = [];
+  let mini = new Uint8Array(0);
+  for (const [path, data] of Object.entries(streams)) {
+    const start = miniTable.length;
+    const n = Math.max(1, Math.ceil(data.length / M));
+    for (let i = 1; i <= n; i++) miniTable.push(i === n ? END : start + i);
+    const grown = new Uint8Array((start + n) * M);
+    grown.set(mini);
+    grown.set(data, start * M);
+    mini = grown;
+    placed.push({ path, start, size: data.length });
+  }
+  if (loop) miniTable[1] = 0;
+  // The root, then each storage with its stream as its child; the storages are chained to the right.
+  const entries = [{ name: 'Root Entry', type: 5, child: 1 }];
+  placed.forEach(({ path, start, size }, i) => {
+    const [storage, name] = path.split('/');
+    const id = entries.length;
+    entries.push({ name: storage, type: 1, child: id + 1, right: i < placed.length - 1 ? id + 2 : NONE }, { name, type: 2, start, size });
+  });
+  const dirSectors = Math.ceil(entries.length / 4);
+  const tableSectors = Math.ceil((miniTable.length * 4) / S);
+  const miniSectors = Math.ceil(mini.length / S);
+  const fatAt = dirSectors + tableSectors + miniSectors;
+  Object.assign(entries[0], { start: dirSectors + tableSectors, size: mini.length });
+  const out = new Uint8Array(S * (fatAt + 2));
+  const dv = new DataView(out.buffer);
+  const at = (sector) => S * (sector + 1);
+  out.set([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+  [[24, 0x3e], [26, 3], [28, 0xfffe], [30, 9], [32, 6]].forEach(([o, v]) => dv.setUint16(o, v, true));
+  [[44, 1], [48, 0], [56, 4096], [60, dirSectors], [64, tableSectors], [68, END]].forEach(([o, v]) => dv.setUint32(o, v, true));
+  for (let i = 0; i < 109; i++) dv.setUint32(76 + i * 4, i ? NONE : fatAt, true);
+  entries.forEach((e, i) => {
+    const o = at(0) + i * 128;
+    for (let k = 0; k < e.name.length; k++) dv.setUint16(o + k * 2, e.name.charCodeAt(k), true);
+    dv.setUint16(o + 64, (e.name.length + 1) * 2, true);
+    out[o + 66] = e.type;
+    [[68, NONE], [72, e.right ?? NONE], [76, e.child ?? NONE], [116, e.start ?? 0], [120, e.size ?? 0]].forEach(([k, v]) => dv.setUint32(o + k, v, true));
+  });
+  for (let i = 0; i < (tableSectors * S) / 4; i++) dv.setUint32(at(dirSectors) + i * 4, miniTable[i] ?? NONE, true);
+  out.set(mini, at(dirSectors + tableSectors));
+  const fat = [];
+  for (const n of [dirSectors, tableSectors, miniSectors]) for (let i = 1, s = fat.length; i <= n; i++) fat.push(i === n ? END : s + i);
+  fat.push(0xfffffffd);
+  for (let i = 0; i < S / 4; i++) dv.setUint32(at(fatAt) + i * 4, fat[i] ?? NONE, true);
+  return out;
+}
+
+// Altium's binary records, as the reader takes them: lengths in 1/10000 mil.
+const join = (...parts) => Uint8Array.from(parts.flatMap((p) => [...p]));
+const le32 = (v) => { const b = new Uint8Array(4); new DataView(b.buffer).setInt32(0, v, true); return b; };
+const units = (mm) => Math.round((mm / 0.0254) * 10000);
+const boardBlock = (text, flags = 0) => join(le32((text.length + 1) | (flags << 24)), new TextEncoder().encode(text), [0]);
+function altiumPad(mm, { plated = true, shape = null } = {}) {
+  const pad = new Uint8Array(120);
+  pad[0] = 74; // Multi-Layer
+  new DataView(pad.buffer).setInt32(45, units(mm), true);
+  pad[60] = plated ? 1 : 0;
+  const sizes = new Uint8Array(shape == null ? 0 : 596);
+  if (shape != null) sizes[262] = shape;
+  return join([2], le32(2), [1, 0x31], le32(0), le32(0), le32(0), le32(pad.length), pad, le32(sizes.length), sizes);
+}
+function altiumVia(mm, start, end) {
+  const via = new Uint8Array(209);
+  via[0] = 74;
+  new DataView(via.buffer).setInt32(25, units(mm), true);
+  [via[29], via[30]] = [start, end];
+  return join([3], le32(via.length), via);
+}
 
 // KiCad's own statistics for test-board.kicad_pcb (kicad-cli pcb export stats): board thickness 1.5600 mm
 // with two 0.01 mm solder masks; 3 through vias of 0.3 mm, 1 blind via of 0.2 mm (F.Cu to In1.Cu),
 // 2 plated holes of 1.0 mm, 1 plated slot 0.6 × 1.8 mm, 1 unplated hole of 3.2 mm.
 const TEST_BOARD = ['0.2 via plated partial ×1', '0.3 via plated through ×3', '0.6 pad slot plated through ×1', '1 pad plated through ×2', '3.2 pad unplated through ×1'];
 
-test('each file is told by its first bytes and its name; a binary .PcbDoc is turned away with what to do', () => {
+test('each file is told by its first bytes and its name; files the page cannot read are named, with what to do', () => {
   assert.equal(boardFormat(board('test-board.kicad_pcb')), 'KiCad');
   assert.equal(boardFormat(board('test-board.xml')), 'IPC-2581');
   assert.equal(boardFormat(board('test-board-PTH.drl'), 'test-board-PTH.drl'), 'Excellon');
   assert.equal(boardFormat(board('simplefocmini.pcbdoc')), 'Altium ASCII');
   assert.equal(boardFormat(board('altium-stackup.PcbDoc')), 'Altium ASCII');
   assert.equal(boardFormat(board('pcad-test.pcb')), 'P-CAD ASCII');
-  const binary = String.fromCharCode(0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1) + '\0'.repeat(20);
-  assert.throws(() => parseBoardFile(binary, 'x.PcbDoc'), /binary Altium \.PcbDoc.*Save Copy As.*PCB ASCII File/);
+  // A compound file with no Altium board in it, such as CircuitStudio's.
+  assert.throws(() => parseBoardFile(compoundFile({ 'Other/Data': new Uint8Array(8) }), 'x.CSPcbDoc'), /holds no Altium board.*NC drill \(Excellon\)/);
   // The other text types on Altium's lists are named, with the one to pick instead.
   assert.throws(() => parseBoardFile('PCB FILE 6 VERSION 2.80\r\n', 'x.pcb'), /Protel PCB 2\.8 ASCII.*"PCB ASCII File \(\*\.PcbDoc\)"/);
   // P-CAD 2006's binary .pcb, as its first bytes read.
@@ -186,10 +267,40 @@ test('P-CAD ASCII from Altium\'s export: no plating stated, so pad holes are of 
   assert.match(r.notes[0], /^The file does not say which holes are plated or which are slots \(Altium’s P-CAD export leaves both out\)/);
 });
 
+test('binary Altium .PcbDoc: Altium\'s own drill report for a public board, hole for hole', () => {
+  // DM6010_R2M2E2.DRR (Altium's NC drill report, in the same repository): 60 × 0.203 mm round PTH, 4 × 0.5 mm
+  // slots PTH, 5 × 0.5 mm rectangles PTH, 8 × 0.7 mm slots PTH, 2 × 0.75 mm and 2 × 1.5 mm round NPTH.
+  const r = parseBoardFile(boardBytes('DM6010_R2M2E2.PcbDoc'), 'DM6010_R2M2E2.PcbDoc');
+  assert.equal(r.format, 'Altium binary');
+  assert.deepEqual(holes(r), ['0.2032 via plated through ×60', '0.5 pad slot plated through ×4', '0.5 pad square plated through ×5', '0.7 pad slot plated through ×8', '0.75 pad unplated through ×2', '1.5 pad unplated through ×2']);
+  // The stackup from the Board6 stream, which holds the ASCII file's Board record text.
+  assert.deepEqual([r.thickness.mm, r.copperLayers, r.materials], [0.972, 4, ['PP-006', 'Core-038']]);
+});
+
+test('binary Altium .PcbDoc: blind and buried vias, square holes, small streams, and damaged files', () => {
+  const streams = {
+    // Board6 text parted by a lone CR as in a real file; a block flagged binary is passed over.
+    'Board6/Data': join(
+      boardBlock('|SELECTION=FALSE|V9_STACK_LAYER0_NAME=Top Layer|V9_STACK_LAYER0_COPTHICK=1.4mil|V9_STACK_LAYER1_NAME=Core|V9_STACK_LAYER1_DIELHEIGHT=59mil|V9_STACK_LAYER1_DIELMATERIAL=FR-4\r|RECORD=Board|V9_STACK_LAYER2_NAME=Bottom Layer|V9_STACK_LAYER2_COPTHICK=1.4mil'),
+      boardBlock('|V9_STACK_LAYER9_NAME=junk', 1),
+    ),
+    'Pads6/Data': join(altiumPad(1), altiumPad(1, { shape: 0 }), altiumPad(3.2, { plated: false }), altiumPad(0.6, { shape: 2 }), altiumPad(1.2, { shape: 1 }), altiumPad(0)),
+    'Vias6/Data': join(altiumVia(0.3, 1, 32), altiumVia(0.3, 32, 1), altiumVia(0.15, 1, 2), altiumVia(0.1, 2, 3)),
+  };
+  const r = parseBoardFile(compoundFile(streams), 'x.PcbDoc');
+  assert.deepEqual(holes(r), ['0.1 via plated partial ×1', '0.15 via plated partial ×1', '0.3 via plated through ×2', '0.6 pad slot plated through ×1', '1 pad plated through ×2', '1.2 pad square plated through ×1', '3.2 pad unplated through ×1']);
+  assert.deepEqual([r.thickness.mm, r.copperLayers, r.materials], [1.57, 2, ['FR-4']]);
+  assert.throws(() => parseBoardFile(compoundFile(streams, { loop: true }), 'x.PcbDoc'), /^Error: The file is damaged: a stream loops\.$/);
+  assert.throws(() => parseBoardFile(boardBytes('DM6010_R2M2E2.PcbDoc').subarray(0, 4096), 'x.PcbDoc'), /^Error: The file is damaged/);
+  assert.throws(() => parseBoardFile(compoundFile({ ...streams, 'Pads6/Data': join(altiumPad(1), [5, 0, 0]) }), 'x.PcbDoc'), /pads in this \.PcbDoc could not be read \(at byte 147\).*Save Copy As/);
+  // The ASCII file names the same hole shapes.
+  assert.deepEqual(holes(parseBoardFile('|RECORD=Pad|HOLESIZE=40mil|HOLETYPE=1|PLATED=TRUE\r\n', 'x.PcbDoc')), ['1.016 pad square plated through ×1']);
+});
+
 test('every reader reports steady progress that ends at 1', () => {
-  for (const name of ['test-board.kicad_pcb', 'test-board.xml', 'test-board-PTH.drl', 'simplefocmini.pcbdoc', 'pcad-test.pcb']) {
+  for (const name of ['test-board.kicad_pcb', 'test-board.xml', 'test-board-PTH.drl', 'simplefocmini.pcbdoc', 'pcad-test.pcb', 'DM6010_R2M2E2.PcbDoc']) {
     const seen = [];
-    parseBoardFile(board(name), name, (f) => seen.push(f));
+    parseBoardFile(name.endsWith('.PcbDoc') ? boardBytes(name) : board(name), name, (f) => seen.push(f));
     assert.ok(seen.length >= 1 && seen.at(-1) === 1 && seen.every((f, i) => f >= 0 && f <= 1 && (i === 0 || f >= seen[i - 1])), `${name}: ${seen}`);
   }
 });
@@ -202,7 +313,8 @@ const { $, $$, fire, settle, typeInto, click, choose, window } = await openPage(
 async function importBoard(name, text) {
   $('#pcb-report').hidden = true;
   const input = $('#board-file');
-  Object.defineProperty(input, 'files', { value: [{ name, arrayBuffer: async () => new TextEncoder().encode(text).buffer }], configurable: true });
+  const bytes = typeof text === 'string' ? new TextEncoder().encode(text) : text;
+  Object.defineProperty(input, 'files', { value: [{ name, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) }], configurable: true });
   fire(input, 'change');
   for (let i = 0; i < 200 && $('#pcb-report').hidden; i++) await settle(10);
 }
@@ -274,4 +386,12 @@ test('a P-CAD file from Altium\'s export: its hole sizes, with the plating and t
   report = $('#pcb-report').textContent.replace(/\s+/g, ' ');
   assert.match(report, /The page does not read the layer stackup of a P-CAD file yet: enter the board thickness and laminate\./);
   assert.doesNotMatch(report, /The file has no layer stackup/);
+});
+
+test('a binary .PcbDoc on the page: its round plated holes, with slots, square and unplated holes left out', async () => {
+  await importBoard('DM6010_R2M2E2.PcbDoc', boardBytes('DM6010_R2M2E2.PcbDoc'));
+  assert.deepEqual(rows().map((r) => $('input', r).value), ['0.203 mm: 60 vias']);
+  const report = $('#pcb-report').textContent.replace(/\s+/g, ' ');
+  assert.match(report, /Read “DM6010_R2M2E2\.PcbDoc” \(Altium binary, 4 copper layers, 0\.972 mm, PP-006, Core-038\)\./);
+  assert.match(report, /Left out: 4 unplated holes \(no barrel to crack\); 12 plated slots \(the model is for round holes\); 5 plated square holes \(the model is for round holes\)\./);
 });

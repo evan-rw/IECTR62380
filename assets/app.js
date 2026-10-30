@@ -1751,9 +1751,10 @@ function importWithProgress(kind, file, title) {
     : { read: `Reading ${file.name}…`, parse: 'Reading the parts and nets…', sort: 'Sorting the parts into lines…' };
   const progress = openProgress({ title, text: stages.read });
   const here = async () => {
-    const text = decodeText(await readBytes(file, (f) => progress.set(f * READ_SHARE, stages.read)));
+    // A board file goes in as bytes: a binary .PcbDoc is no text.
+    const bytes = await readBytes(file, (f) => progress.set(f * READ_SHARE, stages.read));
     const rest = (f, stage) => progress.set(READ_SHARE + (1 - READ_SHARE) * f, stages[stage]);
-    return kind === 'board' ? parseBoardFile(text, file.name, (f) => rest(f, 'parse')) : netlistToParts(text, rest);
+    return kind === 'board' ? parseBoardFile(bytes, file.name, (f) => rest(f, 'parse')) : netlistToParts(decodeText(bytes), rest);
   };
   return new Promise((resolve, reject) => {
     const finish = (fn, value) => { progress.close(); fn(value); };
@@ -1827,6 +1828,7 @@ function applyBoardFile(r, fileName) {
     [sum((h) => h.plated === false), 'unplated hole', 'no barrel to crack'],
     [sum((h) => h.plated !== false && !h.through), 'blind or buried via', 'the model is for through holes'],
     [sum((h) => h.plated !== false && h.through && h.shape === 'slot'), 'plated slot', 'the model is for round holes'],
+    [sum((h) => h.plated !== false && h.through && h.shape === 'square'), 'plated square hole', 'the model is for round holes'],
   ].filter(([n]) => n).map(([n, what, why]) => `${count(n, what)} (${why})`);
   const facts = [r.copperLayers && `${r.copperLayers} copper layers`, r.thickness && `${mm(r.thickness.mm)} mm`, r.materials.length && r.materials.join(', ')].filter(Boolean);
   renderPcb();

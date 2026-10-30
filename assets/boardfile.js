@@ -1,17 +1,22 @@
-// Board files for the Circuit board check: drilled holes and the layer stackup from Altium ASCII
-// .PcbDoc, KiCad .kicad_pcb, IPC-2581, P-CAD ASCII .pcb and Excellon drill files. Pure functions, text in and data out,
-// written to walk a large file once (files of 50 MB and more), reporting how far they are.
+// Board files for the Circuit board check: drilled holes and the layer stackup from Altium .PcbDoc
+// (binary or ASCII), KiCad .kicad_pcb, IPC-2581, P-CAD ASCII .pcb and Excellon drill files. Pure
+// functions, file in and data out, written to walk a large file once (files of 50 MB and more), reporting
+// how far they are.
 //
-// parseBoardFile(text, name, onProgress) -> {
-//   format,                        'Altium ASCII', 'KiCad', 'IPC-2581', 'P-CAD ASCII' or 'Excellon'
+// parseBoardFile(bytes or text, name, onProgress) -> {
+//   format,                        'Altium binary', 'Altium ASCII', 'KiCad', 'IPC-2581', 'P-CAD ASCII'
+//                                  or 'Excellon'
 //   holes: [{ size, plated, through, kind, shape, count }],
 //                                  size: finished hole diameter (slot width) in mm; plated true,
 //                                  false or null (the file does not say); through: from the top
 //                                  copper layer to the bottom one; kind 'via', 'pad' or 'hole';
-//                                  shape 'round' or 'slot'; count: how many
+//                                  shape 'round', 'square' or 'slot'; count: how many
 //   thickness: { mm, from, detail } or null, from 'stated' or 'stack'
 //   copperLayers, materials: dielectric material names, notes: [],
 //   noStack: what to say instead of "no layer stackup" when thickness is null (optional) }
+
+import { isCompoundFile, readCompoundFile } from './compoundfile.js';
+import { decodeText } from './readfile.js';
 
 const MIL = 0.0254;
 const round = (x, d = 4) => +x.toFixed(d);
@@ -67,21 +72,24 @@ export function boardFormat(text, name = '') {
   return null;
 }
 
-export function parseBoardFile(text, name = '', onProgress) {
-  const format = boardFormat(text, name);
+// The file's bytes as read, or its text.
+export function parseBoardFile(file, name = '', onProgress) {
   const progress = throttle(onProgress);
+  if (typeof file !== 'string' && isCompoundFile(file)) return parseAltiumBinary(file, progress);
+  const text = typeof file === 'string' ? file : decodeText(file);
+  const format = boardFormat(text, name);
   switch (format) {
     case 'Altium ASCII': return parseAltium(text, progress);
     case 'KiCad': return parseKicadPcb(text, progress);
     case 'IPC-2581': return parseIpc2581(text, progress);
     case 'P-CAD ASCII': return parsePcad(text, progress);
     case 'Excellon': return parseExcellon(text, name, progress);
-    case 'Altium binary': throw new Error('This is a binary Altium .PcbDoc. In Altium, save a copy as a PCB ASCII file (File » Save Copy As, type "PCB ASCII File") and import that.');
+    case 'Altium binary': throw new Error('A binary .PcbDoc has to be read as bytes, not as text.');
     case 'P-CAD binary': throw new Error('This is a binary P-CAD .pcb. In P-CAD PCB, save a copy as an ASCII file (File » Save As, ASCII type) and import that.');
     case 'Protel PCB': throw new Error('This is a Protel PCB 2.8 ASCII (or older Protel) file, which the page does not read. In Altium, save a copy as type "PCB ASCII File (*.PcbDoc)" (File » Save Copy As) and import that.');
     case 'Gerber': throw new Error('This is a Gerber file (copper, mask, silkscreen or a drill drawing), not a drill file. Import the Excellon drill file from the same set instead: .drl, or .TXT from Altium.');
     case 'EIA drill': throw new Error('This is a drill file in the old EIA tape code, which the page does not read (Altium writes one as .DRL). Import the ASCII drill file beside it instead: Altium\'s drill report (.DRR) names it, usually a .TXT.');
-    default: throw new Error('This is not a board file the page can read: an Altium ASCII .PcbDoc, a KiCad .kicad_pcb, an IPC-2581 .xml, a P-CAD ASCII .pcb or an Excellon drill file.');
+    default: throw new Error('This is not a board file the page can read: an Altium .PcbDoc, a KiCad .kicad_pcb, an IPC-2581 .xml, a P-CAD ASCII .pcb or an Excellon drill file.');
   }
 }
 
@@ -131,7 +139,7 @@ function parseAltium(text, progress) {
               plated: (f.PLATED ?? 'TRUE').toUpperCase() !== 'FALSE',
               through: true,
               kind: 'pad',
-              shape: f.HOLETYPE === '2' ? 'slot' : 'round',
+              shape: ALTIUM_HOLE_SHAPES[f.HOLETYPE] ?? 'round',
             });
           }
         }
@@ -142,6 +150,83 @@ function parseAltium(text, progress) {
   }
   progress(1);
   return { format: 'Altium ASCII', holes: holes.list(), ...altiumStack(board), notes: [] };
+}
+
+// ---------------------------------------------------------------------------
+// Binary Altium .PcbDoc: a compound file (compoundfile.js) whose Board6, Pads6 and Vias6 storages each
+// hold a Data stream. Board6's is the ASCII file's Board record text; pads and vias are binary records
+// with lengths as int32 in 1/10000 mil. The offsets are those KiCad reads (pcbnew/pcb_io/altium/
+// altium_parser_pcb.cpp) and tscircuit/altiumts agrees with; checked against Altium's own drill reports
+// for 7 boards (3,770 holes, blind, buried and micro vias among them).
+
+const ALTIUM_UNIT = MIL / 10000;
+const ALTIUM_HOLE_SHAPES = { 0: 'round', 1: 'square', 2: 'slot' };
+
+function parseAltiumBinary(bytes, progress) {
+  const file = readCompoundFile(bytes);
+  const data = (storage) => file.stream(`${storage}/Data`) ?? new Uint8Array(0);
+  const boardData = file.stream('Board6/Data');
+  if (!boardData) throw new Error('This binary file holds no Altium board. A CircuitStudio or CircuitMaker board is stored differently: import its NC drill (Excellon) files instead.');
+  const unreadable = (what, at) => {
+    throw new Error(`The ${what} in this .PcbDoc could not be read (at byte ${at}): the file may be damaged or from an Altium version the page does not know. In Altium, save a copy as a PCB ASCII file (File » Save Copy As) and import that.`);
+  };
+  const view = (b) => new DataView(b.buffer, b.byteOffset, b.byteLength);
+  // Board6: text blocks, each after its length (a set top byte marks a binary block), parted by a lone
+  // CR as the ASCII file's Board records are.
+  const board = {};
+  const bv = view(boardData);
+  for (let o = 0; o + 4 <= boardData.length;) {
+    const head = bv.getUint32(o, true);
+    const end = Math.min(o + 4 + (head & 0xffffff), boardData.length);
+    if (!(head >>> 24)) for (const line of new TextDecoder('windows-1252').decode(boardData.subarray(o + 4, end)).split(/[\r\n\0]+/)) recordFields(line, board);
+    o = end;
+  }
+  progress(0.3);
+  const holes = holeCounter();
+  // Pads6: a 2, then six parts, each after its length. Part 5 is the pad: hole size at 45 (0 for a
+  // surface-mount pad), plated at 60. Part 6 holds the hole shape at 262, or is empty for a round hole.
+  // A drilled pad goes through the board.
+  const pads = data('Pads6');
+  const pv = view(pads);
+  for (let o = 0; o < pads.length;) {
+    if (pads[o] !== 2) unreadable('pads', o);
+    const at = o;
+    const parts = [];
+    for (let k = 0, p = o + 1; k < 6; k++) {
+      if (p + 4 > pads.length) unreadable('pads', at);
+      const n = pv.getUint32(p, true);
+      if (p + 4 + n > pads.length) unreadable('pads', at);
+      parts.push([p + 4, n]);
+      p += 4 + n;
+      o = p;
+    }
+    const [pad, padLength] = parts[4];
+    const [shape, shapeLength] = parts[5];
+    if (padLength < 61) unreadable('pads', at);
+    holes.add({
+      size: pv.getInt32(pad + 45, true) * ALTIUM_UNIT,
+      plated: pads[pad + 60] !== 0,
+      through: true,
+      kind: 'pad',
+      shape: shapeLength > 262 ? ALTIUM_HOLE_SHAPES[pads[shape + 262]] ?? 'round' : 'round',
+    });
+  }
+  progress(0.6);
+  // Vias6: a 3 and one part after its length: hole size at 25, the start and end layers at 29 and 30
+  // (1 the top, 32 the bottom). Every via is plated.
+  const vias = data('Vias6');
+  const vv = view(vias);
+  for (let o = 0; o < vias.length;) {
+    if (vias[o] !== 3 || o + 5 > vias.length) unreadable('vias', o);
+    const n = vv.getUint32(o + 1, true);
+    const via = o + 5;
+    if (n < 31 || via + n > vias.length) unreadable('vias', o);
+    const [start, end] = [vias[via + 29], vias[via + 30]];
+    holes.add({ size: vv.getInt32(via + 25, true) * ALTIUM_UNIT, plated: true, through: Math.min(start, end) === 1 && Math.max(start, end) === 32, kind: 'via' });
+    o = via + n;
+  }
+  progress(1);
+  return { format: 'Altium binary', holes: holes.list(), ...altiumStack(board), notes: [] };
 }
 
 // The stackup: Altium's newest form (V9_STACK_LAYERn_, physical order, top to bottom) when present,
