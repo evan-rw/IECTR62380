@@ -54,6 +54,9 @@ test('reading a BOM: header after a title row, not-fitted rows, quantity checks'
   const kicad = parseBom('Reference\tValue\tFootprint\tMPN\tDNP\nC1\t1u\tC_0402\tCL05A105KA5NQNC\t\nC2\t1u\tC_0402\tCL05A105KA5NQNC\tDNP\n');
   assert.deepEqual(kicad.items.map((i) => [i.refs, i.mpn]), [[['C1'], 'CL05A105KA5NQNC']]);
   assert.deepEqual(kicad.notFitted, ['C2']);
+  // Altium's "Mounted" column (Yes/No), with an empty line under the header (twlostow/dsi-shield's BOMs).
+  const mounted = parseBom('Comment,Description,Designator,Footprint,Mounted,Quantity,Value\r\n\r\n"100n","Capacitor","C1","CAPC1608X87N","Yes","1","100n"\r\n"1u X5R","Capacitor","C29","CAPC1608X87N","No","1","1u X5R"\r\n');
+  assert.deepEqual([mounted.items.map((i) => i.refs), mounted.notFitted], [[['C1']], ['C29']]);
 });
 
 test('a BOM alone builds the parts, guessing from distributor descriptions', () => {

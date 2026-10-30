@@ -17,7 +17,7 @@ const COLUMNS = {
   footprint: ['footprint', 'package', 'pcbfootprint', 'footprintname', 'case', 'casepackage', 'packagecase'],
 };
 const NOT_FITTED = /^(DNP|DNF|DNI|NF|NC|NOT FITTED|NOT POPULATED|DO NOT (FIT|POPULATE|PLACE)|NO ?POP|NO|FALSE|0)$/i;
-const FITTED_COLUMNS = ['dnp', 'dnf', 'populate', 'fitted', 'fit', 'mount', 'populated', 'install', 'variant'];
+const FITTED_COLUMNS = ['dnp', 'dnf', 'populate', 'fitted', 'fit', 'mount', 'mounted', 'populated', 'install', 'installed', 'variant'];
 
 const key = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
