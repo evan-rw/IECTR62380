@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { zExpansion, barrelStrain, effectiveStrain, fatigueResidual, cyclesToFailure, evaluateBoard, qualityBand } from '../assets/pth.js';
+import { zExpansion, barrelStrain, effectiveStrain, fatigueResidual, cyclesToFailure, evaluateBoard } from '../assets/pth.js';
 import { LAMINATES, COPPER } from '../assets/tablesboard.js';
 
 const close = (actual, expected, rel = 1e-9) =>
@@ -90,8 +90,4 @@ test('the board: assembly uses part of the life, field cycles the rest, the weak
   assert.deepEqual(empty.holes[0].missing, ['drill']);
   const custom = evaluateBoard({ ...settings, laminate: 'custom', custom: { tg: 170, alpha1: 50, alpha2: null, modulus: 8 } }, profile, 10);
   assert.match(custom.problems.join(' '), /Missing for the custom laminate: z-axis expansion above Tg/);
-  assert.equal(qualityBand(9), 'superior');
-  assert.equal(qualityBand(6.5), 'good');
-  assert.equal(qualityBand(4), 'marginal');
-  assert.equal(qualityBand(2), 'poor');
 });

@@ -40,7 +40,8 @@ export const PTH_MODEL = {
   status: 'published',
   sources: ['sharon2014', 'brillhart2002', 'sharonKq'],
   note: 'σ = (α_E − α_Cu)ΔT·A_E·E_E·E_Cu/(A_E·E_E + A_Cu·E_Cu) up to copper yield, bilinear above; A_E = π/4·[(h + d)² − d²], A_Cu = π/4·[d² − (d − 2t)²]; Δε_eff = Δε·K_d·10/K_Q; N_f^−0.6·D_f^0.75 + 0.9·(S_u/E_Cu)·[e^D_f/0.36]^(0.1785·log(10⁵/N_f)) = Δε_eff. The z-axis expansion is integrated across Tg. The round-robin behind it covered 0.25–0.5 mm holes in 0.75–2.25 mm boards with 20–32 µm plating, 1986–1988; it assumes elastic behaviour below yield and does not cover pads, fills or hole spacing. No published worked example with full inputs was found to check against.',
-  // Calibration ranges as published.
+  // Calibration ranges and quality bands as published. The page shows neither: both are the 1986–88
+  // calibration, and its K_d range gave boards with over 10 years in service a life of 0.2 years.
   strainDistribution: { min: 2.5, max: 5.0 },
   qualityBands: [
     { min: 7.5, label: 'superior' }, { min: 6.0, label: 'good' }, { min: 3.5, label: 'marginal' }, { min: 0, label: 'poor' },

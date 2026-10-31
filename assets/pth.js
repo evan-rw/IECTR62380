@@ -5,7 +5,7 @@
 // the mission length the same way as the surface-mount check (217F 16.2).
 // Pure functions. Lengths in mm (plating in µm), stresses and moduli in MPa.
 
-import { PTH_MODEL, COPPER, LAMINATES } from './tablesboard.js';
+import { COPPER, LAMINATES } from './tablesboard.js';
 import { lifeRate } from './smt.js';
 
 const HOURS_PER_YEAR = 8760;
@@ -140,5 +140,3 @@ export function evaluateBoard(settings, profile, years) {
     fit: worst ? worst.fit : 0,
   };
 }
-
-export const qualityBand = (kq) => PTH_MODEL.qualityBands.find((b) => kq >= b.min)?.label ?? null;

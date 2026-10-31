@@ -6,7 +6,7 @@ import { MISSION_PROFILES } from './tables.js';
 import { netlistToParts, expandRefs, compressRefs } from './netlist.js';
 import { ROOT, sanitizeStructure, migrateGroups, meanTimeToFailure, members as structureMembers, label as structureLabel } from './structure.js';
 import { evaluateSmt, chipCandidates, flexRisks } from './smt.js';
-import { evaluateBoard, laminateOf, qualityBand } from './pth.js';
+import { evaluateBoard, laminateOf } from './pth.js';
 import { LAMINATES, PTH_MODEL, SOURCES_BOARD } from './tablesboard.js';
 import { mountStructure, refreshStructure, currentStructure, resetStructureView } from './structure-ui.js';
 import { parseBom, bomToParts, mergeBom } from './bom.js';
@@ -400,7 +400,7 @@ function partHTML(part) {
 function failureModesHTML(fm) {
   if (!fm) return '';
   const modes = fm.modes.map(([mode, a]) => `${esc(mode)} ${Math.round(a * 100)}%`).join(' · ');
-  return `<p class="help">Failure modes of ${esc(fm.device.toLowerCase())}: ${modes} <span class="unit">(MIL-HDBK-338B Table 7.8-1)</span></p>`;
+  return `<p class="help">Failure modes of ${esc(fm.device.toLowerCase())}: ${modes} <span class="unit">(1991 data, MIL-HDBK-338B Table 7.8-1)</span></p>`;
 }
 
 function traceHTML(r, phases, fm) {
@@ -664,7 +664,6 @@ function updatePcb(ev) {
     markGuessed(el, control, missingKeys.has(el.dataset.field) ? null : s.inferred?.[el.dataset.field]);
   }
   $('[data-act="pcb-confirm-settings"]').hidden = !Object.keys(s.inferred ?? {}).length;
-  $('#pcb-kq-band').textContent = s.kq > 0 && s.kq <= 10 ? `Yours is ${qualityBand(s.kq)}.` : '';
   ev.holes.forEach((r, i) => {
     const row = $(`#pcb-holes [data-hole="${i}"]`);
     if (!row) return;

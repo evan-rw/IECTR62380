@@ -297,7 +297,7 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   assert.deepEqual($$('.st-field.missing', inspector()).map((f) => f.dataset.f), ['need']);
   assert.equal($('#st-short').value, '49', 'ceramic capacitors: short .49');
   assert.ok($('[data-f="shortPct"]', inspector()).classList.contains('inferred'));
-  assert.match($('[data-guess]', inspector()).textContent, /Table 7\.8-1: shorts are 49% of failures of capacitor, ceramic/);
+  assert.match($('[data-guess]', inspector()).textContent, /from 1991 data \(MIL-HDBK-338B Table 7\.8-1\): shorts are 49% of failures of capacitor, ceramic/);
   assert.match($('.st-problems', inspector()).textContent, /Missing: how many must keep working/);
   assert.ok($('.st-badge.kofn', capsRow()).classList.contains('bad'), 'counts in series until complete');
   assert.equal(boardTotal(), seriesTotal);
@@ -480,7 +480,7 @@ test('page behaviour: editing, part types, netlist import, files, storage', asyn
   choose($('#pcb-laminate'), 'isola-370hr');
   assert.match($('#pcb-laminate-note').textContent, /Tg 180 °C; z-axis expansion 45 ppm\/°C below Tg, 230 above.*stand-in.*Isola 370HR/);
   for (const [key, v] of [['thickness', 1.6], ['ductility', 20], ['strength', 300], ['kq', 7.5], ['kd', 2.5], ['reflows', 2], ['reflowPeak', 245]]) typeInto($(`#pcb-${key}`), v);
-  assert.equal($('#pcb-kq-band').textContent, 'Yours is superior.');
+  assert.equal($('#pcb .field[data-field="kq"] .help').textContent, 'Higher is better.');
   assert.doesNotMatch(warn(), /circuit-board/);
   assert.match($('#pcb-result').textContent, /Weakest: 0.3 mm vias, assembly uses \d+ % of its life.*Added to the board total/);
   assert.match($('[data-out="used"]', hole()).textContent, /^\d+ %$/);

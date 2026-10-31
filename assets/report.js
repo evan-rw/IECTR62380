@@ -96,7 +96,7 @@ function partsSheet(s) {
   const labels = [];
   for (const { result } of s.board.items) for (const [label] of result.parts ?? []) if (!labels.includes(label)) labels.push(label);
   const rows = [head('Ref', 'Qty', 'Part type', 'Method', 'Clause', 'Description', 'Manufacturer', 'MPN', 'λ each (FIT)', 'λ total (FIT)', 'Share of total',
-    ...labels.map((l) => `${l} (FIT each)`), 'Status', 'Problems', 'Guessed values', 'Failure modes (MIL-HDBK-338B)')];
+    ...labels.map((l) => `${l} (FIT each)`), 'Status', 'Problems', 'Guessed values', 'Failure modes (MIL-HDBK-338B, 1991 data)')];
   for (const { comp, result } of s.board.items) {
     const model = MODELS[comp.model];
     const p = paramsOf(comp);

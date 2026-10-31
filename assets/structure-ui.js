@@ -125,7 +125,7 @@ function suggestShort(id) {
   const s = suggestedShortShare(memberLines);
   if (!s) return;
   n.shortPct = s.pct;
-  n.inferred = { shortPct: `from MIL-HDBK-338B Table 7.8-1: shorts are ${s.pct}% of failures of ${s.devices.map((d) => d.toLowerCase()).join(' and ')}` };
+  n.inferred = { shortPct: `from 1991 data (MIL-HDBK-338B Table 7.8-1): shorts are ${s.pct}% of failures of ${s.devices.map((d) => d.toLowerCase()).join(' and ')}` };
 }
 
 function group(mode) {
